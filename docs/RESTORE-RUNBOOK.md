@@ -26,7 +26,7 @@ written.
   bit and may swap partition GUIDs and the boot LUN; this is unverified on
   OnePlus's ABL (behaviour from `linux-msm/qbootctl` and the Qualcomm
   reference ABL, described only; detail in
-  `docs/research/gpt-exception-prep.md`, which lands later).
+  `docs/research/gpt-exception-prep.md`).
 - Note: after `userdata` was written, slot A boots but Android data is gone;
   stock may require a factory reset (this is expected and not a brick).
 

@@ -13,6 +13,7 @@ where it disagrees with the body, the review wins.
 | [firmware-extraction.md](firmware-extraction.md) | Firmware extraction mapping from the IN2023 factory image | ath11k QCA6390 mapping; the GPU and modem rows are corrected in the review |
 | [laptop-build-setup.md](laptop-build-setup.md) | Laptop build setup for a Qualcomm boot-v3 device | Base checklist holds; the v3 assumption is replaced by v2 |
 | [restore-assets-scouting.md](restore-assets-scouting.md) | Secure restore assets on local disk (full OTA + MSM package for IN2023) | Direct OTA downloads get 403, so the full OTA comes from Oxygen Updater on the phone; EU MSM packages stop at OxygenOS 11; corrections 9 and 12 are replaced in the review |
+| [gpt-exception-prep.md](gpt-exception-prep.md) | Slot-B bootable marking on Qualcomm: the named GPT-attribute exception | Prepares (does not resolve) the M1b ticket: upstream rule, precedents, what a mark and `--set-active` write, draft entry text, recording plan, rollback, and nine questions for #808 |
 
 None of these notes authorises a command on the phone. Device steps live
 in `docs/STAGE-0.md` and in the gated runbooks in `device/instantnoodlep/`.
