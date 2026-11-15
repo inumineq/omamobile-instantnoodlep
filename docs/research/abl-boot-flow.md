@@ -1,6 +1,50 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Research: Qualcomm ABL boot flow on instantnoodlep
 
+- Ticket: "Qualcomm ABL boot flow on instantnoodlep (dtbo, cmdline, slot
+  flags, header version, earlycon)" (closed, research).
+- Origin: research worker note, 2026-11-15, landed unchanged below the
+  review; worker commit `20816c7` on the local `research-abl` branch.
+- No device was involved. Every runtime claim stays [I] until stage 0
+  (`docs/STAGE-0.md`).
+
+## Coordinator review (2026-11-15)
+
+Read against the three sibling notes in this directory. Corrections and
+cross-references, each marked:
+
+1. [V] Boot header **v2**, not v3, is the strongest finding here (section 4).
+   It supersedes the v3 assumption in `laptop-build-setup.md` and in the
+   ticket title "Laptop build setup for a Qualcomm boot-v3 device".
+2. [I] earlycon: the two sources disagree about what `serial0` is. The
+   upstream OnePlus common DTS patch cited in section 5 aliases
+   `serial0 = &uart12` (debug UART, `0x00a90000`), while the community
+   instantnoodlep DTS aliases `serial0 = &uart6` (community DTS line 42) and
+   `uart6` carries the QCA6390 Bluetooth child (line 955); see
+   `sm8250-dts-gap.md`. So `serial0` in the community DTS is the Bluetooth
+   UART, not a console. Only the live DT `stdout-path` decides; no
+   `earlycon=` argument ships before stage 0.
+3. [I] dtbo: if the stock ABL applies whatever it finds in `dtbo_b` to the
+   DTB it boots, leaving the stock overlay in place would graft stock-kernel
+   nodes onto a mainline DTB. Mainline ports usually flash a no-op dtbo for
+   this reason. That keeps `dtbo_b` in the write allowlist; settle it in
+   the ticket "Lock device.conf values once stage-0 answers exist".
+4. Changes for that ticket: header v2; `VENDOR_PAGESIZE=4096` [V Lineage,
+   I on unit]; slot flags in GPT attributes, `devinfo` is not the slot
+   store; drop the "devinfo holds the slot flags" comment; the
+   `VENDOR_CMDLINE` key name implies a vendor_boot section that this layout
+   does not have.
+
+5. [V] The community DTS carries `qcom,msm-id = <0x164 0x10000>,
+   <0x164 0x20001>` and `qcom,board-id = <0x08 0x00>, <0x00 0x00>`
+   (community DTS lines 38-39). Qualcomm ABL selects the DTB by these
+   properties, not by `/soc_id`, so our DTB must carry them [I until the
+   stock `dtbo.img` entry ids are read]. Input for the `DTBO_BOARD_*` keys.
+   (Cross-check by a second coordinator session.)
+
+---
+
+
 Research date: 2026-11-15. No device was available, so every conclusion about
 the stock ABL's runtime choices is marked `[I]` and remains gated on
 `docs/STAGE-0.md`.
