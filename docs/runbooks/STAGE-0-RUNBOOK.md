@@ -432,6 +432,29 @@ for p in persist modemst1 modemst2 fsg fsc; do echo "$p $(adb exec-out su -c "bl
 (cd "captures/$D/radio" && sha256sum *.img | tee SHA256SUMS)
 ```
 
+Two optional radio-adjacent partitions, if present [I: names unverified
+on this unit]. A missing name prints `missing` and is fine.
+
+```sh
+for p in ocdt param; do if adb exec-out su -c "test -e /dev/block/by-name/$p && echo y" | grep -q y; then adb exec-out su -c "dd if=/dev/block/by-name/$p 2>/dev/null" > "captures/$D/radio/$p.img"; echo "$p $(stat -c %s "captures/$D/radio/$p.img")"; else echo "$p missing"; fi; done
+(cd "captures/$D/radio" && sha256sum *.img > SHA256SUMS)
+```
+
+Boot-LUN facts and bootloader firmware across slots (read-only; for the
+GPT-exception ticket, R2b in `docs/research/gpt-exception-prep.md` §6.1).
+The paths follow the Linux UFS sysfs ABI [I on this vendor kernel]; empty
+output is not an error.
+
+```sh
+adb exec-out su -c 'for d in /sys/class/scsi_device/*/device; do echo "$d boot_lun_id=$(cat $d/unit_descriptor/boot_lun_id 2>/dev/null)"; done; for f in /sys/bus/platform/devices/*ufshc*/attributes/boot_lun_enabled; do echo "$f $(cat $f 2>/dev/null)"; done' > "captures/$D/ufs-luns.txt"
+for p in abl aop bluetooth cmnlib cmnlib64 devcfg dsp featenabler hyp imagefv keymaster modem multiimgoem qupfw storsec tz uefisecapp xbl xbl_config; do
+  a=$(adb exec-out su -c "sha256sum /dev/block/by-name/${p}_a 2>/dev/null" | cut -d' ' -f1)
+  b=$(adb exec-out su -c "sha256sum /dev/block/by-name/${p}_b 2>/dev/null" | cut -d' ' -f1)
+  if [ -z "$a" ] || [ -z "$b" ]; then r=missing; elif [ "$a" = "$b" ]; then r=same; else r=DIFFERENT; fi
+  echo "$p $r"
+done | tee "captures/$D/bootloader-ab.txt"
+```
+
 An alternative is a read-only `bkerler/edl` dump in EDL mode, which
 supports this phone's OnePlus auth [V scouting §3.2]; it is [I] on this
 unit, needs a proprietary loader, and is the owner's decision. This
@@ -459,7 +482,17 @@ runbook does not use it.
     backup entries and the backup GPT header). The ticket "Slot-B bootable
     marking on Qualcomm: the named GPT-attribute exception" needs them,
     and dumping them now saves a second root session.
-  - Five non-empty `radio/*.img` files. Each line of the size loop shows
+  - `ufs-luns.txt`: one line per SCSI LUN with its `boot_lun_id`, and a
+    `boot_lun_enabled` value [I: 1 or 2, meaning boot LUN A or B]. Empty
+    values are not an error; tell the coordinator.
+  - `bootloader-ab.txt`: one line per partition, `same`, `DIFFERENT` or
+    `missing` (only the words leave the laptop, never the hashes). All
+    `same` means slot B's firmware matches slot A's. Any `DIFFERENT` is no
+    stop here: it is input for the A3b decision and the GPT-exception
+    ticket (upstream wants matching bootloader slots before a slot-B
+    install).
+  - Five non-empty `radio/*.img` files from the main loop, plus `ocdt`
+    and `param` if they exist. Each line of the size loop shows
     two equal numbers (partition size and file size). Keep the images and
     `SHA256SUMS` private: never commit, paste or upload them or their
     hashes, and keep a second copy on the owner's private storage.
@@ -547,7 +580,8 @@ grep -RniE 'serial|imei|meid|iccid|imsi|msisdn|macaddr|mac_addr|bdaddr|([0-9a-f]
 
 That `grep` shows **where** identifiers sit. Use it to check that nothing
 you paste contains a match. Paste the filtered outputs from A3, B2, B3, C3,
-D5, `luns.txt`, `pci-root.txt` and the A5 Widevine level. Do **not** paste
+D5, `luns.txt`, `pci-root.txt`, `ufs-luns.txt` (paths and numbers only),
+`bootloader-ab.txt` and the A5 Widevine level. Do **not** paste
 `live.dts`, `dmesg`, `getvar-all*.txt`, `getprop-all.txt`, any `.bin` file
 or anything under `radio/`. The `.bin` dumps hold disk and partition GUIDs,
 which are unique to the unit; the `radio/` images hold IMEI-related data.
