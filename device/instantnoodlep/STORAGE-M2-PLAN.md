@@ -275,13 +275,17 @@ tool, no hand `dd`. The only M2 writes are `flash boot_b`, `flash dtbo_b`,
 
 **G0 — entry gate (review, no commands).** All true before G1: M1b
 complete per its own plan, with slot flags before/after and the
-`SLOT_B_MARK` record; stage-0 ticket resolved and #808 posted; restore
+`SLOT_B_MARK` record; the ticket "Slot-B bootable marking on Qualcomm:
+the named GPT-attribute exception" decided and recorded, because R3's
+`--set-active=b` (when R1 shows `current-slot: a`) and the `--set-active=a`
+way back are slot-flag writes that only that decision can allow; stage-0 ticket resolved and #808 posted; restore
 assets resolved (OTA + MSM on disk, `docs/runbooks/RESTORE-ASSETS.md`);
 `captures/<date>/` holds D4's `by-name-root.txt`, `luns.txt`,
 `ufs-luns.txt`, `gpt-head/tail-sd?.bin`, `block-devs.txt` and the filtered
 `getvar-all-unlocked.txt`.
 - Expect: every item present and reviewed.
-- Stop: any item missing, or M1b unresolved.
+- Stop: any item missing, M1b unresolved, or the slot-B marking ticket
+  undecided or decided against a slot-flag write.
 - Rollback: n/a (nothing done).
 
 **G1 — fill the placeholders from the captures (laptop, reads files only).**
