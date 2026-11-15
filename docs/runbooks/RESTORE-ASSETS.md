@@ -68,13 +68,15 @@ Allawnofs file names are hashes [I], so give the zip a local name such as
 `IN2023_<build>_full.zip` (no parentheses).
 
 ```sh
-adb shell 'find /sdcard -maxdepth 4 -name "*.zip" 2>/dev/null'
+adb shell 'find /sdcard/ -maxdepth 4 -name "*.zip" 2>/dev/null'
 cd "$R/ota" && adb pull '/sdcard/<path from find>.zip' <ota>.zip
 unzip -p <ota>.zip META-INF/com/android/metadata | grep -E '^(ota-type|post-build|post-build-incremental|pre-build|pre-device|post-timestamp)='
 unzip -l <ota>.zip | grep -E 'payload\.bin|payload_properties\.txt'
 ```
 
-- **Expect:** `find` lists the downloaded zip [I: where Oxygen Updater
+- **Expect:** `find` lists the downloaded zip. Keep the trailing slash:
+  `/sdcard` is a symlink and `find` does not follow it without one, so
+  `find /sdcard` prints nothing [V: owner run 2026-11-16] [I: where Oxygen Updater
   stores it varies by version; use the path the app shows if `find` misses
   it]. `ota-type=AB`; `pre-device=OnePlus8Pro` [I]; `post-build=`
   **byte-identical** to R1's `ro.build.fingerprint`; **no** `pre-build=`
