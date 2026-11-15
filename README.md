@@ -50,8 +50,11 @@ Device support request: [derekross/omarchy-mobile#808](https://github.com/derekr
 ```
 docs/STAGE-0.md              Facts to collect from stock, in order
 docs/RESTORE-RUNBOOK.md      How stock is restored (OTA, fastbootd, EDL last)
+docs/hitl/                   Owner-run runbooks (restore assets, stage 0)
+docs/research/               Research notes with [V]/[I] marks
 device/instantnoodlep/       Device work: descriptor, plans, notes
 scripts/stage0-collect.sh   Read-only stock capture (run before unlocking)
+scripts/gpt-attrs.py         Decodes a read-only GPT dump (slot flag bits)
 captures/                    Private captures (gitignored, never commit)
 ```
 
