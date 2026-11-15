@@ -42,12 +42,27 @@ run mkdir -p "$R/tools" "$SRC_DIR/system/tools" "$SRC_DIR/external" "$SRC_DIR/sy
 
 # 1. Distribution packages (adb, fastboot, dtc, 7z).
 say "Distribution packages"
+pkgcmd=""
 if need pacman; then
-  run sudo pacman -S --needed android-tools dtc p7zip
+  pkgcmd="sudo pacman -S --needed android-tools dtc p7zip"
 elif need apt-get; then
-  run sudo apt-get install -y android-sdk-platform-tools device-tree-compiler p7zip-full
+  pkgcmd="sudo apt-get install -y android-sdk-platform-tools device-tree-compiler p7zip-full"
 else
   echo "    unknown package manager: install adb, fastboot, dtc and 7z by hand"
+fi
+if [ -n "$pkgcmd" ]; then
+  if need adb && need fastboot && need dtc && need 7z; then
+    echo "    already installed"
+  elif [ "$DRY" = 1 ]; then
+    printf '    (dry-run) %s\n' "$pkgcmd"
+  elif [ -t 0 ] || sudo -n true 2>/dev/null; then
+    $pkgcmd
+  else
+    # No terminal to type a sudo password into (e.g. an agent shell):
+    # do not abort the rest of the script, hand the line to the owner.
+    echo "    no terminal for sudo here. Run this yourself, then re-run this script:"
+    echo "      $pkgcmd"
+  fi
 fi
 
 # 2. payload-dumper-go (extract images from payload.bin).
