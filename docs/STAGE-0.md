@@ -8,6 +8,10 @@ are summarised, redacted, into issue
 
 `scripts/stage0-collect.sh` performs steps 1-2 automatically.
 
+The owner-facing runbook with exact commands, Expect, stop conditions and
+rollback is `docs/hitl/STAGE-0.md`. Run `docs/hitl/RESTORE-ASSETS.md`
+first.
+
 ## 1. Before unlocking (phone on stock, booted)
 
 | # | Command | Expect |
