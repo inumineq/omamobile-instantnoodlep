@@ -27,3 +27,12 @@ House rules for work in this repository:
    are English so they can be PR'd without rewriting.
 8. **No proprietary firmware in git.** Vendor firmware comes from the
    owner's own factory image at install time, per upstream rule.
+
+## Agent skills
+
+This repo is set up for the mattpocock/skills set (skills.sh registry,
+`mattpocock/skills`). Tracker and wayfinding operations:
+[docs/agents/issue-tracker.md](docs/agents/issue-tracker.md). Domain docs:
+[docs/agents/domain.md](docs/agents/domain.md). Project management runs as a
+wayfinder map on the issue tracker (label `wayfinder:map`); work the map's
+decision tickets per that file's "Wayfinding operations" section.
