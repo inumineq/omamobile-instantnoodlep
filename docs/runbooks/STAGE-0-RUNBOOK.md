@@ -9,10 +9,17 @@ phase. Do not batch the phases.
 
 What this runbook writes to the phone: **one partition-level write**, the
 unlock in phase C, which wipes user data and changes the lock state. The
-rest are ordinary Android data writes to `userdata` (setup in C3,
-`adb install`/`adb push`, Magisk's `/data/adb`), and the unlock wipes those
-anyway. Nothing is ever flashed. `fastboot boot` in phase D loads an image
-into RAM and does not write it to flash.
+rest are ordinary Android data writes to `userdata` (Oxygen Updater and
+DRM Info from Google Play, the OTA download in restore-assets R2, setup in
+C3, `adb install`/`adb push`, Magisk's `/data/adb`), and the unlock wipes
+those anyway. Nothing is ever flashed. `fastboot boot` in phase D loads an
+image into RAM and does not write it to flash. The one exception is
+outside this runbook's tooling: if the A3b decision tree calls for it and
+the owner decides so, the **stock updater** installs an OTA, which writes
+the inactive slot like any OTA.
+
+Sources marked "scouting §n" are sections of
+`docs/research/restore-assets-scouting.md`.
 
 Ground rules for the whole runbook:
 
@@ -64,8 +71,11 @@ git check-ignore -v captures/test && echo "captures/ is ignored"
 The ticket "Secure restore assets on local disk (full OTA + MSM package for
 IN2023)" must be **resolved** before phase C. Phases A and B are read-only
 and may run first; in fact R1 needs the build id from phase A.
-**R2 waits until A3 shows `_a`.** If the slot has to move first, the running
-build changes, and an OTA downloaded earlier would no longer match.
+**R2 follows the A3b decision.** Where A3b moves the slot, the full zip of
+the final build is downloaded first (it is the input of the move), and
+R2's `post-build` check is made against the A3 rerun that shows `_a`. The
+zip must be on the laptop before phase C: the unlock wipes the phone's
+copy.
 
 ---
 
@@ -105,7 +115,7 @@ ls -la "captures/$D"
 ### A3. Build identity and boot properties
 
 ```sh
-adb shell getprop | grep -E 'ro\.build\.(fingerprint|display\.id|version\.(release|security_patch|incremental|ota))|ro\.product\.(device|name|model)|ro\.boot\.(slot_suffix|dtbo_idx|verifiedbootstate|vbmeta\.device_state|flash\.locked|hardware\.revision|project_name|prjname)' \
+adb shell getprop | grep -E 'ro\.build\.(fingerprint|display\.id|date\.utc|version\.(release|security_patch|incremental|ota))|ro\.product\.(device|name|model)|ro\.boot\.(slot_suffix|dtbo_idx|ddr_type|verifiedbootstate|vbmeta\.device_state|flash\.locked|hardware\.revision|project_name|prjname)' \
   | tee "captures/$D/build-boot-props.txt"
 ```
 
@@ -113,20 +123,71 @@ adb shell getprop | grep -E 'ro\.build\.(fingerprint|display\.id|version\.(relea
   an EEA/EU product name [I: e.g. `OnePlus8Pro_EEA`]; `ro.boot.slot_suffix`
   = `_a`; `ro.boot.flash.locked` = `1`; `ro.boot.verifiedbootstate` =
   `green`. `ro.boot.dtbo_idx` is present if ABL applies a dtbo (stage-0
-  question 4).
+  question 4). `ro.boot.ddr_type` is `0` (DDR4) or `1` (DDR5) [I: present
+  on this build]; restore needs it before any `xbl*` image is touched.
 - **Stop, important:** `ro.boot.slot_suffix` is `_b`. A/B OTAs alternate
   slots, so on a phone that has taken several updates this is roughly a
   coin flip, not an edge case. Stock is then running from slot B, the slot
-  we would write. Report it and do nothing else. Writing `_a` partitions to
-  swap roles is **not** an option (AGENTS.md rule 3). The only remedy is
-  for the phone's own updater to install the next official OTA (or a local
-  upgrade), so that stock moves to A. That is a write by the stock updater,
-  so it is the owner's decision. Afterwards, redo A3, and only then start
-  restore-assets R2.
+  we would write. Report it and go to the A3b decision tree; do nothing
+  else. Writing `_a` partitions to swap roles is **not** an option
+  (AGENTS.md rule 3).
 - **Stop:** model is not `IN2023`.
 - **Rollback:** n/a.
 - These lines contain **no** serial. Paste them back as they are, with
   `ro.build.fingerprint`. R1 needs it to pick the exact OTA.
+
+### A3b. Slot and build decision (owner decides)
+
+The device is end-of-life: no further OTAs will come [V scouting §1.1].
+The "final build" is the newest EEA build that Oxygen Updater offers for
+IN2023 [I: most likely `IN2023_13.1.0.587(EX01)` or `.586`, scouting
+§1.1]. Any successful A/B install, full or incremental, local or over the
+air, writes the **inactive** slot and makes it active [V AOSP A/B, scouting
+§2]. Decide from A3's slot and build:
+
+- **(a) `_a` and on the final build:** nothing moves. Restore-assets R2
+  downloads the full OTA of the running build. Go on to A4.
+- **(b) `_a` on an older build:** two options.
+  - (b1) Find the full OTA of the running, older build and keep stock as it
+    is. Preferred, because nothing is written. [I] Oxygen Updater may offer
+    only the newest build.
+  - (b2) Let the stock updater install the update (it writes `_b` and moves
+    stock to B), then local-install the **same** final full zip (it writes
+    `_a` and moves stock back to A). The second install is a same-version
+    install, [I] as in (c). If it is refused, stock is left on `_b` with no
+    stock route back to A; that is why (b1) comes first.
+- **(c) `_b`:** local-install the full zip of the final build. It writes
+  `_a` and moves stock to A. If `_b` runs an older build, this is a normal
+  upgrade. If `_b` already runs the final build, it is a same-version
+  install, and whether the Oplus updater accepts that is [I] (scouting §2).
+
+Both (b2) and (c) are writes by the stock updater, not by this runbook, so
+each one is the owner's decision. For either, download the final build's
+full zip first (restore-assets R2) and verify the laptop copy (R3) before
+installing it. Local install on OxygenOS 13 is hidden until Developer
+options are on (A1 did that), or via the OnePlus Local Update APK [V
+Oxygen Updater article 367 for the 10T; I for the 8 Pro, scouting §2].
+Path [I]: Settings → About device → version card → ⋮ → Local install; it
+needs about 5 GB free. Never use a "rollback" package: those are special
+builds that wipe data [I, scouting §2].
+
+After an install has booted, keep the old A3 output and rerun A3:
+
+```sh
+mv "captures/$D/build-boot-props.txt" "captures/$D/build-boot-props-before-move.txt"
+# then run the A3 command again
+```
+
+- **Expect:** case (a): no install. Cases (b2)/(c): after the install and
+  its reboot, the A3 rerun shows `ro.boot.slot_suffix` = `_a` and the
+  final build. Paste the rerun.
+- **Stop:** "Local install" cannot be made visible, the updater refuses
+  the zip, or the rerun still shows `_b`. Report it and do nothing else.
+  Writing `_a` partitions with fastboot stays off the table (AGENTS.md
+  rule 3). The owner decides whether to go on with stock on `_b`.
+- **Rollback:** none from this runbook. [I] An A/B update that fails to
+  boot falls back to the old slot by itself, because the new slot is only
+  marked successful after a good boot (scouting §2).
 
 ### A4. Wi-Fi silicon (read-only, may need root)
 
@@ -137,6 +198,23 @@ adb shell 'for d in /sys/bus/pci/devices/*; do echo "$d $(cat $d/vendor) $(cat $
 - **Expect:** a device `0x17cb 0x1101` (QCA6390) [I]. A permission error is
   fine; D4 repeats it with root.
 - **Stop / Rollback:** none / n/a.
+
+### A5. Widevine baseline (read-only; gate G1)
+
+On the phone: install DRM Info from Google Play ([I] any app that reads
+the Widevine `MediaDrm` properties is an equivalent), open it and read
+Widevine → **Security level**. Record what it shows:
+
+```sh
+printf 'widevine-security-level: %s\n' 'L1' | tee "captures/$D/widevine.txt"   # replace L1 with the level DRM Info shows
+```
+
+- **Expect:** `L1` on a locked stock phone [I]. Reports for unlocked
+  Qualcomm OnePlus phones are mixed; plan for `L3` after the unlock [I,
+  scouting §4]. This value is the baseline for that comparison.
+- **Stop:** no level could be read. Gate G1 waits until one is recorded.
+- **Rollback:** uninstall the app.
+- Paste the security level only. Do not paste ID fields the app may show.
 
 ---
 
@@ -168,7 +246,7 @@ grep -E 'current-slot|slot-(successful|unbootable|retry-count)|unlocked|secure|h
   "Slot-B bootable marking on Qualcomm: the named GPT-attribute
   exception"). `has-slot:boot/dtbo/vbmeta: yes`; [I] no
   `init_boot`/`vendor_boot` lines.
-- **Stop:** `current-slot: b` (same reason and remedy as A3); `unlocked: yes` when you
+- **Stop:** `current-slot: b` (same reason as A3; see the A3b decision tree); `unlocked: yes` when you
   never unlocked; `getvar all` fails.
 - **Rollback:** n/a (read-only).
 - Paste back the **filtered `grep` output only**. `getvar all` itself
@@ -198,15 +276,18 @@ fastboot reboot
 All must be true:
 
 1. The restore-assets ticket is resolved: the OTA matches A3's fingerprint
-   exactly and its checksum is verified; the MSM package is on disk.
+   exactly (or passes the R2 incremental-and-date fallback) and R3 passes;
+   the zip is on the laptop, not only on the phone; the MSM package is on
+   disk.
 2. Phases A and B are pasted back, and the coordinator has confirmed
-   `current-slot: a` and `IN2023`.
-3. Everything on the phone is backed up off the phone (photos, 2FA apps,
+   `current-slot: a`, `IN2023` and which A3b case applied.
+3. The Widevine security level is recorded (A5).
+4. Everything on the phone is backed up off the phone (photos, 2FA apps,
    Signal/WhatsApp backups, eSIM if any). **The unlock wipes everything.**
-4. [I] The owner accepts the side effects of an unlocked bootloader on
+5. [I] The owner accepts the side effects of an unlocked bootloader on
    stock Android: hardware-backed Play Integrity fails, so banking and
-   ID apps (MitID, MobilePay) may refuse to run. The orange-state warning
-   shows at every boot.
+   ID apps (MitID, MobilePay) may refuse to run. Widevine may drop to L3
+   (scouting §4). The orange-state warning shows at every boot.
 
 ---
 
@@ -271,7 +352,8 @@ ls -l ~/android/reference/instantnoodlep/images/boot.img
 ```
 
 - **Expect:** the file exists (extracted in R4).
-- **Stop:** the OTA does not match A3's fingerprint. A boot.img from
+- **Stop:** the OTA does not match A3's fingerprint (and fails the R2
+  incremental-and-date fallback). A boot.img from
   another build may not boot and gives wrong facts.
 
 ### D2. Patch with Magisk (on the phone; patching is a file operation)
@@ -337,9 +419,27 @@ for l in a b c d e f; do adb exec-out su -c "n=\$(cat /sys/block/sd$l/size); dd 
 ls -la "captures/$D"
 ```
 
+Radio partition backup (private: these images hold IMEI-related and
+calibration data that is unique to the unit and in no OTA or MSM package
+[I, scouting §3.2]). This is the first point where root exists, so it
+follows the unlock; [I] the unlock does not touch these partitions
+(scouting §4).
+
+```sh
+mkdir -p "captures/$D/radio"
+for p in persist modemst1 modemst2 fsg fsc; do adb exec-out su -c "dd if=/dev/block/by-name/$p 2>/dev/null" > "captures/$D/radio/$p.img"; done
+for p in persist modemst1 modemst2 fsg fsc; do echo "$p $(adb exec-out su -c "blockdev --getsize64 /dev/block/by-name/$p") $(stat -c %s "captures/$D/radio/$p.img")"; done
+(cd "captures/$D/radio" && sha256sum *.img | tee SHA256SUMS)
+```
+
+An alternative is a read-only `bkerler/edl` dump in EDL mode, which
+supports this phone's OnePlus auth [V scouting §3.2]; it is [I] on this
+unit, needs a proprietary loader, and is the owner's decision. This
+runbook does not use it.
+
 - Every command reads only. `dd` reads **from** the block device
   (`if=`) into a file on the laptop. There is no `of=` on the phone.
-  Before you run the loop, check that no line contains `of=/dev`.
+  Before you run the loops, check that no line contains `of=`.
 - **Expect:**
   - `id` → `uid=0(root)`.
   - `live.dtb` is non-empty and `dtc` turns it into `live.dts`. Warnings
@@ -359,7 +459,14 @@ ls -la "captures/$D"
     backup entries and the backup GPT header). The ticket "Slot-B bootable
     marking on Qualcomm: the named GPT-attribute exception" needs them,
     and dumping them now saves a second root session.
+  - Five non-empty `radio/*.img` files. Each line of the size loop shows
+    two equal numbers (partition size and file size). Keep the images and
+    `SHA256SUMS` private: never commit, paste or upload them or their
+    hashes, and keep a second copy on the owner's private storage.
 - **Stop:** anything prompts for a write, or `su` is denied (redo D3).
+- **Stop:** a radio image is 0 bytes or the two sizes differ. Check the
+  exact name in `by-name-root.txt` (for example a slot suffix) and tell the
+  coordinator; do not guess names.
 - **Rollback:** n/a (read-only).
 
 ### D5. Answers from the captures (laptop, offline)
@@ -440,9 +547,10 @@ grep -RniE 'serial|imei|meid|iccid|imsi|msisdn|macaddr|mac_addr|bdaddr|([0-9a-f]
 
 That `grep` shows **where** identifiers sit. Use it to check that nothing
 you paste contains a match. Paste the filtered outputs from A3, B2, B3, C3,
-D5, `luns.txt` and `pci-root.txt`. Do **not** paste `live.dts`, `dmesg`,
-`getvar-all*.txt`, `getprop-all.txt` or any `.bin` file. The `.bin` dumps
-hold disk and partition GUIDs, which are unique to the unit.
+D5, `luns.txt`, `pci-root.txt` and the A5 Widevine level. Do **not** paste
+`live.dts`, `dmesg`, `getvar-all*.txt`, `getprop-all.txt`, any `.bin` file
+or anything under `radio/`. The `.bin` dumps hold disk and partition GUIDs,
+which are unique to the unit; the `radio/` images hold IMEI-related data.
 
 The coordinator drafts the #808 comment (English) from those facts,
 answering `docs/STAGE-0.md` §5 plus the extra questions there. The owner
