@@ -367,7 +367,7 @@ exist" resolves. Inputs from this plan for that ticket:
 
 | Where | Change |
 | --- | --- |
-| (none yet) | |
+| `tools/build-instantnoodlep-probe`; `tests/instantnoodlep-probe` | [V: those files] Offline boot-1/boot-2 builder with probe-DTB identity and edit gates, no UFS write allowlist, the qcom watchdog feeder, header-v2 stock geometry, AOSP read-back checks and per-output sha256 records. Its 64 MiB image cap is [I] until stage 0 records the stock boot partition size; the generated-DTB host cases await the laptop's dtc (2026-11-15). |
 
 ## 7. Risks
 

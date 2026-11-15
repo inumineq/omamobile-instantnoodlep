@@ -1,0 +1,462 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Host-only tests for tools/build-instantnoodlep-probe.
+
+No test uses a phone, network, real kernel, Docker or firmware. Set OMAMOBILE
+to an existing derekross/omarchy-mobile checkout and MKBOOTIMG to an existing
+AOSP mkbootimg.py. SRC_DIR is also honoured for the AOSP tools checkout. Parts
+whose prerequisites are absent print SKIP; dtc, fdtget and fdtput are needed
+for the generated-DTB refusals and the two end-to-end happy paths.
+"""
+
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+
+sys.dont_write_bytecode = True
+ROOT = Path(__file__).resolve().parent.parent
+BUILDER = ROOT / "tools/build-instantnoodlep-probe"
+UPSTREAM = Path(os.environ.get("OMAMOBILE", ROOT.parent / "omarchy-mobile"))
+MKBOOTIMG = Path(os.environ["MKBOOTIMG"]) if os.environ.get("MKBOOTIMG") else None
+if MKBOOTIMG is None and os.environ.get("SRC_DIR"):
+    MKBOOTIMG = Path(os.environ["SRC_DIR"]) / "system/tools/mkbootimg/mkbootimg.py"
+
+loader = importlib.machinery.SourceFileLoader("instantnoodlep_probe", str(BUILDER))
+spec = importlib.util.spec_from_loader(loader.name, loader)
+probe = importlib.util.module_from_spec(spec)
+loader.exec_module(probe)
+
+skipped = 0
+
+
+def require(condition, message):
+    if not condition:
+        raise AssertionError(message)
+
+
+def raises(exception, function, contains=""):
+    try:
+        function()
+    except exception as error:
+        if contains:
+            require(contains in str(error),
+                    f"{contains!r} not in error {str(error)!r}")
+        return
+    raise AssertionError(f"expected {exception.__name__}: {contains}")
+
+
+def run(args, **kwargs):
+    return subprocess.run([str(arg) for arg in args], check=True, **kwargs)
+
+
+def skip(name, reason):
+    global skipped
+    skipped += 1
+    print(f"SKIP - {name}: {reason}")
+
+
+def make_rootfs(parent):
+    root = parent / "rootfs"
+    (root / "bin").mkdir(parents=True)
+    (root / "usr/sbin").mkdir(parents=True)
+    (root / "etc").mkdir(parents=True)
+    (root / "bin/busybox").write_text("synthetic aarch64 BusyBox\n")
+    (root / "usr/sbin/dropbear").write_text("synthetic aarch64 Dropbear\n")
+    # A probe must remove every inherited write request, even a malformed one.
+    (root / "etc/omamobile-ufs-rw").write_text("boot_b userdata\n")
+    (root / "etc/omamobile-ufs-rw-luns").write_text("sdb\n")
+    (root / "etc/omamobile-nfsroot").write_text("192.0.2.1:/probe\n")
+    (root / "etc/omamobile-simplefb-trig").write_text("0x0 0x0\n")
+    (root / "etc/omamobile-bringup-probe").write_text("\n")
+    return root
+
+
+def make_key(parent):
+    private = parent / "throwaway_ed25519"
+    run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", private])
+    return private, private.with_suffix(".pub")
+
+
+def missing_tools(*names):
+    return [name for name in names if shutil.which(name) is None]
+
+
+DTS = r'''/dts-v1/;
+/ {
+    compatible = "oneplus,instantnoodlep", "qcom,sm8250";
+    qcom,msm-id = <0x164 0x10000>, <0x164 0x20001>;
+    qcom,board-id = <0x08 0x00>, <0x00 0x00>;
+    #address-cells = <2>;
+    #size-cells = <2>;
+    soc@0 {
+        compatible = "simple-bus";
+        #address-cells = <2>;
+        #size-cells = <2>;
+        usb@a6f8800 {
+            usb@a600000 {
+                compatible = "snps,dwc3";
+                dr_mode = "otg";
+                usb-role-switch;
+            };
+        };
+        ufshc@1d84000 {
+            compatible = "qcom,sm8250-ufshc";
+            status = "okay";
+        };
+        remoteproc@4080000 {
+            compatible = "qcom,sm8250-adsp-pas";
+            status = "okay";
+        };
+        nested {
+            remoteproc@8300000 {
+                compatible = "qcom,sm8250-cdsp-pas";
+            };
+        };
+    };
+};
+'''
+
+
+def make_dtb(parent, name="base", text=DTS):
+    source = parent / (name + ".dts")
+    output = parent / (name + ".dtb")
+    source.write_text(text)
+    run(["dtc", "-q", "-I", "dts", "-O", "dtb", "-o", output, source])
+    return output
+
+
+def builder_args(kernel, dtb, key, rootfs, boot, out):
+    return [
+        str(BUILDER),
+        "--kernel", kernel,
+        "--dtb", dtb,
+        "--ssh-key", key,
+        "--mkbootimg", MKBOOTIMG,
+        "--omarchy-mobile", UPSTREAM,
+        "--initramfs-root", rootfs,
+        "--boot", boot,
+        "--out", out,
+    ]
+
+
+def call_builder(*args, cwd=None):
+    return subprocess.run([str(arg) for arg in args], text=True,
+                          capture_output=True, cwd=cwd)
+
+
+def test_cli(work):
+    args = [
+        BUILDER,
+        "--kernel", work / "missing.kernel",
+        "--dtb", work / "missing.dtb",
+        "--ssh-key", work / "missing.pub",
+        "--mkbootimg", work / "mkbootimg.py",
+        "--omarchy-mobile", work / "missing-upstream",
+        "--initramfs-root", work / "missing-rootfs",
+    ]
+    result = call_builder(*args, "--boot", 3, "--out", "invalid.img", cwd=work)
+    require(result.returncode != 0 and "--boot must be 1" in result.stderr,
+            "CLI did not refuse an invalid boot selector")
+    (work / "existing.img").write_bytes(b"do not overwrite")
+    result = call_builder(*args, "--boot", 1, "--out", "existing.img", cwd=work)
+    require(result.returncode != 0 and "already exists" in result.stderr,
+            "CLI did not refuse an existing output")
+    require((work / "existing.img").read_bytes() == b"do not overwrite",
+            "existing output was changed")
+    result = call_builder(*args, "--boot", 1, "--out", "missing.img", cwd=work)
+    require(result.returncode != 0 and "--kernel must name a file" in result.stderr,
+            "CLI did not refuse a missing input")
+    print("ok - CLI refuses boot values, existing outputs and missing inputs")
+
+
+def test_pure(work):
+    patched = probe.patch_init(UPSTREAM.joinpath("initramfs/init").read_text())
+    require("modprobe qcom_wdt" in patched, "qcom_wdt was not patched")
+    require("watchdog -t 5 -T 30 /dev/watchdog0" in patched,
+            "watchdog feeder was not patched")
+    raises(probe.BuildError, lambda: probe.patch_init("no anchor\n"),
+           "hostname anchor")
+    raises(probe.BuildError, lambda: probe.check_image_sizes(0, 1, 1), "non-empty")
+    room = probe.RAMDISK_OFF - probe.KERNEL_OFF
+    raises(probe.BuildError,
+           lambda: probe.check_image_sizes(room, 1, 1), "overlap guard")
+    raises(probe.BuildError,
+           lambda: probe.check_image_sizes(1, probe.BOOT_IMAGE_MAX, 1),
+           "conservative")
+    outputs = probe.artifact_paths(Path("out/boot.img"))
+    require(outputs["dtb"] == Path("out/boot.probe.dtb"),
+            "probe DTB path does not derive from --out")
+    require(outputs["ramdisk"] == Path("out/boot.initramfs.cpio.gz"),
+            "ramdisk path does not derive from --out")
+
+    original_get, original_cells = probe.fdt_get, probe.fdt_cells
+    values = {"qcom,msm-id": probe.MSM_ID, "qcom,board-id": probe.BOARD_ID}
+    try:
+        # This is fdtget -t s's real one-line, space-separated string format.
+        probe.fdt_get = lambda *args: "oneplus,instantnoodlep qcom,sm8250"
+        probe.fdt_cells = lambda dtb, node, prop: values[prop]
+        probe.require_identity(Path("synthetic.dtb"))
+        probe.fdt_get = lambda *args: "wrong,board qcom,sm8250"
+        raises(probe.BuildError,
+               lambda: probe.require_identity(Path("bad.dtb")), "root compatible")
+        probe.fdt_get = lambda *args: "oneplus,instantnoodlep qcom,sm8250"
+        values["qcom,msm-id"] = [0x164]
+        raises(probe.BuildError,
+               lambda: probe.require_identity(Path("bad.dtb")), "qcom,msm-id")
+        values["qcom,msm-id"] = probe.MSM_ID
+        values["qcom,board-id"] = [8, 0, 0, 1]
+        raises(probe.BuildError,
+               lambda: probe.require_identity(Path("bad.dtb")), "qcom,board-id")
+    finally:
+        probe.fdt_get, probe.fdt_cells = original_get, original_cells
+    print("ok - identity, watchdog, size guards, overlap guard and output naming")
+
+
+def test_initramfs(work, private, public):
+    raises(probe.BuildError, lambda: probe.validate_public_key(private),
+           "PUBLIC key")
+    probe.validate_public_key(public)
+    rootfs = make_rootfs(work)
+    first = work / "first.cpio.gz"
+    second = work / "second.cpio.gz"
+    shared_init = UPSTREAM / "initramfs/init"
+    probe.build_initramfs(rootfs, shared_init, public, first, work / "one")
+    (work / "two").mkdir()
+    probe.build_initramfs(rootfs, shared_init, public, second, work / "two")
+    names = probe.cpio_names(first)
+    require(probe.ALLOWLIST not in names, "write allowlist survived packing")
+    require("etc/omamobile-ufs-rw-luns" not in names, "LUN allowlist survived")
+    require("etc/omamobile-nfsroot" not in names, "NFS root request survived")
+    require("etc/omamobile-simplefb-trig" not in names,
+            "display register-write marker survived")
+    require("etc/omamobile-bringup-probe" not in names,
+            "bring-up register-read marker survived")
+    require("root/.ssh/authorized_keys" in names, "public key is absent")
+    require("init" in names, "shared init is absent")
+    run(["sh", "-n", work / "one/rootfs/init"])
+    require(probe.sha256(first) == probe.sha256(second),
+            "initramfs packing is not reproducible")
+    print("ok - no allowlist, local key, watchdog init and reproducible gzip cpio")
+
+
+def test_aosp(work):
+    kernel = work / "Image.dummy"
+    ramdisk = work / "initramfs.cpio.gz"
+    dtb = work / "dummy.dtb"
+    kernel.write_bytes(b"dummy kernel, not executed\n")
+    dtb.write_bytes(b"\xd0\x0d\xfe\xed synthetic DTB placeholder")
+    root = work / "archive-root"
+    (root / "etc").mkdir(parents=True)
+    (root / "etc/marker").write_text("no allowlist\n")
+    probe.pack_rootfs(root, ramdisk)
+    boot = work / "boot.img"
+    probe.pack_boot(MKBOOTIMG, kernel, ramdisk, dtb, boot)
+    info, unpacked = probe.read_back_boot(
+        boot, MKBOOTIMG, kernel, ramdisk, dtb, work / "verify")
+    require(info["boot image header version"] == "2", "header is not v2")
+    require(info["dtb address"] == "0x0000000001f00000", "wrong DTB address")
+    require((unpacked / "dtb").read_bytes() == dtb.read_bytes(),
+            "read-back DTB differs")
+    damaged = work / "damaged.img"
+    image = bytearray(boot.read_bytes())
+    image[40:44] = (1).to_bytes(4, "little")
+    damaged.write_bytes(image)
+    raises(probe.BuildError,
+           lambda: probe.read_back_boot(
+               damaged, MKBOOTIMG, kernel, ramdisk, dtb, work / "damaged"),
+           "header")
+    (root / "etc/omamobile-ufs-rw").write_text("boot_b\n")
+    probe.pack_rootfs(root, ramdisk)
+    raises(probe.BuildError, lambda: probe.assert_no_allowlist(ramdisk),
+           "allowlist")
+    print("ok - AOSP v2 geometry, payload read-back, header and allowlist refusals")
+
+
+def check_summaries(out):
+    paths = probe.artifact_paths(out)
+    manifest = json.loads(paths["manifest"].read_text())
+    require(manifest["hardware_boot_tested"] is False,
+            "manifest claims hardware testing")
+    require(manifest["boot_image_limit"]["evidence"].startswith("[I]"),
+            "size cap lacks [I] evidence")
+    require(manifest["header"]["boot image header version"] == "2",
+            "manifest header is not v2")
+    require(manifest["header"]["second bootloader load address"] ==
+            "0x00000000", "second address is not zero")
+    require(manifest["header"]["kernel load address"] == "0x00008000",
+            "kernel address is not the stock geometry")
+    require(manifest["header"]["ramdisk load address"] == "0x01000000",
+            "ramdisk address is not the stock geometry")
+    require(manifest["header"]["kernel tags load address"] == "0x00000100",
+            "tags address is not the stock geometry")
+    lines = paths["sums"].read_text().splitlines()
+    require(len(lines) == 4, "SHA256SUMS does not cover all four artifacts")
+    covered = set()
+    for line in lines:
+        digest, filename = line.split("  ", 1)
+        covered.add(filename)
+        require(probe.sha256(out.parent / filename) == digest,
+                f"wrong sha256 for {filename}")
+    require(covered == {path.name for key, path in paths.items() if key != "sums"},
+            "an output is missing from SHA256SUMS")
+    require(probe.ALLOWLIST not in probe.cpio_names(paths["ramdisk"]),
+            "read-back initramfs contains an allowlist")
+
+
+def test_full(work, private, public):
+    def call(*args):
+        return call_builder(*args, cwd=work)
+
+    kernel = work / "Image.dummy"
+    kernel.write_bytes(b"dummy kernel, not executed\n")
+    dtb = make_dtb(work)
+    original_hash = probe.sha256(dtb)
+    rootfs = make_rootfs(work / "input")
+    outdir = work / "output"
+    outdir.mkdir()
+    built = {}
+    for boot in (1, 2):
+        out = Path(f"output/boot{boot}.img")
+        result = call(*builder_args(
+            kernel, dtb, public, rootfs, boot, out))
+        require(result.returncode == 0,
+                f"boot {boot} builder failed: {result.stderr}\n{result.stdout}")
+        require(result.stdout == f"fastboot -s <serial> boot {out}\n",
+                f"unexpected final output: {result.stdout!r}")
+        require("flash" not in result.stdout.lower() and
+                "erase" not in result.stdout.lower() and
+                "set-active" not in result.stdout.lower(),
+                "output contains a persistent-write command")
+        paths = probe.artifact_paths(work / out)
+        built[boot] = paths
+        check_summaries(work / out)
+        require(probe.fdt_get(paths["dtb"], probe.USB_NODE, "dr_mode") ==
+                "peripheral", "USB is not peripheral")
+        require(not probe.property_present(paths["dtb"], probe.USB_NODE,
+                                          "usb-role-switch"),
+                "USB role switch survived")
+        remotes = probe.remoteproc_nodes(paths["dtb"])
+        require(len(remotes) == 2, "synthetic remoteproc nodes were not found")
+        for node in remotes:
+            require(probe.fdt_get(paths["dtb"], node, "status") == "disabled",
+                    f"remoteproc remains enabled: {node}")
+        expected = "disabled" if boot == 1 else "okay"
+        require(probe.fdt_get(paths["dtb"], probe.UFS_NODE, "status") == expected,
+                f"boot {boot} UFS status is not {expected}")
+        probe.verify_probe_dtb(paths["dtb"], boot)
+    require(probe.sha256(dtb) == original_hash, "builder modified the input DTB")
+    require(probe.sha256(built[1]["ramdisk"]) == probe.sha256(built[2]["ramdisk"]),
+            "boot selector changed the initramfs")
+
+    result = call(*builder_args(
+        kernel, dtb, public, rootfs, 1, "output/boot1.img"))
+    require(result.returncode != 0 and "already exists" in result.stderr,
+            "existing output was not refused")
+    result = call(*builder_args(
+        kernel, dtb, public, rootfs, 3, "output/invalid-boot.img"))
+    require(result.returncode != 0 and "--boot must be 1" in result.stderr,
+            "invalid boot selector was not refused")
+    result = call(*builder_args(
+        kernel, dtb, private, rootfs, 1, "output/private-key.img"))
+    require(result.returncode != 0 and "PUBLIC key" in result.stderr,
+            "private key was not refused")
+
+    variants = {
+        "compatible": (DTS.replace("oneplus,instantnoodlep", "wrong,board"),
+                       "root compatible"),
+        "msm-id": (DTS.replace("0x164 0x20001", "0x164 0x20002"),
+                   "qcom,msm-id"),
+        "board-id": (DTS.replace("0x08 0x00", "0x09 0x00"),
+                     "qcom,board-id"),
+    }
+    for name, (text, error) in variants.items():
+        bad = make_dtb(work, name, text)
+        out = f"output/refuse-{name}.img"
+        result = call(*builder_args(kernel, bad, public, rootfs, 1, out))
+        require(result.returncode != 0 and error in result.stderr,
+                f"{name} mismatch was not refused: {result.stderr}")
+        require(not (work / out).exists(), f"refused {name} left an image")
+
+    oversized = work / "oversized.kernel"
+    with oversized.open("wb") as stream:
+        stream.truncate(probe.RAMDISK_OFF - probe.KERNEL_OFF)
+    result = call(*builder_args(
+        oversized, dtb, public, rootfs, 1, "output/oversized.img"))
+    require(result.returncode != 0 and "overlap guard" in result.stderr,
+            "oversized kernel was not refused")
+    require(not (work / "output/oversized.img").exists(),
+            "size refusal left an image")
+    print("ok - generated-DTB refusals, boot 1 and 2, edits, headers and sha256")
+
+
+def main():
+    with tempfile.TemporaryDirectory(prefix="instantnoodlep-probe-test-") as temp:
+        work = Path(temp)
+        cli = work / "cli"
+        cli.mkdir()
+        test_cli(cli)
+        pure = work / "pure"
+        pure.mkdir()
+        if UPSTREAM.joinpath("initramfs/init").is_file():
+            test_pure(pure)
+        else:
+            skip("pure patch checks", "set OMAMOBILE to an upstream checkout")
+
+        key = None
+        if shutil.which("ssh-keygen"):
+            key = make_key(work)
+        else:
+            skip("throwaway SSH key generation", "ssh-keygen is missing")
+
+        tools = missing_tools("bash", "cpio", "find", "gzip", "sort")
+        if key and not tools and UPSTREAM.joinpath("initramfs/init").is_file():
+            init_work = work / "initramfs"
+            init_work.mkdir()
+            (init_work / "one").mkdir()
+            test_initramfs(init_work, *key)
+        else:
+            reasons = []
+            if not key:
+                reasons.append("no throwaway key")
+            if tools:
+                reasons.append("missing " + ", ".join(tools))
+            if not UPSTREAM.joinpath("initramfs/init").is_file():
+                reasons.append("set OMAMOBILE")
+            skip("initramfs build and refusal checks", "; ".join(reasons))
+
+        if MKBOOTIMG and MKBOOTIMG.is_file() and \
+                MKBOOTIMG.with_name("unpack_bootimg.py").is_file() and not tools:
+            aosp = work / "aosp"
+            aosp.mkdir()
+            test_aosp(aosp)
+        else:
+            skip("AOSP header and cpio read-back checks",
+                 "set MKBOOTIMG beside unpack_bootimg.py; cpio tools are required")
+
+        dt_tools = missing_tools("dtc", "fdtget", "fdtput")
+        if key and not tools and not dt_tools and MKBOOTIMG and MKBOOTIMG.is_file() \
+                and UPSTREAM.joinpath("initramfs/init").is_file():
+            full = work / "full"
+            full.mkdir()
+            test_full(full, *key)
+        else:
+            reasons = []
+            if dt_tools:
+                reasons.append("missing " + ", ".join(dt_tools))
+            if not key or tools or not MKBOOTIMG or not MKBOOTIMG.is_file():
+                reasons.append("key/cpio/AOSP prerequisites are incomplete")
+            if not UPSTREAM.joinpath("initramfs/init").is_file():
+                reasons.append("set OMAMOBILE")
+            skip("generated-DTB refusals and both happy paths", "; ".join(reasons))
+    print(f"ok - host test finished ({skipped} skipped part(s))")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

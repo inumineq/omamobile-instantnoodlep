@@ -1,0 +1,521 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Build a RAM-only OnePlus 8 Pro probe without contacting a phone.
+
+Usage: tools/build-instantnoodlep-probe --kernel Image.gz --dtb board.dtb \
+         --ssh-key ~/.ssh/id_ed25519.pub --mkbootimg /path/to/mkbootimg.py \
+         --omarchy-mobile /path/to/omarchy-mobile \
+         --initramfs-root /path/to/aarch64-alpine-root --boot 1 \
+         --out out/boot.img
+
+--initramfs-root is a prepared, offline aarch64 Alpine root with BusyBox,
+Dropbear, iproute2, util-linux and kmod, plus qcom_wdt matching the kernel.
+The builder executes none of its aarch64 binaries. It overlays the shared
+initramfs/init from --omarchy-mobile, adds only the supplied public key and
+RAM-probe settings, and packs with the host cpio and gzip. This follows the
+structure of upstream's flame and dipper probe builders without Docker or
+network access. mkbootimg.py and its sibling unpack_bootimg.py come from AOSP
+system/tools/mkbootimg. dtc's fdtget/fdtput tools must be on PATH.
+
+--boot 1 disables the UFS host. --boot 2 enables it. Both disable every
+remoteproc node and force USB peripheral mode without a role switch. The
+initramfs never contains /etc/omamobile-ufs-rw, so there is no write allowlist.
+
+The 64 MiB image cap is [I], a conservative limit until stage 0 records the
+IN2023 boot partition size. It is not a measured device limit. The separate
+kernel/DTB overlap check follows device/instantnoodlep/BRINGUP-M1-PLAN.md 5.2.
+For OUT.img, the other outputs are OUT.probe.dtb, OUT.initramfs.cpio.gz,
+OUT.manifest.json and OUT.SHA256SUMS. Existing outputs are never overwritten.
+The last stdout line is a RAM-boot command template; this tool never runs it.
+"""
+
+import argparse
+import base64
+import hashlib
+import json
+import os
+from pathlib import Path
+import posixpath
+import shutil
+import struct
+import subprocess
+import sys
+import tempfile
+
+PAGE = 4096
+BASE = 0x00000000
+KERNEL_OFF = 0x00008000
+RAMDISK_OFF = 0x01000000
+SECOND_OFF = 0x00000000
+TAGS_OFF = 0x00000100
+DTB_OFF = 0x01F00000
+HEADER_VERSION = 2
+CMDLINE = ("console=tty0 panic=10 omamobile.initramfs clk_ignore_unused "
+           "pd_ignore_unused printk.devkmsg=on")
+BOOT_IMAGE_MAX = 64 * 1024 * 1024
+SIZE_LIMIT_EVIDENCE = "[I] conservative cap; IN2023 boot partition size is not measured"
+# Q's ABL layout leaves this gap below the ramdisk for its DTB placement.
+DTB_LOAD_GAP = 2 * 1024 * 1024 + PAGE
+USB_NODE = "/soc@0/usb@a6f8800/usb@a600000"
+UFS_NODE = "/soc@0/ufshc@1d84000"
+COMPATIBLE = ["oneplus,instantnoodlep", "qcom,sm8250"]
+MSM_ID = [0x164, 0x10000, 0x164, 0x20001]
+BOARD_ID = [0x08, 0x00, 0x00, 0x00]
+ALLOWLIST = "etc/omamobile-ufs-rw"
+
+
+class BuildError(Exception):
+    """An input or constructed artifact failed a required gate."""
+
+
+def run(args, *, cwd=None, data=None):
+    result = subprocess.run(
+        [str(a) for a in args], cwd=cwd, input=data,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode:
+        detail = (result.stderr or result.stdout).decode(
+            "utf-8", "replace").strip()
+        raise BuildError(f"{Path(str(args[0])).name} failed: {detail}")
+    return result.stdout
+
+
+def sha256(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def validate_public_key(path):
+    try:
+        lines = path.read_text().strip().splitlines()
+    except UnicodeError as error:
+        raise BuildError("--ssh-key must be an OpenSSH PUBLIC key") from error
+    if len(lines) != 1:
+        raise BuildError("--ssh-key must contain exactly one OpenSSH PUBLIC key")
+    fields = lines[0].split()
+    kinds = ("ssh-ed25519", "ssh-rsa", "ecdsa-sha2-nistp256")
+    if len(fields) < 2 or fields[0] not in kinds:
+        raise BuildError("--ssh-key must be an OpenSSH PUBLIC key, never a private key")
+    try:
+        raw = base64.b64decode(fields[1], validate=True)
+        size = struct.unpack(">I", raw[:4])[0]
+        if raw[4:4 + size].decode() != fields[0]:
+            raise ValueError("key type does not match its blob")
+    except (ValueError, struct.error, UnicodeError) as error:
+        raise BuildError("invalid SSH public key") from error
+
+
+def patch_init(text):
+    """Apply the dipper-style SM8250 watchdog patch to the shared init."""
+    anchor = "hostname omamobile\n"
+    replacement = """# SM8250's watchdog keeps running until a driver claims it.
+modprobe qcom_wdt || echo "omamobile: qcom watchdog module failed" >/dev/kmsg
+if [ -c /dev/watchdog0 ]; then
+  watchdog -t 5 -T 30 /dev/watchdog0
+fi
+hostname omamobile
+"""
+    if text.count(anchor) != 1:
+        raise BuildError("shared init changed: hostname anchor is not unique")
+    patched = text.replace(anchor, replacement)
+    if patched.count("modprobe qcom_wdt") != 1 or \
+            patched.count("watchdog -t 5 -T 30 /dev/watchdog0") != 1:
+        raise BuildError("watchdog patch did not apply exactly once")
+    return patched
+
+
+def remove_file(path):
+    if path.is_dir() and not path.is_symlink():
+        raise BuildError(f"expected a file, found a directory: {path}")
+    if path.exists() or path.is_symlink():
+        path.unlink()
+
+
+def pack_rootfs(stage, output):
+    # Match dipper's sorted, owner-normalized, timestamp-stable newc archive.
+    for path in list(stage.rglob("*")) + [stage]:
+        os.utime(path, (0, 0), follow_symlinks=False)
+    command = (
+        "set -euo pipefail; "
+        "find . -print0 | sort -z | "
+        "cpio --null --quiet -o -H newc --owner=0:0 --reproducible | "
+        "gzip -n -9")
+    with output.open("wb") as stream:
+        result = subprocess.run(
+            ["bash", "-c", command], cwd=stage,
+            stdout=stream, stderr=subprocess.PIPE)
+    if result.returncode:
+        output.unlink(missing_ok=True)
+        raise BuildError("cpio failed: " + result.stderr.decode(
+            "utf-8", "replace").strip())
+
+
+def cpio_names(ramdisk):
+    import gzip
+    try:
+        archive = gzip.decompress(ramdisk.read_bytes())
+    except (OSError, EOFError) as error:
+        raise BuildError("initramfs is not a valid gzip cpio archive") from error
+    output = run(["cpio", "-it", "--quiet"], data=archive)
+    names = []
+    for line in output.decode("utf-8", "replace").splitlines():
+        name = posixpath.normpath(line).lstrip("/")
+        names.append(name)
+    return names
+
+
+def assert_no_allowlist(ramdisk):
+    if ALLOWLIST in cpio_names(ramdisk):
+        raise BuildError("write allowlist /etc/omamobile-ufs-rw is present in the written initramfs")
+
+
+def build_initramfs(rootfs, shared_init, key, output, work):
+    stage = work / "rootfs"
+    shutil.copytree(rootfs, stage, symlinks=True)
+    (stage / "proc").mkdir(exist_ok=True)
+    (stage / "sys").mkdir(exist_ok=True)
+    (stage / "dev").mkdir(exist_ok=True)
+    (stage / "run").mkdir(exist_ok=True)
+    ssh_dir = stage / "root/.ssh"
+    ssh_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(key, ssh_dir / "authorized_keys")
+    ssh_dir.chmod(0o700)
+    (ssh_dir / "authorized_keys").chmod(0o600)
+
+    etc = stage / "etc"
+    etc.mkdir(exist_ok=True)
+    # No writable exception, NFS root or plan-5.8 register-write marker may
+    # survive from the prepared root. omamobile.initramfs also blocks handoff.
+    for name in ("omamobile-ufs-rw", "omamobile-ufs-rw-luns",
+                 "omamobile-nfsroot", "omamobile-simplefb-trig",
+                 "omamobile-bringup-probe"):
+        remove_file(etc / name)
+    (etc / "omamobile-compatible").write_text(COMPATIBLE[0] + "\n")
+    (etc / "omamobile-usb-product").write_text(
+        "OnePlus 8 Pro RAM-only probe\n")
+    (stage / "init").write_text(patch_init(shared_init.read_text()))
+    (stage / "init").chmod(0o755)
+    pack_rootfs(stage, output)
+    assert_no_allowlist(output)
+
+
+def fdt_get(dtb, node, prop, kind="s"):
+    return run(["fdtget", "-t", kind, dtb, node, prop]).decode(
+        "utf-8", "replace").strip()
+
+
+def fdt_cells(dtb, node, prop):
+    value = fdt_get(dtb, node, prop, "x")
+    try:
+        return [int(cell, 16) for cell in value.split()]
+    except ValueError as error:
+        raise BuildError(f"{prop} is not a list of 32-bit cells") from error
+
+
+def require_identity(dtb):
+    # fdtget -t s separates strings in one property with spaces, not newlines.
+    compatible = fdt_get(dtb, "/", "compatible").split()
+    if compatible != COMPATIBLE:
+        raise BuildError(
+            'root compatible must be exactly "oneplus,instantnoodlep","qcom,sm8250"')
+    if fdt_cells(dtb, "/", "qcom,msm-id") != MSM_ID:
+        raise BuildError(
+            "qcom,msm-id must be exactly <0x164 0x10000>,<0x164 0x20001>")
+    if fdt_cells(dtb, "/", "qcom,board-id") != BOARD_ID:
+        raise BuildError("qcom,board-id must be exactly <0x08 0x00>,<0x00 0x00>")
+
+
+def fdt_children(dtb, node):
+    text = run(["fdtget", "-l", dtb, node]).decode("utf-8", "replace")
+    return text.splitlines()
+
+
+def remoteproc_nodes(dtb):
+    found = []
+
+    def walk(node):
+        for child in fdt_children(dtb, node):
+            path = ("" if node == "/" else node) + "/" + child
+            if child.startswith("remoteproc@"):
+                found.append(path)
+            walk(path)
+
+    walk("/")
+    return found
+
+
+def property_present(dtb, node, prop):
+    result = subprocess.run(
+        ["fdtget", "-t", "s", str(dtb), node, prop],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode not in (0, 1):
+        raise BuildError(f"fdtget failed while reading {node}:{prop}")
+    return result.returncode == 0
+
+
+def verify_probe_dtb(dtb, boot):
+    require_identity(dtb)
+    if fdt_get(dtb, USB_NODE, "dr_mode") != "peripheral":
+        raise BuildError("probe USB dr_mode is not peripheral")
+    if property_present(dtb, USB_NODE, "usb-role-switch"):
+        raise BuildError("probe USB role switch was not removed")
+    remotes = remoteproc_nodes(dtb)
+    for node in remotes:
+        if fdt_get(dtb, node, "status") != "disabled":
+            raise BuildError(f"remote processor was not disabled: {node}")
+    want = "disabled" if boot == 1 else "okay"
+    if fdt_get(dtb, UFS_NODE, "status") != want:
+        raise BuildError(f"probe UFS host status is not {want}")
+
+
+def make_probe_dtb(source, output, boot):
+    require_identity(source)
+    shutil.copyfile(source, output)
+    run(["fdtput", "-t", "s", output, USB_NODE, "dr_mode", "peripheral"])
+    if property_present(output, USB_NODE, "usb-role-switch"):
+        run(["fdtput", "-d", output, USB_NODE, "usb-role-switch"])
+    for node in remoteproc_nodes(output):
+        run(["fdtput", "-t", "s", output, node, "status", "disabled"])
+    run(["fdtput", "-t", "s", output, UFS_NODE, "status",
+         "disabled" if boot == 1 else "okay"])
+    verify_probe_dtb(output, boot)
+
+
+def padded(size):
+    return (size + PAGE - 1) // PAGE * PAGE
+
+
+def check_image_sizes(kernel_size, ramdisk_size, dtb_size):
+    if kernel_size <= 0 or ramdisk_size <= 0 or dtb_size <= 0:
+        raise BuildError("kernel, initramfs and DTB must all be non-empty")
+    used = kernel_size + dtb_size + DTB_LOAD_GAP
+    room = RAMDISK_OFF - KERNEL_OFF
+    if used > room:
+        raise BuildError(
+            f"kernel+DTB+load gap is {used} bytes; only {room} fit before "
+            "the ramdisk (plan 5.2 overlap guard)")
+    image_size = PAGE + padded(kernel_size) + padded(ramdisk_size) + padded(dtb_size)
+    if image_size > BOOT_IMAGE_MAX:
+        raise BuildError(
+            f"image is {image_size} bytes; the conservative {BOOT_IMAGE_MAX}-byte "
+            f"cap is {SIZE_LIMIT_EVIDENCE}")
+    return image_size
+
+
+def pack_boot(mkbootimg, kernel, ramdisk, dtb, output):
+    run([
+        sys.executable, mkbootimg,
+        "--header_version", HEADER_VERSION,
+        "--base", BASE,
+        "--kernel_offset", KERNEL_OFF,
+        "--ramdisk_offset", RAMDISK_OFF,
+        "--second_offset", SECOND_OFF,
+        "--tags_offset", TAGS_OFF,
+        "--dtb_offset", DTB_OFF,
+        "--pagesize", PAGE,
+        "--kernel", kernel,
+        "--ramdisk", ramdisk,
+        "--dtb", dtb,
+        "--cmdline", CMDLINE,
+        "--output", output,
+    ])
+
+
+def parse_boot_info(text):
+    info = {}
+    for line in text.splitlines():
+        if ":" not in line:
+            raise BuildError("unpack_bootimg returned an unreadable info line")
+        key, value = line.split(":", 1)
+        info[key.strip()] = value.strip()
+    return info
+
+
+def info_int(info, key):
+    try:
+        return int(info[key], 0)
+    except (KeyError, ValueError) as error:
+        raise BuildError(f"unpack_bootimg info has no numeric {key}") from error
+
+
+def assert_boot_info(info, kernel_size, ramdisk_size, dtb_size):
+    expected_ints = {
+        "kernel_size": kernel_size,
+        "kernel load address": BASE + KERNEL_OFF,
+        "ramdisk size": ramdisk_size,
+        "ramdisk load address": BASE + RAMDISK_OFF,
+        "second bootloader size": 0,
+        "second bootloader load address": BASE + SECOND_OFF,
+        "kernel tags load address": BASE + TAGS_OFF,
+        "page size": PAGE,
+        "boot image header version": HEADER_VERSION,
+        "recovery dtbo size": 0,
+        "boot header size": 1660,
+        "dtb size": dtb_size,
+        "dtb address": BASE + DTB_OFF,
+    }
+    for key, expected in expected_ints.items():
+        actual = info_int(info, key)
+        if actual != expected:
+            raise BuildError(
+                f"read-back header disagrees for {key}: {actual}, expected {expected}")
+    expected_strings = {
+        "boot magic": "ANDROID!",
+        "command line args": CMDLINE,
+        "additional command line args": "",
+        "recovery dtbo offset": "0x0000000000000000",
+    }
+    for key, expected in expected_strings.items():
+        if info.get(key) != expected:
+            raise BuildError(
+                f"read-back header disagrees for {key}: {info.get(key)!r}")
+
+
+def read_back_boot(boot, mkbootimg, kernel, ramdisk, dtb, work):
+    unpack = mkbootimg.with_name("unpack_bootimg.py")
+    if not unpack.is_file():
+        raise BuildError(f"missing sibling AOSP tool: {unpack}")
+    out = work / "unpacked"
+    text = run([
+        sys.executable, unpack, "--boot_img", boot,
+        "--out", out, "--format=info",
+    ]).decode("utf-8", "replace")
+    info = parse_boot_info(text)
+    assert_boot_info(info, kernel.stat().st_size,
+                     ramdisk.stat().st_size, dtb.stat().st_size)
+    for name, source in (("kernel", kernel), ("ramdisk", ramdisk), ("dtb", dtb)):
+        extracted = out / name
+        if not extracted.is_file() or sha256(extracted) != sha256(source):
+            raise BuildError(f"read-back {name} payload differs from the input")
+    if boot.stat().st_size != check_image_sizes(
+            kernel.stat().st_size, ramdisk.stat().st_size, dtb.stat().st_size):
+        raise BuildError("read-back image size disagrees with its page layout")
+    assert_no_allowlist(out / "ramdisk")
+    return info, out
+
+
+def artifact_paths(out):
+    stem = out.name[:-4] if out.name.endswith(".img") else out.name
+    return {
+        "boot": out,
+        "dtb": out.with_name(stem + ".probe.dtb"),
+        "ramdisk": out.with_name(stem + ".initramfs.cpio.gz"),
+        "manifest": out.with_name(stem + ".manifest.json"),
+        "sums": out.with_name(stem + ".SHA256SUMS"),
+    }
+
+
+def build(args):
+    if args.boot not in (1, 2):
+        raise BuildError("--boot must be 1 (UFS disabled) or 2 (UFS enabled)")
+    paths = artifact_paths(args.out.absolute())
+    for path in paths.values():
+        if path.exists() or path.is_symlink():
+            raise BuildError(f"output already exists: {path}; choose fresh output names")
+    inputs = {
+        "--kernel": args.kernel,
+        "--dtb": args.dtb,
+        "--ssh-key": args.ssh_key,
+        "--mkbootimg": args.mkbootimg,
+    }
+    for name, path in inputs.items():
+        if not path.is_file():
+            raise BuildError(f"{name} must name a file: {path}")
+    shared_init = args.omarchy_mobile / "initramfs/init"
+    if not shared_init.is_file():
+        raise BuildError(f"shared init not found: {shared_init}")
+    if not args.initramfs_root.is_dir():
+        raise BuildError("--initramfs-root must name a prepared root directory")
+    for relative in ("bin/busybox", "usr/sbin/dropbear"):
+        if not (args.initramfs_root / relative).exists():
+            raise BuildError(f"initramfs root lacks {relative}")
+    for tool in ("bash", "cpio", "fdtget", "fdtput", "find", "gzip", "sort"):
+        if shutil.which(tool) is None:
+            raise BuildError(f"required host tool is missing: {tool}")
+    validate_public_key(args.ssh_key)
+    if args.mkbootimg.name != "mkbootimg.py":
+        raise BuildError("--mkbootimg must name AOSP mkbootimg.py")
+
+    paths["boot"].parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+            prefix=".instantnoodlep-probe-", dir=paths["boot"].parent) as temp:
+        work = Path(temp)
+        staged = {name: work / path.name for name, path in paths.items()}
+        make_probe_dtb(args.dtb, staged["dtb"], args.boot)
+        build_initramfs(args.initramfs_root, shared_init, args.ssh_key,
+                        staged["ramdisk"], work)
+        expected_size = check_image_sizes(
+            args.kernel.stat().st_size, staged["ramdisk"].stat().st_size,
+            staged["dtb"].stat().st_size)
+        pack_boot(args.mkbootimg, args.kernel, staged["ramdisk"],
+                  staged["dtb"], staged["boot"])
+        if staged["boot"].stat().st_size != expected_size:
+            raise BuildError("mkbootimg output has an unexpected size")
+        info, unpacked = read_back_boot(
+            staged["boot"], args.mkbootimg, args.kernel,
+            staged["ramdisk"], staged["dtb"], work)
+        verify_probe_dtb(unpacked / "dtb", args.boot)
+
+        outputs = {}
+        for name in ("boot", "dtb", "ramdisk"):
+            outputs[name] = {
+                "file": paths[name].name,
+                "bytes": staged[name].stat().st_size,
+                "sha256": sha256(staged[name]),
+            }
+        manifest = {
+            "device": "instantnoodlep",
+            "boot": args.boot,
+            "header": info,
+            "boot_image_limit": {
+                "bytes": BOOT_IMAGE_MAX,
+                "evidence": SIZE_LIMIT_EVIDENCE,
+            },
+            "outputs": outputs,
+            "shared_init_sha256": sha256(shared_init),
+            "mkbootimg_sha256": sha256(args.mkbootimg),
+            "hardware_boot_tested": False,
+        }
+        staged["manifest"].write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+        sums = []
+        for name in ("boot", "dtb", "ramdisk", "manifest"):
+            sums.append(f"{sha256(staged[name])}  {paths[name].name}\n")
+        staged["sums"].write_text("".join(sums))
+        for name, final in paths.items():
+            os.replace(staged[name], final)
+    print(f"Built and read back {args.out} (RAM-only; no phone was accessed)",
+          file=sys.stderr)
+    print(f"fastboot -s <serial> boot {args.out}")
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--kernel", type=Path, required=True)
+    parser.add_argument("--dtb", type=Path, required=True,
+                        help="original instantnoodlep DTB; it is never modified")
+    parser.add_argument("--ssh-key", type=Path, required=True,
+                        help="one OpenSSH public key, never a private key")
+    parser.add_argument("--mkbootimg", type=Path, required=True,
+                        help="AOSP mkbootimg.py with sibling unpack_bootimg.py")
+    parser.add_argument("--omarchy-mobile", type=Path, required=True,
+                        help="upstream checkout containing initramfs/init")
+    parser.add_argument("--initramfs-root", type=Path, required=True,
+                        help="prepared offline aarch64 Alpine root directory")
+    parser.add_argument("--boot", type=int, required=True,
+                        help="1 disables UFS; 2 enables UFS")
+    parser.add_argument("--out", type=Path, required=True,
+                        help="new boot.img path; sibling artifacts derive from its name")
+    args = parser.parse_args(argv)
+    try:
+        build(args)
+    except (BuildError, OSError, subprocess.SubprocessError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
