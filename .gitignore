@@ -1,0 +1,16 @@
+# Private captures: never commit (serials, IMEI, MAC addresses)
+captures/
+reference/
+
+# Images, firmware and restore assets: too big and/or licensed
+*.img
+*.mbn
+*.elf
+payload.bin
+*.zip
+msm*/
+omamobile.local.conf
+magisk_patched*
+
+# Build output
+out/
