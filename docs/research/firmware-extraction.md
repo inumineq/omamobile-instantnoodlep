@@ -28,13 +28,17 @@
    table is for Linux running *on* the SDX55. [I] Not applicable here
    until shown otherwise. Whether the rest of the `qcom/sdx55m/*` set is
    loaded from the host is [I]: check what the Nura image packages.
+   [V] Supporting this, the community DTS enables `&pcie1` and `&pcie2`
+   with PHY supplies but no child node (lines 708-726), while `&pcie0`
+   carries the Wi-Fi child (681-704). That fits an external SDX55 on
+   pcie1 or pcie2; which one is [I].
 3. [V] The QCA6390 identification is stronger than the note says: the
    community DTS uses `qca6390-pmu`, `qcom,qca6390-bt` and the PCI child
    `pci17cb,1101` (see `sm8250-dts-gap.md`). The "WCN6851" in the ticket
    text was wrong. The owner's unit silicon is still [I] until stage 0.
 4. [I] Gap: the community DTS enables ADSP, CDSP, SLPI and Venus with
-   firmware names (dts-gap note, lines 577-585 and 949-952). None of these
-   are mapped here. They are needed for audio, sensors and video (M5), not
+   firmware names (community DTS: ADSP 577-580, CDSP 582-585, SLPI 675-678,
+   Venus 949-952, see `sm8250-dts-gap.md`). None of these are mapped here. They are needed for audio, sensors and video (M5), not
    for M1.
 5. Policy, unchanged: per-device calibration and identity data (`efs*`,
    modem NV) is never extracted into packages.

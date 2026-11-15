@@ -27,9 +27,13 @@
 4. [I] The board deletes 14 common reserved-memory nodes and recreates
    them (lines 15-31, 144-228). Every recreated region must be checked
    against stock `/proc/iomem` before first boot (BRINGUP-M1-PLAN risk 1).
-5. Source locations moved: the postmarketOS GitLab fork now resolves to
+5. [V] Source locations moved: the postmarketOS GitLab fork now resolves to
    `gitlab.nura.eco`, and the Wi-Fi/BT fix lives in
    `gitlab.com/sm8250-mainline/linux`. Re-check both URLs when porting.
+
+6. [V] Line slip in the body's "Peripheral enablement" bullet: SLPI
+   is at lines 675-678, not inside 577-585 (ADSP 577-580, CDSP 582-585,
+   Venus 949-952).
 
 ---
 

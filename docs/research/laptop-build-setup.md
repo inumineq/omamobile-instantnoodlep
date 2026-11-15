@@ -24,8 +24,8 @@
    method" row).
 3. Correction: the row text "the local plan currently prefers the DTB
    `/chosen/bootargs`" is inaccurate. `BRINGUP-M1-PLAN.md` section 4
-   leaves this to stage 0, and `abl-boot-flow.md` section 2 says ABL
-   supplies the boot-image cmdline.
+   leaves this to stage 0, and `abl-boot-flow.md` section 2 infers [I]
+   that ABL supplies the boot-image cmdline. Stage 0 decides.
 4. [V] What stays valid: the base requirements (Docker, host tools, clang,
    AOSP tools, kernel checkout), dropping `vbmeta` from
    `BOOT_IMAGES`/`UFS_RW`, leaving `AVB_FOOTERS` unset, and an offline

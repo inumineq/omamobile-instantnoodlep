@@ -31,7 +31,7 @@ cross-references, each marked:
    the ticket "Lock device.conf values once stage-0 answers exist".
 4. Changes for that ticket: header v2; `VENDOR_PAGESIZE=4096` [V Lineage,
    I on unit]; slot flags in GPT attributes, `devinfo` is not the slot
-   store; drop the "devinfo holds the slot flags" comment; the
+   store [V qbootctl `gpt-utils.h` / AOSP qcom bootctrl; I on the unit]; drop the "devinfo holds the slot flags" comment; the
    `VENDOR_CMDLINE` key name implies a vendor_boot section that this layout
    does not have.
 
