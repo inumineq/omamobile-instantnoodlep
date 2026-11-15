@@ -42,6 +42,13 @@ OnePlus 6 (upstream #432, recorded in `device/instantnoodlep/NOTES.md`,
 2026-11-15 evening): the port writes nothing beyond what has been agreed,
 and slot-flag writes count as writes.
 
+Before the commands, record `current-slot` (filtered `fastboot getvar`,
+as in stage-0 B2) and name the slot you mean to restore. [I] fastbootd
+flashes the current slot's `_a`/`_b` partitions (AOSP fastbootd
+behaviour, not verified on this phone): after an M1b slot switch, path 1
+targets slot B unless the slot is switched first (path 0 covers
+`set_active`).
+
 1. `fastboot reboot fastboot` (fastbootd, userspace)
 2. Flash the full-OTA payload images for IN2023 in order
    (system, vendor, boot, dtbo, vbmeta and the rest of the slot's images).
@@ -87,6 +94,10 @@ committed or linked (AGENTS.md rule 5).
 - The port's tooling never writes `super` or any `_a` partition. Path 1 is
   the owner's own recovery outside that tooling, and is recorded if used.
 - Never flash a payload or image built for another IN20xx regional variant.
-- Never run MSM for a different model (IN2020/IN2021/IN2025) or for the
-  OnePlus 8 (region codes `IN21xx`).
+- Never run MSM for another region of this same phone (`IN2020` China,
+  `IN2021` India, `IN2025` North America; `IN2020`/`IN2021`/`IN2023`/
+  `IN2025` are all 8 Pro models [V: LineageOS
+  `lineage_wiki/_data/devices/instantnoodlep.yml`, `models: [IN2020,
+  IN2021, IN2023, IN2025]`]) or for the OnePlus 8 non-Pro (region codes
+  `IN21xx`).
 - Never pick "SMT Download" in the MSM tool.
