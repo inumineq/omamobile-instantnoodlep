@@ -31,6 +31,9 @@ grep -E 'ro\.build\.(fingerprint|display\.id|version\.ota)' captures/*/build-boo
   `OnePlus/OnePlus8Pro_EEA/OnePlus8Pro:<android>/<build>/<incremental>:user/release-keys`
   [I: the EEA product name] and a display id such as `IN2023_11_<build>`
   [I]. Paste.
+- **Stop:** A3 shows `ro.boot.slot_suffix=_b`. Do not download yet. The
+  slot has to move first (stage-0 runbook A3), which changes the running
+  build. R2 waits until A3 shows `_a`.
 - **Stop:** product or model is not the EU/EEA IN2023. Other regional
   packages must never be flashed (RESTORE-RUNBOOK "Never do").
 - **Rollback:** n/a.
@@ -74,7 +77,11 @@ python3 -c 'import base64,hashlib,sys;print(base64.b64encode(hashlib.sha256(open
 - **Expect:** the MD5 matches the published value. `FILE_SIZE` equals the
   `stat` size of `payload.bin`. The last command's base64 output equals
   `FILE_HASH` (the OTA's own integrity field is the base64 SHA-256 of
-  `payload.bin` [I: AOSP update_engine `payload_properties.txt` format]). Paste the comparison results: match or mismatch.
+  `payload.bin` [V AOSP update_engine
+  `payload_generator/payload_properties.cc:108-111`, SHA-256 via
+  `HashCalculator`]). FILE_HASH proves the extraction is intact, **not**
+  where the file came from. Provenance rests on the official CDN host plus
+  the published MD5. Paste the comparison results: match or mismatch.
 - **Stop:** any mismatch. Re-download; never use a payload that fails
   these checks.
 - **Rollback:** delete and re-download.
@@ -83,14 +90,16 @@ python3 -c 'import base64,hashlib,sys;print(base64.b64encode(hashlib.sha256(open
 
 Tools [I: names and packaging; any equivalent is fine]: `payload-dumper-go`
 (AUR, or a GitHub release binary), and the AOSP Python tools from the
-laptop setup's `SRC_DIR` (`system/tools/mkbootimg/unpack_bootimg.py`,
+laptop setup's `SRC_DIR` (see `docs/research/laptop-build-setup.md`; set
+it first, e.g. `export SRC_DIR=~/aosp-tools`) (`system/tools/mkbootimg/unpack_bootimg.py`,
 `external/avb/avbtool.py`, `system/libufdt/utils/src/mkdtboimg.py`).
 
 ```sh
+test -n "$SRC_DIR" && test -d "$SRC_DIR/system/tools/mkbootimg" || echo "SRC_DIR not set or wrong"
 cd "$R" && payload-dumper-go -l ota/payload.bin | tee images/partition-list.txt
 payload-dumper-go -p boot,dtbo,vbmeta,vbmeta_system -o images ota/payload.bin
 sha256sum images/*.img | tee images/SHA256SUMS
-python3 "$SRC_DIR/system/tools/mkbootimg/unpack_bootimg.py" --boot_img images/boot.img --out "$TMPDIR/boot-unpacked" --format=info
+python3 "$SRC_DIR/system/tools/mkbootimg/unpack_bootimg.py" --boot_img images/boot.img --out "$R/images/boot-unpacked" --format=info
 python3 "$SRC_DIR/external/avb/avbtool.py" info_image --image images/vbmeta.img
 python3 "$SRC_DIR/system/libufdt/utils/src/mkdtboimg.py" dump images/dtbo.img | grep -E 'dt_table|entry|id|rev|custom' | head -60
 ```

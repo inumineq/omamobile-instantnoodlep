@@ -7,10 +7,12 @@ Every step has a command block, **Expect**, **Stop** and **Rollback**. Paste
 the output (redacted, see §6) back into the coordinator chat after each
 phase. Do not batch the phases.
 
-What this runbook writes to the phone: **one thing only**, the unlock in
-phase C, which wipes user data and changes the lock state. Nothing is ever
-flashed. `fastboot boot` in phase D loads an image into RAM and does not write
-it to flash.
+What this runbook writes to the phone: **one partition-level write**, the
+unlock in phase C, which wipes user data and changes the lock state. The
+rest are ordinary Android data writes to `userdata` (setup in C3,
+`adb install`/`adb push`, Magisk's `/data/adb`), and the unlock wipes those
+anyway. Nothing is ever flashed. `fastboot boot` in phase D loads an image
+into RAM and does not write it to flash.
 
 Ground rules for the whole runbook:
 
@@ -21,6 +23,11 @@ Ground rules for the whole runbook:
   `fastboot --set-active` or `fastboot flashing lock`/`oem lock` during
   stage 0.** None of them appear below. If a guide, a forum post or a tool
   suggests one, stop and ask.
+- **In the Magisk app, touch nothing under Install or Uninstall except
+  "Select and Patch a File".** "Direct Install" writes the current slot's
+  boot partition. "Install to Inactive Slot (After OTA)" writes `boot_b`.
+  "Uninstall Magisk" → "Restore Images" / "Complete Uninstall" writes the
+  current slot's boot partition. Under temporary root all of them are live.
 - Captures contain serials, the IMEI and MAC addresses. Never paste raw
   `getprop`, `getvar all`, `dmesg` or the device tree into GitHub. §6 says
   what to paste.
@@ -57,6 +64,8 @@ git check-ignore -v captures/test && echo "captures/ is ignored"
 The ticket "Secure restore assets on local disk (full OTA + MSM package for
 IN2023)" must be **resolved** before phase C. Phases A and B are read-only
 and may run first; in fact R1 needs the build id from phase A.
+**R2 waits until A3 shows `_a`.** If the slot has to move first, the running
+build changes, and an OTA downloaded earlier would no longer match.
 
 ---
 
@@ -105,10 +114,15 @@ adb shell getprop | grep -E 'ro\.build\.(fingerprint|display\.id|version\.(relea
   = `_a`; `ro.boot.flash.locked` = `1`; `ro.boot.verifiedbootstate` =
   `green`. `ro.boot.dtbo_idx` is present if ABL applies a dtbo (stage-0
   question 4).
-- **Stop, important:** `ro.boot.slot_suffix` is `_b`. Stock is then
-  running from slot B, which reverses the safety model (slot A for stock,
-  slot B for us). Report it and do nothing else. The fix (an official OTA
-  so stock lands on A, or swapping the roles) is a decision, not a step.
+- **Stop, important:** `ro.boot.slot_suffix` is `_b`. A/B OTAs alternate
+  slots, so on a phone that has taken several updates this is roughly a
+  coin flip, not an edge case. Stock is then running from slot B, the slot
+  we would write. Report it and do nothing else. Writing `_a` partitions to
+  swap roles is **not** an option (AGENTS.md rule 3). The only remedy is
+  for the phone's own updater to install the next official OTA (or a local
+  upgrade), so that stock moves to A. That is a write by the stock updater,
+  so it is the owner's decision. Afterwards, redo A3, and only then start
+  restore-assets R2.
 - **Stop:** model is not `IN2023`.
 - **Rollback:** n/a.
 - These lines contain **no** serial. Paste them back as they are, with
@@ -154,7 +168,7 @@ grep -E 'current-slot|slot-(successful|unbootable|retry-count)|unlocked|secure|h
   "Slot-B bootable marking on Qualcomm: the named GPT-attribute
   exception"). `has-slot:boot/dtbo/vbmeta: yes`; [I] no
   `init_boot`/`vendor_boot` lines.
-- **Stop:** `current-slot: b` (same reason as A3); `unlocked: yes` when you
+- **Stop:** `current-slot: b` (same reason and remedy as A3); `unlocked: yes` when you
   never unlocked; `getvar all` fails.
 - **Rollback:** n/a (read-only).
 - Paste back the **filtered `grep` output only**. `getvar all` itself
@@ -175,8 +189,9 @@ fastboot reboot
   boots stock.
 - **Stop:** `fastboot reboot fastboot` is rejected or the phone never shows
   fastbootd. Then restore path 1 is unproven: report it before phase C.
-- **Rollback:** if the phone sits in fastbootd: choose "Reboot system now"
-  with the volume keys and Power, or `fastboot reboot`.
+- **Rollback:** if the phone sits in fastbootd: choose **only** "Reboot
+  system now" with the volume keys and Power, or run `fastboot reboot`.
+  Never choose a wipe or format entry from that menu.
 
 ### Gate G1 (owner decides, before phase C)
 
@@ -275,8 +290,9 @@ adb pull /sdcard/Download/magisk_patched-<id>.img "captures/$D/"
 ```
 
 - **Expect:** a `magisk_patched-<id>.img` about the size of `boot.img`.
-- **Stop:** the app only offers "Direct Install". That writes `boot_a`.
-  Never choose it, now or later.
+- **Stop:** the app offers only "Direct Install" or "Install to Inactive
+  Slot". Choose neither: they write `boot_a` and `boot_b`. Use only
+  "Select and Patch a File" (ground rules above).
 - **Rollback:** uninstall the Magisk app.
 
 ### D3. Boot it from RAM
@@ -294,7 +310,8 @@ fastboot boot "captures/$D/magisk_patched-<id>.img"
   refuses `fastboot boot`. **Do not fall back to `fastboot flash boot`.**
   Paste the error. Root steps then wait for a different plan.
 - **Stop:** the Magisk app asks for "additional setup" and wants to
-  reboot or install. Decline. That path writes the boot partition.
+  reboot or install. Decline. That path writes the boot partition. In the
+  app, touch nothing under Install or Uninstall.
 - **Rollback:** a hang or bootloop writes nothing. Hold Power + Volume Up
   for about 10-30 s until it restarts; it boots stock from flash. If it
   keeps landing in fastboot: `fastboot reboot`.
@@ -316,6 +333,7 @@ adb exec-out su -c 'ls -l /dev/block/by-name/'        > "captures/$D/by-name-roo
 adb exec-out su -c 'for d in /sys/block/sd?; do echo "$d size=$(cat $d/size) lbs=$(cat $d/queue/logical_block_size)"; done' > "captures/$D/luns.txt"
 adb exec-out su -c 'for d in /sys/bus/pci/devices/*; do echo "$d $(cat $d/vendor) $(cat $d/device)"; done' > "captures/$D/pci-root.txt"
 for l in a b c d e f; do adb exec-out su -c "dd if=/dev/block/sd$l bs=4096 count=6 2>/dev/null" > "captures/$D/gpt-head-sd$l.bin"; done
+for l in a b c d e f; do adb exec-out su -c "n=\$(cat /sys/block/sd$l/size); dd if=/dev/block/sd$l bs=4096 skip=\$((n/8-6)) count=6 2>/dev/null" > "captures/$D/gpt-tail-sd$l.bin"; done
 ls -la "captures/$D"
 ```
 
@@ -330,9 +348,17 @@ ls -la "captures/$D"
     LUN of `boot_b`/`dtbo_b` versus `userdata` (upstream's
     `UFS_RW_LUNS`, see NOTES.md).
   - `luns.txt` lists `sda`-`sdf` [I] with sizes and a logical block size
-    of 4096 [I].
+    of 4096 [I]. **`/sys/block/sdX/size` is always in 512-byte units**,
+    whatever the logical block size. At 4096 the last LBA is
+    `size/8 - 1`. Use that in the GPT-exception ticket, not `size - 1`
+    (which is 8x too high). The tail loop assumes 4096; if `lbs` is 512,
+    tell the coordinator before relying on the tail dumps.
   - Six `gpt-head-sd?.bin` files of 24576 bytes (LBA 0 to 5: protective
     MBR, GPT header, first entries).
+  - Six `gpt-tail-sd?.bin` files of 24576 bytes (LBA last-5 to last: the
+    backup entries and the backup GPT header). The ticket "Slot-B bootable
+    marking on Qualcomm: the named GPT-attribute exception" needs them,
+    and dumping them now saves a second root session.
 - **Stop:** anything prompts for a write, or `su` is denied (redo D3).
 - **Rollback:** n/a (read-only).
 
@@ -351,28 +377,38 @@ GPT slot attributes from the dumps (laptop, offline; reads the files only):
 ```sh
 for l in a b c d e f; do echo "== sd$l"; python3 -I - "captures/$D/gpt-head-sd$l.bin" <<'EOF'
 import struct, sys
-b = open(sys.argv[1], 'rb').read(); bs = 4096
-h = b[bs:bs + 92]
-if h[:8] != b'EFI PART': sys.exit('no GPT header at LBA 1 (block size not 4096?)')
+b = open(sys.argv[1], 'rb').read()
+for bs in (4096, 512):
+    h = b[bs:bs + 92]
+    if h[:8] == b'EFI PART': break
+else:
+    sys.exit('no GPT header at LBA 1 (tried 4096 and 512)')
 lba, n, sz = struct.unpack_from('<QII', h, 72)
+print(f"lbs={bs} entries={n} entry_size={sz}")
 for i in range(n):
     o = lba * bs + i * sz
-    if o + sz > len(b): break
+    if o + sz > len(b):
+        print(f"WARNING: dump ends at entry {i} of {n}; later entries not shown"); break
     e = b[o:o + sz]
     if e[:16] == bytes(16): continue
     name = e[56:128].decode('utf-16le').split('\0')[0]
     attr = struct.unpack_from('<Q', e, 48)[0]
     if name.rsplit('_', 1)[0] in ('boot', 'dtbo', 'vbmeta', 'vbmeta_system'):
-        print(f"{name:16} attrs=0x{attr:016x} bits48-55=0x{(attr >> 48) & 0xff:02x}")
+        f = (attr >> 48) & 0xff
+        print(f"{name:16} attrs=0x{attr:016x} byte6=0x{f:02x} "
+              f"active={f >> 2 & 1} successful={f >> 6 & 1} unbootable={f >> 7 & 1} "
+              f"other_bits=0x{f & 0x3b:02x}")
 EOF
 done
 ```
 
-- **Expect:** the LUN holding `boot_a`/`boot_b` prints both, with
-  non-zero bits 48-55 on `boot_a` at least. Decode those bits with
-  `linux-msm/qbootctl` `gpt-utils.h` (priority, active, retry count,
-  successful, unbootable) [V source, I on unit] and compare them with the
-  B2 `getvar` slot flags. If they agree, stage-0 question 2 is answered
+- **Expect:** the LUN holding `boot_a`/`boot_b` prints both. Decoding of
+  attribute byte 6 (bits 48-55): active = bit 50, successful = bit 54,
+  unbootable = bit 55 [V `linux-msm/qbootctl` `gpt-utils.h:65-69`,
+  `AB_FLAG_OFFSET` = attribute byte 6; I on the unit]. Where priority and
+  retry count sit inside the remaining bits (`other_bits`) is **not**
+  defined in that header [I]. Compare with the B2 `getvar` slot flags.
+  If active/successful/unbootable agree, stage-0 question 2 is answered
   (slot flags live in GPT attributes) without writing anything. Other LUNs
   print nothing or `no GPT header`; both are fine.
 - **Stop:** none. The parser only reads laptop files.
@@ -386,6 +422,9 @@ adb reboot
 
 - **Expect:** stock boots from flash with no root. The Magisk app shows
   "Installed: N/A".
+- **Stop:** never use "Uninstall Magisk" to leave temp root. It restores
+  images, which writes the boot partition. A plain reboot is all it takes;
+  uninstalling the **app** afterwards is fine.
 - **Rollback:** n/a.
 
 ---
@@ -396,13 +435,14 @@ Paste into the coordinator chat (no serials, IMEI or MACs; check before
 pasting):
 
 ```sh
-grep -RniE 'serialno|imei|meid|iccid|androidboot\.serial|wifimacaddr|btmacaddr|([0-9a-f]{2}:){5}[0-9a-f]{2}' "captures/$D" | cut -c1-120 | head -40
+grep -RniE 'serial|imei|meid|iccid|imsi|msisdn|macaddr|mac_addr|bdaddr|([0-9a-f]{2}[:-]){5}[0-9a-f]{2}' "captures/$D" | cut -c1-120 | head -60
 ```
 
 That `grep` shows **where** identifiers sit. Use it to check that nothing
 you paste contains a match. Paste the filtered outputs from A3, B2, B3, C3,
 D5, `luns.txt` and `pci-root.txt`. Do **not** paste `live.dts`, `dmesg`,
-`getvar-all*.txt`, `getprop-all.txt` or any `.bin` file.
+`getvar-all*.txt`, `getprop-all.txt` or any `.bin` file. The `.bin` dumps
+hold disk and partition GUIDs, which are unique to the unit.
 
 The coordinator drafts the #808 comment (English) from those facts,
 answering `docs/STAGE-0.md` §5 plus the extra questions there. The owner
