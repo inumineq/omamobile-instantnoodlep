@@ -37,11 +37,9 @@ named with each. Never run a block with a `{{...}}` still in it.
 - `{{FASTBOOT_BUTTONS}}` — how to reach fastboot from power-off. Filled by
   the stage-0 finding (plan §8, note under the table). Until filled:
   `adb reboot bootloader`.
-- `{{PROBE_BUILDER}}` — the probe builder, proposed as
-  `tools/build-instantnoodlep-probe` (plan 5.7). Filled by the builder
-  ticket, before P2.
-- `{{K1_KERNEL}}`, `{{PROBE_DTB}}` — the K1 kernel image and the
-  builder-made probe DTB copy (plan 5.5-5.6). Chosen in P2.
+- `{{K1_KERNEL}}`, `{{K1_DTB}}` — the K1 kernel image and its original DTB
+  (plan 5.5-5.6). Chosen in P2. The builder writes `out/boot.probe.dtb` for
+  boot 1 and derives the boot-2 DTB name from `{{BOOT2_IMG}}`.
 - `{{SSH_KEY}}` — the owner's local ssh key for the USB gadget link (plan
   goal 2). Chosen in P2.
 - `{{MKBOOTIMG}}` — the `mkbootimg` tool, from the laptop tools setup
@@ -109,14 +107,16 @@ Kernel K1 is the SM8250 community kernel (plan 5.6). The probe DTB is the
 builder-made copy of the kernel's DTB with USB `dr_mode = "peripheral"`,
 remote processors disabled and, for boot 1, the UFS host disabled (plan
 5.5). The initramfs ships without `/etc/omamobile-ufs-rw`: no allowlist
-at all (plan 5.5).
+at all (plan 5.5). The command uses an existing upstream checkout and an
+offline aarch64 Alpine root prepared as described by the builder's `--help`;
+adjust those two local paths if needed.
 
 ```sh
-{{PROBE_BUILDER}} --kernel {{K1_KERNEL}} --dtb {{PROBE_DTB}} --ssh-key {{SSH_KEY}} --mkbootimg {{MKBOOTIMG}} --out out/boot.img
-fdtget -t x {{PROBE_DTB}} / qcom,msm-id
-fdtget -t x {{PROBE_DTB}} / qcom,board-id
-fdtget -t s {{PROBE_DTB}} / compatible
-stat -c '%s %n' {{K1_KERNEL}} {{PROBE_DTB}} out/boot.img | tee "captures/$D/m1/p2-sizes.txt"
+tools/build-instantnoodlep-probe --omarchy-mobile "$HOME/omarchy-mobile" --initramfs-root "$HOME/instantnoodlep-initramfs-root" --boot 1 --kernel {{K1_KERNEL}} --dtb {{K1_DTB}} --ssh-key {{SSH_KEY}} --mkbootimg {{MKBOOTIMG}} --out out/boot.img
+fdtget -t x out/boot.probe.dtb / qcom,msm-id
+fdtget -t x out/boot.probe.dtb / qcom,board-id
+fdtget -t s out/boot.probe.dtb / compatible
+stat -c '%s %n' {{K1_KERNEL}} out/boot.probe.dtb out/boot.img | tee "captures/$D/m1/p2-sizes.txt"
 sha256sum out/boot.img | tee "captures/$D/m1/p2-sha256.txt"
 ```
 
@@ -139,8 +139,8 @@ laptop first.
 python3 "$SRC_DIR/system/libufdt/utils/src/mkdtboimg.py" dump "$R/images/dtbo.img" | tee "captures/$D/m1/p3-dtbo-dump.txt"
 # From the dump, take the entry whose id matches board-id 8 ({{DTBO_ENTRY}}).
 # If no entry matches, record "no matching entry" and go to P4.
-{{UFDT_APPLY_OVERLAY}} {{PROBE_DTB}} {{DTBO_ENTRY}} "captures/$D/m1/p3-applied-ufdt.dtb"
-fdtoverlay -i {{PROBE_DTB}} -o "captures/$D/m1/p3-applied-fdtoverlay.dtb" {{DTBO_ENTRY}}
+{{UFDT_APPLY_OVERLAY}} out/boot.probe.dtb {{DTBO_ENTRY}} "captures/$D/m1/p3-applied-ufdt.dtb"
+fdtoverlay -i out/boot.probe.dtb -o "captures/$D/m1/p3-applied-fdtoverlay.dtb" {{DTBO_ENTRY}}
 ```
 
 - **Expect:** a result is recorded either way: applies, fails, or no
@@ -230,7 +230,7 @@ ssh root@172.16.42.1 'grep -iE "reserved|System RAM" /proc/iomem' | tee "capture
 
 ```sh
 ssh root@172.16.42.1 'dtc -I fs /proc/device-tree' > "captures/$D/m1/r3-live.dts"
-dtc -I dtb -O dts -o "captures/$D/m1/r3-probe.dts" {{PROBE_DTB}}
+dtc -I dtb -O dts -o "captures/$D/m1/r3-probe.dts" out/boot.probe.dtb
 diff -u "captures/$D/m1/r3-probe.dts" "captures/$D/m1/r3-live.dts" | tee "captures/$D/m1/r3-dt.diff"
 grep -oE 'androidboot\.dtbo_idx=[^ ]*|root=[^ ]*|skip_initramfs' "captures/$D/m1/r2-cmdline.txt"
 ```
@@ -249,7 +249,14 @@ grep -oE 'androidboot\.dtbo_idx=[^ ]*|root=[^ ]*|skip_initramfs' "captures/$D/m1
 ### R4. K1 boot 2, UFS on, guard with no allowlist (phone)
 
 Build the boot-2 image as in P2, one change: the probe DTB keeps the UFS
-host enabled (plan 5.5). Record its path as `{{BOOT2_IMG}}`. Then:
+host enabled (plan 5.5). Record its path as `{{BOOT2_IMG}}`. This build is
+laptop/offline:
+
+```sh
+tools/build-instantnoodlep-probe --omarchy-mobile "$HOME/omarchy-mobile" --initramfs-root "$HOME/instantnoodlep-initramfs-root" --boot 2 --kernel {{K1_KERNEL}} --dtb {{K1_DTB}} --ssh-key {{SSH_KEY}} --mkbootimg {{MKBOOTIMG}} --out {{BOOT2_IMG}}
+```
+
+Then (phone):
 
 ```sh
 fastboot -s <serial> boot {{BOOT2_IMG}}
