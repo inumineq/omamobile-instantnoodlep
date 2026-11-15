@@ -51,8 +51,10 @@ Device support request: [derekross/omarchy-mobile#808](https://github.com/derekr
 docs/STAGE-0.md              Facts to collect from stock, in order
 docs/RESTORE-RUNBOOK.md      How stock is restored (OTA, fastbootd, EDL last)
 docs/research/               Research notes ([V]/[I]) from the map's research tickets
+docs/runbooks/               Owner-run gated runbooks (Expect / Stop / Rollback)
 device/instantnoodlep/       Device work: descriptor, plans, notes
 scripts/stage0-collect.sh   Read-only stock capture (run before unlocking)
+scripts/omabook-fetch-tools.sh  Laptop tools + Magisk APK for the runbooks (no phone)
 captures/                    Private captures (gitignored, never commit)
 ```
 
