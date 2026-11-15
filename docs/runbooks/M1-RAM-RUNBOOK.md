@@ -219,7 +219,9 @@ ssh root@172.16.42.1 'grep -iE "reserved|System RAM" /proc/iomem' | tee "capture
   the expected K1 kernel release; **no `sd*` devices at all** (UFS was
   meant to be off); the watchdog feeder running; dmesg shows the USB
   gadget and the watchdog. The `/proc/cmdline` record is evidence in its
-  own right (plan 5.2) and feeds R3.
+  own right (plan 5.2) and feeds R3. [I] ABL appends
+  `androidboot.serialno=` to the command line, so `r2-cmdline.txt` is
+  private; only the fields named in "What to paste back" leave the laptop.
 - **Stop:** any `sd*` present, or the watchdog is not fed.
 - **Rollback:** `ssh root@172.16.42.1 'reboot -f'`; stock boots from
   slot A. If ssh itself hangs, the R1 rollback.
@@ -236,7 +238,9 @@ grep -oE 'androidboot\.dtbo_idx=[^ ]*|root=[^ ]*|skip_initramfs' "captures/$D/m1
 - **Expect:** no grafted downstream nodes in the live tree, and a record
   of whether ABL took the overlay path (`androidboot.dtbo_idx`, plan
   5.2). Phandle and ordering noise in the diff is normal; the check is
-  for nodes that exist only in the live tree.
+  for nodes that exist only in the live tree. [I] ABL may add a
+  `serial-number` property and other per-unit values to the live tree:
+  `r3-live.dts` and `r3-dt.diff` stay private.
 - **Stop:** nodes in the live tree that are not in our DTB. That is
   outcome (c) of plan 5.3, a contaminated DT: stop all bring-up and
   analyse offline.
@@ -353,11 +357,18 @@ Paste, per step:
 
 - R1: the fastboot output lines, and what appeared on the screen and on
   USB.
-- R2: `uname -r`, `/proc/cmdline`, `ls /sys/block`, the feeder line, and
-  the reserved/System RAM iomem lines.
-- R3: whether the live DT matches (a diff summary, not the full
-  `r3-live.dts`), and the cmdline fields `androidboot.dtbo_idx`,
-  `root=`, `skip_initramfs`.
+- R2: `uname -r`, `ls /sys/block`, the feeder line, the reserved/System
+  RAM iomem lines, and only these command-line fields (never the whole
+  `/proc/cmdline`, which holds the serial):
+
+  ```sh
+  grep -oE 'androidboot\.(slot_suffix|dtbo_idx|verifiedbootstate|mode)=[^ ]*|msm_drm\.dsi_display0=[^ ]*|root=[^ ]*|console=[^ ]*|panic=[^ ]*|skip_initramfs' "captures/$D/m1/r2-cmdline.txt"
+  ```
+
+- R3: whether the live DT matches, as a list of node **names** that
+  exist only in the live tree (never `r3-live.dts` or the raw diff, and
+  never property values such as `serial-number`), and the cmdline fields
+  `androidboot.dtbo_idx`, `root=`, `skip_initramfs`.
 - R4: every `ro` value, the `ufs-ro` dmesg lines, the `ls /dev/sda`
   result.
 - R6: per partition, `match` or `mismatch`. Never the images or the
