@@ -103,9 +103,9 @@ ls -la "captures/$D"
 ```
 
 - **Expect:** `getprop-all.txt`, `getprop-interesting.txt`, `by-name.txt`,
-  `bootdevice.txt`, `cpuinfo.txt`, `meminfo.txt` (plus `cmdline.txt` and
-  `modules.txt`, which may be empty). The script itself says it writes
-  nothing to the phone.
+  `bootdevice.txt`, `block-devs.txt`, `cpuinfo.txt`, `meminfo.txt` (plus
+  `cmdline.txt` and `modules.txt`, which may be empty). The script itself
+  says it writes nothing to the phone.
 - [I] `by-name.txt` and `cmdline.txt` may say `Permission denied` on a
   locked, unrooted phone (SELinux). **This is not a stop:** phase D repeats
   both with root.
@@ -348,7 +348,8 @@ The boot image must come from the OTA that matches the running build
 vbmeta chain, dtbo ids) is restore-assets step R4.
 
 ```sh
-ls -l ~/android/reference/instantnoodlep/images/boot.img
+R=~/android/reference/instantnoodlep   # same R as the fetch script and restore-assets
+ls -l "$R/images/boot.img"
 ```
 
 - **Expect:** the file exists (extracted in R4).
@@ -359,8 +360,8 @@ ls -l ~/android/reference/instantnoodlep/images/boot.img
 ### D2. Patch with Magisk (on the phone; patching is a file operation)
 
 ```sh
-adb install Magisk-v<version>.apk        # official release from github.com/topjohnwu/Magisk
-adb push ~/android/reference/instantnoodlep/images/boot.img /sdcard/Download/
+adb install "$R/tools/Magisk-v<version>.apk"   # official release from github.com/topjohnwu/Magisk
+adb push "$R/images/boot.img" /sdcard/Download/
 ```
 
 In the Magisk app: Install → **Select and Patch a File** → pick
@@ -472,7 +473,12 @@ runbook does not use it.
     `UFS_RW_LUNS`, see NOTES.md).
   - `luns.txt` lists `sda`-`sdf` [I] with sizes and a logical block size
     of 4096 [I]. **`/sys/block/sdX/size` is always in 512-byte units**,
-    whatever the logical block size. At 4096 the last LBA is
+    whatever the logical block size [V: Linux source (torvalds master,
+    fetched 2026-11-15) — `block/genhd.c` registers the `size` attribute
+    with `part_size_show`, which prints `bdev_nr_sectors`; those are
+    `SECTOR_SHIFT 9` (512-byte) units, per `include/linux/blk_types.h:31`
+    and `bdev_nr_bytes` = `bdev_nr_sectors << SECTOR_SHIFT`
+    (`include/linux/blkdev.h:854-856`)]. At 4096 the last LBA is
     `size/8 - 1`. Use that in the GPT-exception ticket, not `size - 1`
     (which is 8x too high). The tail loop assumes 4096; if `lbs` is 512,
     tell the coordinator before relying on the tail dumps.
@@ -498,8 +504,13 @@ runbook does not use it.
     hashes, and keep a second copy on the owner's private storage.
 - **Stop:** anything prompts for a write, or `su` is denied (redo D3).
 - **Stop:** a radio image is 0 bytes or the two sizes differ. Check the
-  exact name in `by-name-root.txt` (for example a slot suffix) and tell the
-  coordinator; do not guess names.
+  exact name in `by-name-root.txt` (for example a slot suffix) and tell
+  the coordinator; do not guess names.
+- **Stop:** on the LUN that holds `boot_b` (from `by-name-root.txt`),
+  any `gpt-head-sd?.bin` or `gpt-tail-sd?.bin` that is not 24576 bytes.
+  A failed `dd` (missing LUN, denied `su`, bad arithmetic) is silent: the
+  device-side `2>/dev/null` leaves a 0-byte file. Re-run that one line
+  and tell the coordinator.
 - **Rollback:** n/a (read-only).
 
 ### D5. Answers from the captures (laptop, offline)
@@ -550,7 +561,9 @@ done
   defined in that header [I]. Compare with the B2 `getvar` slot flags.
   If active/successful/unbootable agree, stage-0 question 2 is answered
   (slot flags live in GPT attributes) without writing anything. Other LUNs
-  print nothing or `no GPT header`; both are fine.
+  print nothing or `no GPT header`; both are fine. On the LUN holding
+  `boot_b`, `no GPT header` or empty output is an error, not fine: the
+  dump itself failed (D4's 24576-byte Stop).
 - **Stop:** none. The parser only reads laptop files.
 - **Rollback:** n/a.
 
@@ -579,7 +592,11 @@ grep -RniE 'serial|imei|meid|iccid|imsi|msisdn|macaddr|mac_addr|bdaddr|([0-9a-f]
 ```
 
 That `grep` shows **where** identifiers sit. Use it to check that nothing
-you paste contains a match. Paste the filtered outputs from A3, B2, B3, C3,
+you paste contains a match. Device-tree node names and aliases such as
+`serial@a90000` or `serial0 = &uart6` match the `serial` pattern but are
+not identifiers; values such as `androidboot.serialno=` or a
+`serial-number` property are. Paste D5 only after checking that every
+match in it is a node name. Paste the filtered outputs from A3, B2, B3, C3,
 D5, `luns.txt`, `pci-root.txt`, `ufs-luns.txt` (paths and numbers only),
 `bootloader-ab.txt` and the A5 Widevine level. Do **not** paste
 `live.dts`, `dmesg`, `getvar-all*.txt`, `getprop-all.txt`, any `.bin` file

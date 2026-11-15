@@ -79,8 +79,12 @@ unzip -l <ota>.zip | grep -E 'payload\.bin|payload_properties\.txt'
   it]. `ota-type=AB`; `pre-device=OnePlus8Pro` [I]; `post-build=`
   **byte-identical** to R1's `ro.build.fingerprint`; **no** `pre-build=`
   line (a `pre-build` line means incremental, which is useless for
-  restore); `payload.bin` and `payload_properties.txt` are listed. Paste
-  the `grep` lines.
+  restore [V: AOSP `platform/build` `tools/releasetools/ota_utils.py`,
+  `BuildLegacyOtaMetadata` writes `pre-build` only when the
+  precondition's build is set, under the comment "incremental updates"
+  (`ota_utils.py:349-354`, fetched 2026-11-15); I: whether OnePlus's
+  packaging follows AOSP here]); `payload.bin` and
+  `payload_properties.txt` are listed. Paste the `grep` lines.
 - **Fallback [I, scouting §1.5]:** on Oplus builds the running fingerprint
   may be composed from region partitions. If `post-build` differs from
   R1's fingerprint **only** in a region or product segment, compare
@@ -104,7 +108,12 @@ sha256sum <ota>.zip | tee -a SHA256SUMS
 unzip -p <ota>.zip payload_properties.txt | grep -E 'FILE_HASH|FILE_SIZE'
 unzip -o <ota>.zip payload.bin payload_properties.txt -d .
 stat -c '%s %n' payload.bin && sha256sum payload.bin | tee -a SHA256SUMS
-python3 -c 'import base64,hashlib,sys;print(base64.b64encode(hashlib.sha256(open(sys.argv[1],"rb").read()).digest()).decode())' payload.bin
+python3 -c 'import base64, hashlib, sys
+h = hashlib.sha256()
+with open(sys.argv[1], "rb") as f:
+    for chunk in iter(lambda: f.read(1048576), b""):
+        h.update(chunk)
+print(base64.b64encode(h.digest()).decode())' payload.bin
 ```
 
 - **Expect:** the MD5 matches the value Oxygen Updater showed. OnePlus
@@ -199,9 +208,14 @@ sha256sum <package>.* | tee SHA256SUMS
   file.
 - **Stop:** any name contains `IN21xx` (`IN21AA`/`IN21BA`/`IN21DA`). That
   is the OnePlus 8 (non-Pro), the wrong phone [V scouting §3.1].
-- **Stop:** the package names another model (IN2020/IN2021/IN2025, the
-  8 or 8T) or a non-EU region (`IN11AA` global, `IN11DA` India). Never
-  keep the wrong one around under a misleading name.
+- **Stop:** the package names another region of this same phone:
+  `IN2020` (China), `IN2021` (India) or `IN2025` (North America) in the
+  model number, or `IN11AA` (global) / `IN11DA` (India) in the region
+  code. `IN2020`, `IN2021`, `IN2023` and `IN2025` are all 8 Pro models
+  [V: LineageOS `lineage_wiki/_data/devices/instantnoodlep.yml`,
+  `models: [IN2020, IN2021, IN2023, IN2025]`], so a wrong-region package
+  is a cross-flash hazard on the same hardware. Never keep the wrong one
+  around under a misleading name.
 - **Stop (decision):** no Windows machine with a native USB port is
   available. EDL through a VM often fails [I: no successful report found,
   scouting §3.1]. Path 2 is then unproven; record that and let the owner

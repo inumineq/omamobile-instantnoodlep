@@ -40,18 +40,18 @@ for a in r["assets"]:
 
 run mkdir -p "$R/tools" "$SRC_DIR/system/tools" "$SRC_DIR/external" "$SRC_DIR/system" "$BIN"
 
-# 1. Distribution packages (adb, fastboot, dtc, 7z).
+# 1. Distribution packages (adb, fastboot, dtc, 7z, unzip).
 say "Distribution packages"
 pkgcmd=""
 if need pacman; then
-  pkgcmd="sudo pacman -S --needed android-tools dtc p7zip"
+  pkgcmd="sudo pacman -S --needed android-tools dtc p7zip unzip"
 elif need apt-get; then
-  pkgcmd="sudo apt-get install -y android-sdk-platform-tools device-tree-compiler p7zip-full"
+  pkgcmd="sudo apt-get install -y android-sdk-platform-tools device-tree-compiler p7zip-full unzip"
 else
-  echo "    unknown package manager: install adb, fastboot, dtc and 7z by hand"
+  echo "    unknown package manager: install adb, fastboot, dtc, 7z and unzip by hand"
 fi
 if [ -n "$pkgcmd" ]; then
-  if need adb && need fastboot && need dtc && need 7z; then
+  if need adb && need fastboot && need dtc && need 7z && need unzip; then
     echo "    already installed"
   elif [ "$DRY" = 1 ]; then
     printf '    (dry-run) %s\n' "$pkgcmd"
@@ -119,7 +119,7 @@ fi
 
 # 5. Check.
 say "Check"
-for t in adb fastboot dtc 7z payload-dumper-go; do
+for t in adb fastboot dtc 7z unzip payload-dumper-go; do
   printf '    %-18s' "$t"; command -v "$t" || echo "MISSING"
 done
 for f in system/tools/mkbootimg/unpack_bootimg.py external/avb/avbtool.py system/libufdt/utils/src/mkdtboimg.py; do
