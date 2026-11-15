@@ -4,6 +4,33 @@
 Newest first. Findings that matter beyond one subsystem go here; subsystem
 detail lives in the *-PLAN.md files.
 
+## 2026-11-15 (late): M1 split, RAM-only plan
+
+- The owner chose to split M1 on the wayfinder map. **M1a** is a RAM-only
+  first light (`fastboot boot`, nothing written, slot A stock and active);
+  `BRINGUP-M1-PLAN.md` now plans it, with kernel K1 (SM8250 community
+  kernel) before K2 (`omamobile` + ported DTS). **M1b** is the persistent
+  slot-B install (`boot_b`/`dtbo_b`, `--set-active`), gated on the tickets
+  "Slot-B bootable marking on Qualcomm: the named GPT-attribute exception"
+  and "vbmeta/AVB handling on an unlocked Qualcomm ABL". **M2** stays
+  "Arch root on userdata".
+- [I] There is no public evidence yet that this phone RAM-boots a mainline
+  image. Lineage and the community port document flashing only
+  (`lineage_wiki` `install_method: fastboot_nexus`; Nura README "Flash"),
+  and a TWRP-era guide flashes recovery rather than booting it.
+  wiki.nura.eco and XDA could not be checked (bot protection / 403).
+  Stage-0 Q11 decides at STAGE-0-RUNBOOK D3 whether this ABL RAM-boots at
+  all (a Magisk-patched stock image); the first mainline image is M1a
+  step R1.
+- [I] Main risk: on a RAM boot the stock `dtbo_a` overlay is still read
+  from flash and applied to our DTB. The Qualcomm reference ABL then
+  either refuses the image or applies the overlay; a partial graft would
+  leave the kernel on a contaminated DT. The plan has an offline overlay
+  check (P3) and a live-DT diff (R3) for it.
+- Disputed: the fastboot button combo. `device.conf` says Volume Down +
+  Power; Lineage's device data and the Nura README say Volume Up + Volume
+  Down + Power. Stage 0 settles it; until then, `adb reboot bootloader`.
+
 ## 2026-11-15 (evening): research landed, upstream precedents
 
 - Research notes from the four research tickets are in `docs/research/`,
