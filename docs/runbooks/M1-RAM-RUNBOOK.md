@@ -199,7 +199,11 @@ fastboot -s <serial> boot out/boot.img
   to flash.
 - **Rollback:** on a hang, hold Power + Volume Up for 10-30 s; stock
   boots from slot A. If it lands in fastboot: `fastboot -s <serial>
-  reboot`. Left alone, the no-host crash plus `panic=10` does the same by
+  reboot`. **After a refusal, never send a second `fastboot boot` in the
+  same fastboot session:** run `fastboot -s <serial> reboot bootloader`
+  first. [V 2026-11-16] A second RAM boot after a refused one failed AVB
+  and ABL marked slot A unbootable and switched to slot B
+  (`HandleActiveSlotUnbootable`, NOTES 2026-11-16 afternoon). Left alone, the no-host crash plus `panic=10` does the same by
   itself in about 75 s (plan 5.5).
 
 ### R2. Read-only checks over SSH, boot 1 (phone)

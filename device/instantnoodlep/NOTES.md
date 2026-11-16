@@ -4,6 +4,57 @@
 Newest first. Findings that matter beyond one subsystem go here; subsystem
 detail lives in the *-PLAN.md files.
 
+## 2026-11-16 (afternoon): stage-0 D4/D5, M1a R1, an ABL slot swap
+
+- [V] D4 ran read-only with temp root (`/debug_ramdisk/su`; the `su` on
+  `PATH` is Oplus's own `/product/bin/su` and refuses). Radio backup of
+  `persist`, `modemst1`, `modemst2`, `fsg`, `fsc` and `param` (no `ocdt`
+  on this unit); every file size equals `blockdev --getsize64`. The images
+  stay in the private captures folder. All 19 slotted bootloader
+  partitions read `same` across `_a`/`_b`.
+- [V] D5 from the captures: stock cmdline has `androidboot.dtbo_idx=16`
+  and `androidboot.dtb_idx=3`. Boot DTB 3 is "kona v2.1 SoC 19811":
+  `qcom,msm-id = <0x164 0x20001>`, `qcom,board-id = <0 0>`,
+  `oplus,dtsi_no = <0x4d63>`, **no `qcom,pmic-id`**; no stock boot DTB
+  carries one. So the exact-match variant from P4 needs neither foundry
+  bits nor a PMIC list: stock ABL already picks a DTB with exactly those
+  three properties. The live DT lists PM8150 x2, PM8150B x2, PM8150L x2,
+  PM8009 x2 and PMX55 (`pmxprairie`) on SPMI. `boot_b` and `dtbo_b` live
+  on LUN 4 (`sde`), `userdata` on LUN 0 (`sda`).
+- [V] P5 passed (`current-slot:a`, unlocked, flags as C3).
+- [V] **R1:** `fastboot boot boot1.img` answered `Booting OKAY`, yet the
+  phone stayed in fastboot and kept answering `getvar`; no USB NCM device
+  came up. The slot flags afterwards equalled P5. In `Q/`, `CmdBoot`
+  replies OKAY after `LoadImageAndAuth` and before `BootLinux`
+  [Q/FastbootCmds.c:2869-2894], so AVB passed and `BootLinux` refused
+  (DTB selection or overlay) and fell back to fastboot. This is P4
+  outcome (a), a clean refusal; the on-screen reason was not captured.
+- [V] **Then a second `fastboot boot` (the Magisk image, same fastboot
+  session) made ABL swap slots.** The transfer ended in `Status read
+  failed (No such device)`, stock came up from `_b` with
+  `ro.boot.bootreason=bootloader`, and fastboot then showed
+  `current-slot:b`, `slot-unbootable:a:yes`, `slot-retry-count:b:7`.
+  That is `HandleActiveSlotUnbootable`: mark the active slot unbootable,
+  `SetActiveSlot` the other, cold reset [Q/PartitionTableUpdate.c:1471-1528].
+  `Q/` calls it when `LoadImageAndAuth` fails on an A/B device, and
+  `CmdBoot` sets `MultiSlotBoot`, so a RAM boot reaches it as well
+  [Q/QcomModulePkg/Library/avb/VerifiedBoot.c:1508-1515 at `6922a8a066a6`].
+  [I] The likely trigger is `KeyMasterSetRotAndBootState`
+  [VerifiedBoot.c:1492], which keymaster accepts once per power cycle;
+  R1 had already called it. Nothing on `boot`/`dtbo`/`vbmeta` was written;
+  the GPT attribute write was ABL's own.
+- Consequences:
+  - Plan 5.4 ("ABL writes nothing on a RAM boot") is wrong in one case:
+    a failed `fastboot boot` can mark the active slot unbootable and swap
+    slots. **After any refused RAM boot, cold-reboot to the bootloader
+    (`fastboot reboot bootloader`) before the next `fastboot boot`.** The
+    M1 runbook now says so.
+  - While stock runs from `_b`, house rule 3 forbids writing `boot_b`.
+    Back to `_a` needs `fastboot set_active a` (owner-gated write).
+    `SetActiveSlot` clears the unbootable bit and switches the UFS boot
+    LUN [Q/PartitionTableUpdate.c:1379-1466]; both LUNs carry identical
+    bootloaders (D4), so this is the same move as the stage-0 slot move.
+
 ## 2026-11-16 (night, omabook): M1a P2 offline probe builds (K1), K2 D1 baseline, K2 push gate
 
 Part 1 — M1a runbook P2, offline (no phone was touched):
