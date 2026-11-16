@@ -100,10 +100,16 @@ the owner wants a noreply-identified fork is an owner decision, not mine.
   matching every PMIC slot; socinfo exposes only PMIC 0, so the rest
   comes from D4 (`dmesg` under temporary root) or a guess that costs one
   safe boot.
-- Decision (owner follows the recommendation): one night idle on the
-  charger, then B4; if still stalled, R5 + backups, then a stock factory
-  reset while locked (AOSP recovery finishes pending merges before
-  wiping), then B4. Unlock stays blocked until B4 shows `0`.
+- [V] 11:10: `ps -A` shows no `snapuserd`, and `update_engine` at 0 s CPU
+  time since boot, unchanged over 60 s. `update_engine_client --merge`
+  (the stock `cleanupSuccessfulUpdate` call) fails from `adb shell` with
+  `EX_TRANSACTION_FAILED`. `/proc/diskstats` and `ls -l
+  /dev/block/mapper` came back empty (denied). [I] The merge was never
+  started rather than running slowly, so waiting a night is dropped.
+- Decision (owner follows the recommendation): R5 (MSM package) and
+  backups, then a stock factory reset from Settings while locked (AOSP
+  recovery finishes pending merges before wiping, or refuses), then the
+  mapper `-cow` count and B4. Unlock stays blocked until B4 shows `0`.
 
 ## 2026-11-16: stage 0 phases A-B, stock moved to slot A
 

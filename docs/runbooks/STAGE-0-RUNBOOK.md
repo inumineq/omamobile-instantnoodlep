@@ -315,8 +315,12 @@ fastboot reboot
   fifteen `_a-cow` mapped as live dm devices under `/dev/block/mapper/`,
   `update_engine` silent and not bindable from `adb shell`), the decided
   order is:
-  1. One night booted, on the charger, screen off, Wi-Fi on; then B4 again.
-  2. Still above `0`: restore-assets R5 (MSM package) and the G1 backups
+  1. Check that it is not running: `adb shell 'ps -A -o PID,NAME,TIME |
+     grep -iE "snapuserd|update_engine"'` twice, 60 s apart. No
+     `snapuserd` and no CPU time on `update_engine` means not started;
+     waiting does not help (2026-11-16). A live count without fastboot:
+     `adb shell 'ls /dev/block/mapper/ | grep -c -- "-cow$"'`.
+  2. Restore-assets R5 (MSM package) and the G1 backups
      first, then a **factory reset from Settings while still locked**. It
      runs recovery's wipe path, which in AOSP finishes a pending snapshot
      merge before wiping and refuses to wipe if it cannot [V: AOSP
@@ -327,7 +331,9 @@ fastboot reboot
 - Read-only probes that did **not** work without root, so do not repeat
   them: `logcat` (update_engine logs nothing here,
   `sys.oplus.update_engine.log=0`), `/sys/block/dm-*/dm/name` (hidden by
-  SELinux) and `update_engine_client --follow` ("Failed to bind()"). **Never** run `fastboot snapshot-update cancel`
+  SELinux), `/proc/diskstats`, `update_engine_client --follow` ("Failed
+  to bind()") and `update_engine_client --merge`
+  (`EX_TRANSACTION_FAILED`). **Never** run `fastboot snapshot-update cancel`
   or `fastboot snapshot-update merge`, and pick nothing from the fastbootd
   menu except "Reboot system now".
 - **Why it gates C2:** AOSP fastbootd refuses to erase or flash
