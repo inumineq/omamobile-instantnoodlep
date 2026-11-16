@@ -310,7 +310,24 @@ fastboot reboot
 - **Stop:** `merging` or `snapshotted`, or a count above `0`: boot stock
   (`fastboot reboot`), leave it booted 30 min more and repeat. Still not
   `none` and `0` after a few hours and at least two full boots: report it
-  and do nothing else; the coordinator decides. **Never** run `fastboot snapshot-update cancel`
+  and do nothing else; the coordinator decides.
+- **If the count stays above `0`** (seen 2026-11-16: status `none`, all
+  fifteen `_a-cow` mapped as live dm devices under `/dev/block/mapper/`,
+  `update_engine` silent and not bindable from `adb shell`), the decided
+  order is:
+  1. One night booted, on the charger, screen off, Wi-Fi on; then B4 again.
+  2. Still above `0`: restore-assets R5 (MSM package) and the G1 backups
+     first, then a **factory reset from Settings while still locked**. It
+     runs recovery's wipe path, which in AOSP finishes a pending snapshot
+     merge before wiping and refuses to wipe if it cannot [V: AOSP
+     `bootable/recovery/install/wipe_data.cpp` `FinishPendingSnapshotMerges`;
+     I for Oplus recovery]. The unlock wipes everything anyway, so nothing
+     extra is lost, and Oplus's recovery is tested while locked.
+  3. B4 again. `0`: go on to G1. Still above `0`: stop; decision note.
+- Read-only probes that did **not** work without root, so do not repeat
+  them: `logcat` (update_engine logs nothing here,
+  `sys.oplus.update_engine.log=0`), `/sys/block/dm-*/dm/name` (hidden by
+  SELinux) and `update_engine_client --follow` ("Failed to bind()"). **Never** run `fastboot snapshot-update cancel`
   or `fastboot snapshot-update merge`, and pick nothing from the fastbootd
   menu except "Reboot system now".
 - **Why it gates C2:** AOSP fastbootd refuses to erase or flash
