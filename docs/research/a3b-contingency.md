@@ -15,6 +15,12 @@
   [V: docs/RESTORE-RUNBOOK.md:15]; the descriptor pins the port's writes to
   slot B images plus `userdata` [V: device/instantnoodlep/device.conf:69].
 
+> **Resolved 2026-11-16, not needed.** Route 6.1 worked: the same-version
+> local install of the `.591` full zip was accepted and stock now runs
+> from `_a` (locked, `green`) [V: stage-0 A3 rerun, see
+> `device/instantnoodlep/NOTES.md` 2026-11-16]. The routes below stay as
+> a record in case stock ever lands on `_b` again.
+
 Legend: **[V]** = checked, with a source URL or file:line. **[I]** =
 inference or search snippet; check it on the device or in the file.
 
@@ -179,8 +185,8 @@ inference or search snippet; check it on the device or in the file.
 1. A3b case (c): same-version local install of the `.591` full zip via the
    system updater, then via the local-update APK entry point if the first
    is refused (5c). Zero data loss, no lock change, and the stock updater
-   — not the port — writes `_a`. Decisive [I]: does the updater accept a
-   same-version full zip?
+   — not the port — writes `_a`. Decisive [I], now answered [V
+   2026-11-16]: the updater accepts a same-version full zip.
 2. If refused: recovery local-file install of the same zip (5b), if that
    menu exists on this unit. Same profile as 1.
 3. If refused everywhere: MSM route (§3) with an even install count.
