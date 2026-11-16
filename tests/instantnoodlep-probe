@@ -9,6 +9,7 @@ whose prerequisites are absent print SKIP; dtc, fdtget and fdtput are needed
 for the generated-DTB refusals and the two end-to-end happy paths.
 """
 
+import gzip
 import importlib.machinery
 import importlib.util
 import json
@@ -183,9 +184,20 @@ def test_pure(work):
     raises(probe.BuildError, lambda: probe.patch_init("no anchor\n"),
            "hostname anchor")
     raises(probe.BuildError, lambda: probe.check_image_sizes(0, 1, 1), "non-empty")
-    room = probe.RAMDISK_OFF - probe.KERNEL_OFF
     raises(probe.BuildError,
-           lambda: probe.check_image_sizes(room, 1, 1), "overlap guard")
+           lambda: probe.check_image_sizes(1, 1, probe.DTB_LOAD_GAP + 1), "DTB")
+    raises(probe.BuildError,
+           lambda: probe.check_image_sizes(probe.KERNEL_REGION, 1, 1),
+           "reserved kernel region")
+    payload = b"pretend decompressed Image payload\n" * 1000
+    gz = work / "Image.gz"
+    gz.write_bytes(gzip.compress(payload))
+    require(probe.kernel_image_size(gz) == len(payload),
+            "gzip kernel image size is not the decompressed length")
+    plain = work / "Image"
+    plain.write_bytes(payload)
+    require(probe.kernel_image_size(plain) == len(payload),
+            "plain kernel image size is not the file size")
     raises(probe.BuildError,
            lambda: probe.check_image_sizes(1, probe.BOOT_IMAGE_MAX, 1),
            "conservative")
@@ -215,7 +227,7 @@ def test_pure(work):
                lambda: probe.require_identity(Path("bad.dtb")), "qcom,board-id")
     finally:
         probe.fdt_get, probe.fdt_cells = original_get, original_cells
-    print("ok - identity, watchdog, size guards, overlap guard and output naming")
+    print("ok - identity, watchdog, size guards and output naming")
 
 
 def test_initramfs(work, private, public):
@@ -385,10 +397,10 @@ def test_full(work, private, public):
 
     oversized = work / "oversized.kernel"
     with oversized.open("wb") as stream:
-        stream.truncate(probe.RAMDISK_OFF - probe.KERNEL_OFF)
+        stream.truncate(probe.KERNEL_REGION)
     result = call(*builder_args(
         oversized, dtb, public, rootfs, 1, "output/oversized.img"))
-    require(result.returncode != 0 and "overlap guard" in result.stderr,
+    require(result.returncode != 0 and "reserved kernel region" in result.stderr,
             "oversized kernel was not refused")
     require(not (work / "output/oversized.img").exists(),
             "size refusal left an image")
