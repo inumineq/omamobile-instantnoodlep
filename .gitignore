@@ -14,3 +14,4 @@ magisk_patched*
 
 # Build output
 out/
+__pycache__/
