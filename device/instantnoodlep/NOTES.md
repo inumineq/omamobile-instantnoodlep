@@ -209,6 +209,53 @@ there: nothing was rewritten, no remote was added, and nothing was pushed to
 any remote (derekross included). No fork head exists to record. [I] whether
 the owner wants a noreply-identified fork is an owner decision, not mine.
 
+## 2026-11-16 (late morning): B4 fails — snapshot still live, merge stalled
+
+- [V] B4: `snapshot-update-status: none`, `-cow` count **15**, about ten
+  hours and at least three boots after the `.591` install.
+- [V] `/dev/block/mapper/` in the running Android lists every `<name>_a`
+  next to a mapped `<name>_a-cow`, so first-stage init still maps the
+  snapshot. [I] The merge has stalled; the boot HAL's `none` does not
+  reflect it on this Oplus build.
+- [V] Props: `ro.virtual_ab.enabled=true`, `init.svc.update_engine=running`,
+  `sys.oplus.update_engine.log=0`. Logcat holds no update_engine,
+  snapuserd or libsnapshot lines; `update_engine_client --follow` from
+  `adb shell` fails to bind. Softwareopdatering shows nothing pending.
+- [V] A6 socinfo: SM8250, `soc_id` 356, revision 2.1, `hw_platform` MTP,
+  `platform_version` 0x10000 (major 1), `platform_subtype_id` 0,
+  `foundry_id` 1, `pmic_model` 0x1001E (PMIC 0 = model 0x1E, PM8150
+  [I]), `pmic_die_revision` 0x30000. For an exact DTB match (M1a option
+  2) the DTB needs `qcom,msm-id = <0x10164 0x20001>` (foundry 1 in bits
+  16-23, `Q/LocateDeviceTree.c` foundry check) and a `qcom,pmic-id`
+  matching every PMIC slot; socinfo exposes only PMIC 0, so the rest
+  comes from D4 (`dmesg` under temporary root) or a guess that costs one
+  safe boot.
+- [V] 11:10: `ps -A` shows no `snapuserd`, and `update_engine` at 0 s CPU
+  time since boot, unchanged over 60 s. `update_engine_client --merge`
+  (the stock `cleanupSuccessfulUpdate` call) fails from `adb shell` with
+  `EX_TRANSACTION_FAILED`. `/proc/diskstats` and `ls -l
+  /dev/block/mapper` came back empty (denied). [I] The merge was never
+  started rather than running slowly, so waiting a night is dropped.
+- Decision (owner follows the recommendation): R5 (MSM package) and
+  backups, then a stock factory reset from Settings while locked (AOSP
+  recovery finishes pending merges before wiping, or refuses), then the
+  mapper `-cow` count and B4. Unlock stays blocked until B4 shows `0`.
+- [V] Factory reset from Settings, still locked (owner, 2026-11-16 ~11:30):
+  after setup the phone boots `_a`, `.591`, and the mapper `-cow` count
+  is still **15**. Oplus recovery wiped data without finishing the merge,
+  and boot is unaffected.
+- [V] `Q/DeviceInfo.c`: on unlock, ABL writes `recovery --wipe_data` to
+  `misc`, so the unlock wipe runs the same recovery path the reset just
+  ran. [I] OnePlus's ABL does the same.
+- **Decision (owner follows the recommendation):** B4 is satisfied by
+  evidence instead of a `0` count: a data wipe with the stalled snapshot
+  live is proven harmless on this phone. Restore-assets R5 (MSM) moves
+  from G1 to a gate before M1b, the first step that writes a partition;
+  phases C/D and M1a write nothing MSM would be needed for.
+- Open for M1b [I]: with the snapshot still live, `--set-active b` and
+  the GPT slot marks need a fresh look (AOSP fastbootd warns that a slot
+  change with a snapshot applied may cancel the update).
+
 ## 2026-11-16 (morning): M1a P3 offline dtbo check — the stock overlay cannot apply
 
 Laptop only, no phone. Inputs: the stock `dtbo.img` from the verified
