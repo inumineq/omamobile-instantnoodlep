@@ -332,7 +332,7 @@ All must be true:
 2. Phases A and B are pasted back, and the coordinator has confirmed
    `current-slot: a`, `IN2023` and which A3b case applied.
 3. The Widevine security level is recorded (A5).
-4. B4 shows `snapshot-update-status: none`, checked after the last
+4. B4 shows `snapshot-update-status: none` **and** a `-cow` count of `0`, checked after the last
    install and on the same day as C2.
 5. Everything on the phone is backed up off the phone (photos, 2FA apps,
    Signal/WhatsApp backups, eSIM if any). **The unlock wipes everything.**
