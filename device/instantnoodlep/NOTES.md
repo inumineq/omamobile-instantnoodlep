@@ -124,6 +124,10 @@ in `~/android/build/p3/`, outside git.
   first finding and boot `boot1.img` unchanged, since a refusal writes
   nothing; (2) prepare the exact-match variant after A6; (3) no stub
   variant. Option (1) costs one boot and tests the prediction.
+- **P4 decision (owner, 2026-11-16): option (1).** The owner follows the
+  recommendation: R1 boots `boot1.img` unchanged and records whether ABL
+  refuses (outcome a) or boots. If it refuses, the exact-match variant
+  (option 2) is next, built from the A6 socinfo capture. No stub variant.
 
 ## 2026-11-16: stage 0 phases A-B, stock moved to slot A
 
