@@ -76,6 +76,9 @@ CMDLINE = ("console=tty0 panic=10 omamobile.initramfs clk_ignore_unused "
 # the hardware watchdog the busybox feeder armed (30 s) once it is killed.
 ROOT_CMDLINE = ("console=tty0 panic=10 clk_ignore_unused pd_ignore_unused "
                 "printk.devkmsg=on systemd.watchdog_sec=20")
+# --debug-shell (BRINGUP-M1b-PLAN 4): systemd's debug shell on the USB
+# serial port, a root shell before sshd.
+DEBUG_SHELL = "systemd.debug_shell=ttyGS0"
 ROOT_ALLOWLIST = "userdata"
 ROOT_LABEL = "omamobile-root"
 BOOT_IMAGE_MAX = 64 * 1024 * 1024
@@ -94,6 +97,11 @@ DTB_LOAD_GAP = 2 * 1024 * 1024 + PAGE
 KERNEL_REGION = 0x05600000 - 0x00080000
 USB_NODE = "/soc@0/usb@a6f8800/usb@a600000"
 UFS_NODE = "/soc@0/ufshc@1d84000"
+# PM8150 PON: reboot-mode magics so `reboot bootloader` lands in fastboot
+# instead of passing through stock (BRINGUP-M1b-PLAN 4). The values are
+# mainline pm8998.dtsi's; [I] on this ABL until M1b B1.
+PON_NODE = "/soc@0/spmi@c440000/pmic@0/pon@800"
+PON_MODES = {"mode-bootloader": 0x2, "mode-recovery": 0x1}
 COMPATIBLE = ["oneplus,instantnoodlep", "qcom,sm8250"]
 MSM_ID = [0x164, 0x10000, 0x164, 0x20001]
 BOARD_ID = [0x08, 0x00, 0x00, 0x00]
@@ -344,6 +352,9 @@ def verify_probe_dtb(dtb, boot, labels):
     want = "disabled" if boot == 1 else "okay"
     if fdt_get(dtb, UFS_NODE, "status") != want:
         raise BuildError(f"probe UFS host status is not {want}")
+    for name, value in PON_MODES.items():
+        if fdt_cells(dtb, PON_NODE, name) != [value]:
+            raise BuildError(f"PON {name} is not {value:#x}")
 
 
 def fdt_phandles(path):
@@ -446,6 +457,8 @@ def make_probe_dtb(source, output, boot, labels):
         run(["fdtput", "-t", "s", output, node, "status", "disabled"])
     run(["fdtput", "-t", "s", output, UFS_NODE, "status",
          "disabled" if boot == 1 else "okay"])
+    for name, value in PON_MODES.items():
+        run(["fdtput", "-t", "u", output, PON_NODE, name, str(value)])
     add_overlay_sink(output, labels)
     verify_probe_dtb(output, boot, labels)
 
@@ -562,7 +575,14 @@ def assert_boot_info(info, kernel_size, ramdisk_size, dtb_size, cmdline=CMDLINE)
                 f"read-back header disagrees for {key}: {info.get(key)!r}")
 
 
-def read_back_boot(boot, mkbootimg, kernel, ramdisk, dtb, work, root="none"):
+def boot_cmdline(root, debug_shell=False):
+    if root != "userdata":
+        return CMDLINE
+    return f"{ROOT_CMDLINE} {DEBUG_SHELL}" if debug_shell else ROOT_CMDLINE
+
+
+def read_back_boot(boot, mkbootimg, kernel, ramdisk, dtb, work, root="none",
+                   cmdline=CMDLINE):
     unpack = mkbootimg.with_name("unpack_bootimg.py")
     if not unpack.is_file():
         raise BuildError(f"missing sibling AOSP tool: {unpack}")
@@ -574,7 +594,7 @@ def read_back_boot(boot, mkbootimg, kernel, ramdisk, dtb, work, root="none"):
     info = parse_boot_info(text)
     assert_boot_info(info, kernel.stat().st_size,
                      ramdisk.stat().st_size, dtb.stat().st_size,
-                     ROOT_CMDLINE if root == "userdata" else CMDLINE)
+                     cmdline)
     for name, source in (("kernel", kernel), ("ramdisk", ramdisk), ("dtb", dtb)):
         extracted = out / name
         if not extracted.is_file() or sha256(extracted) != sha256(source):
@@ -605,6 +625,9 @@ def build(args):
         raise BuildError("--root must be none or userdata")
     if args.root == "userdata" and args.boot != 2:
         raise BuildError("--root userdata needs --boot 2 (UFS enabled)")
+    if args.debug_shell and args.root != "userdata":
+        raise BuildError("--debug-shell needs --root userdata")
+    cmdline = boot_cmdline(args.root, args.debug_shell)
     paths = artifact_paths(args.out.absolute())
     for path in paths.values():
         if path.exists() or path.is_symlink():
@@ -659,13 +682,12 @@ def build(args):
             args.kernel.stat().st_size, staged["ramdisk"].stat().st_size,
             staged["dtb"].stat().st_size, kernel_image_size(args.kernel))
         pack_boot(args.mkbootimg, args.kernel, staged["ramdisk"],
-                  staged["dtb"], staged["boot"],
-                  ROOT_CMDLINE if args.root == "userdata" else CMDLINE)
+                  staged["dtb"], staged["boot"], cmdline)
         if staged["boot"].stat().st_size != expected_size:
             raise BuildError("mkbootimg output has an unexpected size")
         info, unpacked = read_back_boot(
             staged["boot"], args.mkbootimg, args.kernel,
-            staged["ramdisk"], staged["dtb"], work, args.root)
+            staged["ramdisk"], staged["dtb"], work, args.root, cmdline)
         verify_probe_dtb(unpacked / "dtb", args.boot, labels)
 
         outputs = {}
@@ -679,6 +701,7 @@ def build(args):
             "device": "instantnoodlep",
             "boot": args.boot,
             "root": args.root,
+            "debug_shell": args.debug_shell,
             "header": info,
             "boot_image_limit": {
                 "bytes": BOOT_IMAGE_MAX,
@@ -729,6 +752,8 @@ def main(argv=None):
     parser.add_argument("--root", default="none",
                         help="none (RAM probe) or userdata: tethered M2, hand over "
                              "to Arch on userdata with an allowlist of userdata only")
+    parser.add_argument("--debug-shell", action="store_true",
+                        help="with --root userdata: add " + DEBUG_SHELL)
     parser.add_argument("--out", type=Path, required=True,
                         help="new boot.img path; sibling artifacts derive from its name")
     args = parser.parse_args(argv)

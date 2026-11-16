@@ -109,6 +109,13 @@ DTS = r'''/dts-v1/;
                 usb-role-switch;
             };
         };
+        spmi@c440000 {
+            pmic@0 {
+                pon@800 {
+                    compatible = "qcom,pm8998-pon";
+                };
+            };
+        };
         ufshc@1d84000 {
             compatible = "qcom,sm8250-ufshc";
             status = "okay";
@@ -393,6 +400,11 @@ def test_full(work, private, public):
         probe.verify_probe_dtb(paths["dtb"], boot, OVERLAY_LABELS)
         require(probe.fdt_cells(paths["dtb"], "/", "oplus,dtsi_no") == [0x4D63],
                 "oplus,dtsi_no missing")
+        require(probe.fdt_cells(paths["dtb"], probe.PON_NODE,
+                                "mode-bootloader") == [2] and
+                probe.fdt_cells(paths["dtb"], probe.PON_NODE,
+                                "mode-recovery") == [1],
+                "pon reboot modes missing")
         handles = [probe.fdt_cells(paths["dtb"], f"{probe.SINK}/{label}",
                                    "phandle")[0] for label in OVERLAY_LABELS]
         require(len(set(handles)) == len(handles) and
@@ -463,6 +475,22 @@ def test_full(work, private, public):
             "systemd.watchdog_sec=20" in cmdline,
             f"tethered cmdline wrong: {cmdline}")
     require(manifest["root"] == "userdata", "manifest lacks root mode")
+    require("systemd.debug_shell" not in cmdline and
+            manifest["debug_shell"] is False,
+            "debug shell is on without --debug-shell")
+    out = Path("output/tethered-debug.img")
+    result = call(*builder_args(kernel, dtb, public, rootfs, 2, out),
+                  "--root", "userdata", "--debug-shell")
+    require(result.returncode == 0, f"debug build failed: {result.stderr}")
+    manifest = json.loads(probe.artifact_paths(work / out)["manifest"].read_text())
+    require(manifest["header"]["command line args"].endswith(
+                "systemd.watchdog_sec=20 systemd.debug_shell=ttyGS0") and
+            manifest["debug_shell"] is True,
+            f"debug cmdline wrong: {manifest['header']['command line args']}")
+    result = call(*builder_args(kernel, dtb, public, rootfs, 2,
+                                "output/debug-no-root.img"), "--debug-shell")
+    require(result.returncode != 0 and "--debug-shell needs --root userdata"
+            in result.stderr, "debug shell without a root was not refused")
     raises(probe.BuildError,
            lambda: probe.assert_allowlist(built[2]["ramdisk"], "userdata"),
            "lacks /etc/omamobile-ufs-rw")
