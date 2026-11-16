@@ -28,11 +28,15 @@ detail lives in the *-PLAN.md files.
   (Oplus) partitions, all `_a` in the current-slot metadata.
   `userdata` is not logical and is 0x36F3453000 bytes (about 236 GB).
 - [V] **Virtual A/B.** Every logical partition had an `_a-cow` twin right
-  after the install, meaning an update snapshot was still present. [I]
-  The background merge had not finished. AOSP fastbootd refuses to erase
-  `userdata`/`metadata`/`misc` mid-merge; whether ABL's `oem unlock` does
-  is unknown, so the runbook now has B4 (`snapshot-update-status: none`)
-  as a hard gate before C2. Pending: the owner's B4 result.
+  after the install (`system_a-cow` 0x2B65C000 bytes against `system_a`
+  0x2B3A7000), yet both ABL and fastbootd reported
+  `snapshot-update-status:none`. [I] Either the merge had finished and
+  cleanup was still pending, or this boot HAL does not report the merge
+  state; the status variable alone cannot tell them apart. AOSP fastbootd
+  refuses to erase `userdata`/`metadata`/`misc` mid-merge; whether ABL's
+  `oem unlock` does is unknown. The runbook now has B4 (status `none`
+  **and** no `-cow` partitions) as a hard gate before C2. Pending: the
+  owner's B4 result.
 - Consequence for later milestones [I]: `super` is Virtual A/B, so a
   future stock OTA would use snapshots too. The port never writes `super`
   (AGENTS.md rule 3), so nothing changes in the safety model, but the
