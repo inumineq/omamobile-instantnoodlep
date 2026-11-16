@@ -5,8 +5,8 @@
 Usage: tools/build-instantnoodlep-probe --kernel Image.gz --dtb board.dtb \
          --ssh-key ~/.ssh/id_ed25519.pub --mkbootimg /path/to/mkbootimg.py \
          --omarchy-mobile /path/to/omarchy-mobile \
-         --initramfs-root /path/to/aarch64-alpine-root --boot 1 \
-         --out out/boot.img
+         --initramfs-root /path/to/aarch64-alpine-root \
+         --stock-overlay dtbo-entry16.dtbo --boot 1 --out out/boot.img
 
 --initramfs-root is a prepared, offline aarch64 Alpine root with BusyBox,
 Dropbear, iproute2, util-linux and kmod, plus qcom_wdt matching the kernel.
@@ -16,6 +16,23 @@ RAM-probe settings, and packs with the host cpio and gzip. This follows the
 structure of upstream's flame and dipper probe builders without Docker or
 network access. mkbootimg.py and its sibling unpack_bootimg.py come from AOSP
 system/tools/mkbootimg. dtc's fdtget/fdtput tools must be on PATH.
+
+--stock-overlay is the dtbo entry stock ABL applies on this unit (entry 16 of
+the owner's factory dtbo.img, extracted with mkdtboimg.py; never committed).
+ABL refuses a RAM boot whose DTB the overlay cannot apply to, and it picks
+the base DTB by oplus,dtsi_no. So the probe DTB gets oplus,dtsi_no and
+oplus,pcb_range as in stock, plus an "overlay sink": a __symbols__ table
+that points every label the overlay needs at a disabled dummy node under
+/__ovl_sink__ (no compatible, so nothing there is populated). No fragment
+touches a real node. Verified on the phone 2026-11-16 (NOTES).
+--ufdt-apply optionally names AOSP libufdt's ufdt_apply_overlay to check
+offline that the overlay applies.
+
+--root userdata (STORAGE-M2-PLAN 3a, tethered M2; needs --boot 2) drops
+omamobile.initramfs from the command line so the shared init hands over to
+Arch on userdata, packs /etc/omamobile-ufs-rw = userdata and
+/etc/omamobile-root-label = omamobile-root, and adds systemd.watchdog_sec=20.
+It is still a RAM boot; the tool never writes the phone.
 
 --boot 1 disables the UFS host. --boot 2 enables it. Both disable every
 remoteproc node and force USB peripheral mode without a role switch. The
@@ -54,6 +71,13 @@ DTB_OFF = 0x01F00000
 HEADER_VERSION = 2
 CMDLINE = ("console=tty0 panic=10 omamobile.initramfs clk_ignore_unused "
            "pd_ignore_unused printk.devkmsg=on")
+# --root userdata (STORAGE-M2-PLAN 3a, tethered M2): no omamobile.initramfs,
+# so the shared init hands over to Arch on userdata; systemd must take over
+# the hardware watchdog the busybox feeder armed (30 s) once it is killed.
+ROOT_CMDLINE = ("console=tty0 panic=10 clk_ignore_unused pd_ignore_unused "
+                "printk.devkmsg=on systemd.watchdog_sec=20")
+ROOT_ALLOWLIST = "userdata"
+ROOT_LABEL = "omamobile-root"
 BOOT_IMAGE_MAX = 64 * 1024 * 1024
 SIZE_LIMIT_EVIDENCE = "[I] conservative cap; IN2023 boot partition size is not measured"
 # Q's ABL places the DTB 2 MiB + one page below the ramdisk (DT_SIZE_2MB +
@@ -74,6 +98,11 @@ COMPATIBLE = ["oneplus,instantnoodlep", "qcom,sm8250"]
 MSM_ID = [0x164, 0x10000, 0x164, 0x20001]
 BOARD_ID = [0x08, 0x00, 0x00, 0x00]
 ALLOWLIST = "etc/omamobile-ufs-rw"
+# Stock base-DTB selectors for project 19811 (R4 note, stock boot DTB 3).
+OPLUS_DTSI_NO = [0x4D63]
+OPLUS_PCB_RANGE = [0x0, 0x38]
+SINK = "/__ovl_sink__"
+SYMBOLS = "/__symbols__"
 
 
 class BuildError(Exception):
@@ -183,7 +212,36 @@ def assert_no_allowlist(ramdisk):
         raise BuildError("write allowlist /etc/omamobile-ufs-rw is present in the written initramfs")
 
 
-def build_initramfs(rootfs, shared_init, key, output, work):
+def cpio_file(ramdisk, name):
+    import gzip
+    archive = gzip.decompress(ramdisk.read_bytes())
+    for pattern in (name, "./" + name):
+        data = run(["cpio", "-i", "--to-stdout", "--quiet", pattern],
+                   data=archive)
+        if data:
+            return data
+    raise BuildError(f"/{name} is missing or empty in the initramfs")
+
+
+def assert_allowlist(ramdisk, root):
+    """--root none: no allowlist at all. --root userdata: exactly userdata."""
+    if root == "none":
+        assert_no_allowlist(ramdisk)
+        return
+    names = cpio_names(ramdisk)
+    if ALLOWLIST not in names:
+        raise BuildError("--root userdata image lacks /etc/omamobile-ufs-rw")
+    if cpio_file(ramdisk, ALLOWLIST).decode().split() != [ROOT_ALLOWLIST]:
+        raise BuildError("allowlist must be exactly 'userdata'")
+    if cpio_file(ramdisk, "etc/omamobile-root-label").decode().strip() != ROOT_LABEL:
+        raise BuildError("root-label policy must be omamobile-root")
+    for extra in ("etc/omamobile-ufs-rw-luns", "etc/omamobile-root-mode",
+                  "etc/omamobile-nfsroot"):
+        if extra in names:
+            raise BuildError(f"--root userdata image must not contain /{extra}")
+
+
+def build_initramfs(rootfs, shared_init, key, output, work, root="none"):
     stage = work / "rootfs"
     shutil.copytree(rootfs, stage, symlinks=True)
     (stage / "proc").mkdir(exist_ok=True)
@@ -202,15 +260,20 @@ def build_initramfs(rootfs, shared_init, key, output, work):
     # survive from the prepared root. omamobile.initramfs also blocks handoff.
     for name in ("omamobile-ufs-rw", "omamobile-ufs-rw-luns",
                  "omamobile-nfsroot", "omamobile-simplefb-trig",
-                 "omamobile-bringup-probe"):
+                 "omamobile-bringup-probe", "omamobile-root-label",
+                 "omamobile-root-mode"):
         remove_file(etc / name)
+    if root == "userdata":
+        (etc / "omamobile-ufs-rw").write_text(ROOT_ALLOWLIST + "\n")
+        (etc / "omamobile-root-label").write_text(ROOT_LABEL + "\n")
     (etc / "omamobile-compatible").write_text(COMPATIBLE[0] + "\n")
     (etc / "omamobile-usb-product").write_text(
-        "OnePlus 8 Pro RAM-only probe\n")
+        "OnePlus 8 Pro RAM-only probe\n" if root == "none"
+        else "OnePlus 8 Pro tethered Omarchy Mobile\n")
     (stage / "init").write_text(patch_init(shared_init.read_text()))
     (stage / "init").chmod(0o755)
     pack_rootfs(stage, output)
-    assert_no_allowlist(output)
+    assert_allowlist(output, root)
 
 
 def fdt_get(dtb, node, prop, kind="s"):
@@ -267,8 +330,9 @@ def property_present(dtb, node, prop):
     return result.returncode == 0
 
 
-def verify_probe_dtb(dtb, boot):
+def verify_probe_dtb(dtb, boot, labels):
     require_identity(dtb)
+    verify_overlay_sink(dtb, labels)
     if fdt_get(dtb, USB_NODE, "dr_mode") != "peripheral":
         raise BuildError("probe USB dr_mode is not peripheral")
     if property_present(dtb, USB_NODE, "usb-role-switch"):
@@ -282,7 +346,97 @@ def verify_probe_dtb(dtb, boot):
         raise BuildError(f"probe UFS host status is not {want}")
 
 
-def make_probe_dtb(source, output, boot):
+def fdt_phandles(path):
+    """Every phandle value in a flattened DTB (structure block walk)."""
+    blob = Path(path).read_bytes()
+    magic, _, off_struct, off_strings = struct.unpack_from(">4I", blob, 0)
+    if magic != 0xD00DFEED:
+        raise BuildError(f"not a flattened device tree: {path}")
+    found, pos = set(), off_struct
+    while True:
+        (token,) = struct.unpack_from(">I", blob, pos)
+        pos += 4
+        if token == 1:  # FDT_BEGIN_NODE
+            pos = (blob.index(b"\0", pos) + 4) & ~3
+        elif token == 3:  # FDT_PROP
+            length, name_off = struct.unpack_from(">II", blob, pos)
+            pos += 8
+            end = blob.index(b"\0", off_strings + name_off)
+            name = blob[off_strings + name_off:end]
+            if name in (b"phandle", b"linux,phandle") and length == 4:
+                found.add(struct.unpack_from(">I", blob, pos)[0])
+            pos = (pos + length + 3) & ~3
+        elif token in (2, 4):  # FDT_END_NODE, FDT_NOP
+            continue
+        elif token == 9:  # FDT_END
+            return found
+        else:
+            raise BuildError(f"bad FDT token {token} in {path}")
+
+
+def overlay_labels(overlay):
+    text = run(["fdtget", "-p", overlay, "/__fixups__"]).decode(
+        "utf-8", "replace")
+    labels = sorted(set(text.split()))
+    if not labels:
+        raise BuildError("--stock-overlay has no __fixups__ labels")
+    for label in labels:
+        if not label.replace("_", "").replace("-", "").isalnum():
+            raise BuildError(f"unexpected overlay label: {label!r}")
+    return labels
+
+
+def add_overlay_sink(dtb, labels):
+    for node in (SINK, SYMBOLS):
+        if node.lstrip("/") in fdt_children(dtb, "/"):
+            raise BuildError(f"input DTB already has {node}")
+    run(["fdtput", "-t", "x", dtb, "/", "oplus,dtsi_no",
+         *[f"{v:x}" for v in OPLUS_DTSI_NO]])
+    run(["fdtput", "-t", "x", dtb, "/", "oplus,pcb_range",
+         *[f"{v:x}" for v in OPLUS_PCB_RANGE]])
+    run(["fdtput", "-c", dtb, SINK, SYMBOLS,
+         *[f"{SINK}/{label}" for label in labels]])
+    phandle = max(fdt_phandles(dtb), default=0) + 1
+    for label in labels:
+        node = f"{SINK}/{label}"
+        run(["fdtput", "-t", "s", dtb, node, "status", "disabled"])
+        run(["fdtput", "-t", "u", dtb, node, "phandle", str(phandle)])
+        run(["fdtput", "-t", "s", dtb, SYMBOLS, label, node])
+        phandle += 1
+
+
+def verify_overlay_sink(dtb, labels):
+    if fdt_cells(dtb, "/", "oplus,dtsi_no") != OPLUS_DTSI_NO:
+        raise BuildError("probe oplus,dtsi_no is not 0x4d63")
+    if fdt_cells(dtb, "/", "oplus,pcb_range") != OPLUS_PCB_RANGE:
+        raise BuildError("probe oplus,pcb_range is not <0 0x38>")
+    if property_present(dtb, SINK, "compatible"):
+        raise BuildError(f"{SINK} must not have a compatible")
+    for label in labels:
+        node = f"{SINK}/{label}"
+        if fdt_get(dtb, SYMBOLS, label) != node:
+            raise BuildError(f"__symbols__ {label} does not point into {SINK}")
+        if fdt_get(dtb, node, "status") != "disabled":
+            raise BuildError(f"sink node is not disabled: {node}")
+        fdt_cells(dtb, node, "phandle")
+    symbols = run(["fdtget", "-p", dtb, SYMBOLS]).decode().split()
+    if sorted(symbols) != labels:
+        raise BuildError("__symbols__ holds labels the overlay does not need")
+
+
+def check_overlay_applies(ufdt_apply, dtb, overlay, work):
+    merged = work / "overlay-check.dtb"
+    result = subprocess.run([str(ufdt_apply), str(dtb), str(overlay),
+                             str(merged)], stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT)
+    if result.returncode != 0 or not merged.is_file():
+        raise BuildError("the stock overlay does not apply to the probe DTB:\n"
+                         + result.stdout.decode("utf-8", "replace"))
+    if merged.stat().st_size > DTB_LOAD_GAP:
+        raise BuildError("post-overlay DTB exceeds ABL's 2 MiB DTB window")
+
+
+def make_probe_dtb(source, output, boot, labels):
     require_identity(source)
     shutil.copyfile(source, output)
     run(["fdtput", "-t", "s", output, USB_NODE, "dr_mode", "peripheral"])
@@ -292,7 +446,8 @@ def make_probe_dtb(source, output, boot):
         run(["fdtput", "-t", "s", output, node, "status", "disabled"])
     run(["fdtput", "-t", "s", output, UFS_NODE, "status",
          "disabled" if boot == 1 else "okay"])
-    verify_probe_dtb(output, boot)
+    add_overlay_sink(output, labels)
+    verify_probe_dtb(output, boot, labels)
 
 
 def padded(size):
@@ -338,7 +493,7 @@ def check_image_sizes(kernel_size, ramdisk_size, dtb_size, kernel_image=None):
     return image_size
 
 
-def pack_boot(mkbootimg, kernel, ramdisk, dtb, output):
+def pack_boot(mkbootimg, kernel, ramdisk, dtb, output, cmdline=CMDLINE):
     run([
         sys.executable, mkbootimg,
         "--header_version", HEADER_VERSION,
@@ -352,7 +507,7 @@ def pack_boot(mkbootimg, kernel, ramdisk, dtb, output):
         "--kernel", kernel,
         "--ramdisk", ramdisk,
         "--dtb", dtb,
-        "--cmdline", CMDLINE,
+        "--cmdline", cmdline,
         "--output", output,
     ])
 
@@ -374,7 +529,7 @@ def info_int(info, key):
         raise BuildError(f"unpack_bootimg info has no numeric {key}") from error
 
 
-def assert_boot_info(info, kernel_size, ramdisk_size, dtb_size):
+def assert_boot_info(info, kernel_size, ramdisk_size, dtb_size, cmdline=CMDLINE):
     expected_ints = {
         "kernel_size": kernel_size,
         "kernel load address": BASE + KERNEL_OFF,
@@ -397,7 +552,7 @@ def assert_boot_info(info, kernel_size, ramdisk_size, dtb_size):
                 f"read-back header disagrees for {key}: {actual}, expected {expected}")
     expected_strings = {
         "boot magic": "ANDROID!",
-        "command line args": CMDLINE,
+        "command line args": cmdline,
         "additional command line args": "",
         "recovery dtbo offset": "0x0000000000000000",
     }
@@ -407,7 +562,7 @@ def assert_boot_info(info, kernel_size, ramdisk_size, dtb_size):
                 f"read-back header disagrees for {key}: {info.get(key)!r}")
 
 
-def read_back_boot(boot, mkbootimg, kernel, ramdisk, dtb, work):
+def read_back_boot(boot, mkbootimg, kernel, ramdisk, dtb, work, root="none"):
     unpack = mkbootimg.with_name("unpack_bootimg.py")
     if not unpack.is_file():
         raise BuildError(f"missing sibling AOSP tool: {unpack}")
@@ -418,7 +573,8 @@ def read_back_boot(boot, mkbootimg, kernel, ramdisk, dtb, work):
     ]).decode("utf-8", "replace")
     info = parse_boot_info(text)
     assert_boot_info(info, kernel.stat().st_size,
-                     ramdisk.stat().st_size, dtb.stat().st_size)
+                     ramdisk.stat().st_size, dtb.stat().st_size,
+                     ROOT_CMDLINE if root == "userdata" else CMDLINE)
     for name, source in (("kernel", kernel), ("ramdisk", ramdisk), ("dtb", dtb)):
         extracted = out / name
         if not extracted.is_file() or sha256(extracted) != sha256(source):
@@ -427,7 +583,7 @@ def read_back_boot(boot, mkbootimg, kernel, ramdisk, dtb, work):
             kernel.stat().st_size, ramdisk.stat().st_size, dtb.stat().st_size,
             kernel_image_size(kernel)):
         raise BuildError("read-back image size disagrees with its page layout")
-    assert_no_allowlist(out / "ramdisk")
+    assert_allowlist(out / "ramdisk", root)
     return info, out
 
 
@@ -445,6 +601,10 @@ def artifact_paths(out):
 def build(args):
     if args.boot not in (1, 2):
         raise BuildError("--boot must be 1 (UFS disabled) or 2 (UFS enabled)")
+    if args.root not in ("none", "userdata"):
+        raise BuildError("--root must be none or userdata")
+    if args.root == "userdata" and args.boot != 2:
+        raise BuildError("--root userdata needs --boot 2 (UFS enabled)")
     paths = artifact_paths(args.out.absolute())
     for path in paths.values():
         if path.exists() or path.is_symlink():
@@ -454,6 +614,7 @@ def build(args):
         "--dtb": args.dtb,
         "--ssh-key": args.ssh_key,
         "--mkbootimg": args.mkbootimg,
+        "--stock-overlay": args.stock_overlay,
     }
     for name, path in inputs.items():
         if not path.is_file():
@@ -463,13 +624,23 @@ def build(args):
         raise BuildError(f"shared init not found: {shared_init}")
     if not args.initramfs_root.is_dir():
         raise BuildError("--initramfs-root must name a prepared root directory")
-    for relative in ("bin/busybox", "usr/sbin/dropbear"):
-        if not (args.initramfs_root / relative).exists():
+    needed = ["bin/busybox", "usr/sbin/dropbear"]
+    if args.root == "userdata":
+        needed += ["e2fsck", "dumpe2fs", "resize2fs"]
+    for relative in needed:
+        if "/" not in relative:
+            if not any((args.initramfs_root / d / relative).exists()
+                       for d in ("sbin", "usr/sbin", "bin", "usr/bin")):
+                raise BuildError(f"initramfs root lacks {relative}")
+        elif not (args.initramfs_root / relative).exists():
             raise BuildError(f"initramfs root lacks {relative}")
     for tool in ("bash", "cpio", "fdtget", "fdtput", "find", "gzip", "sort"):
         if shutil.which(tool) is None:
             raise BuildError(f"required host tool is missing: {tool}")
     validate_public_key(args.ssh_key)
+    if args.ufdt_apply is not None and not os.access(args.ufdt_apply, os.X_OK):
+        raise BuildError(f"--ufdt-apply is not executable: {args.ufdt_apply}")
+    labels = overlay_labels(args.stock_overlay)
     if args.mkbootimg.name != "mkbootimg.py":
         raise BuildError("--mkbootimg must name AOSP mkbootimg.py")
 
@@ -478,20 +649,24 @@ def build(args):
             prefix=".instantnoodlep-probe-", dir=paths["boot"].parent) as temp:
         work = Path(temp)
         staged = {name: work / path.name for name, path in paths.items()}
-        make_probe_dtb(args.dtb, staged["dtb"], args.boot)
+        make_probe_dtb(args.dtb, staged["dtb"], args.boot, labels)
+        if args.ufdt_apply is not None:
+            check_overlay_applies(args.ufdt_apply, staged["dtb"],
+                                  args.stock_overlay, work)
         build_initramfs(args.initramfs_root, shared_init, args.ssh_key,
-                        staged["ramdisk"], work)
+                        staged["ramdisk"], work, args.root)
         expected_size = check_image_sizes(
             args.kernel.stat().st_size, staged["ramdisk"].stat().st_size,
             staged["dtb"].stat().st_size, kernel_image_size(args.kernel))
         pack_boot(args.mkbootimg, args.kernel, staged["ramdisk"],
-                  staged["dtb"], staged["boot"])
+                  staged["dtb"], staged["boot"],
+                  ROOT_CMDLINE if args.root == "userdata" else CMDLINE)
         if staged["boot"].stat().st_size != expected_size:
             raise BuildError("mkbootimg output has an unexpected size")
         info, unpacked = read_back_boot(
             staged["boot"], args.mkbootimg, args.kernel,
-            staged["ramdisk"], staged["dtb"], work)
-        verify_probe_dtb(unpacked / "dtb", args.boot)
+            staged["ramdisk"], staged["dtb"], work, args.root)
+        verify_probe_dtb(unpacked / "dtb", args.boot, labels)
 
         outputs = {}
         for name in ("boot", "dtb", "ramdisk"):
@@ -503,6 +678,7 @@ def build(args):
         manifest = {
             "device": "instantnoodlep",
             "boot": args.boot,
+            "root": args.root,
             "header": info,
             "boot_image_limit": {
                 "bytes": BOOT_IMAGE_MAX,
@@ -510,6 +686,11 @@ def build(args):
             },
             "outputs": outputs,
             "shared_init_sha256": sha256(shared_init),
+            "stock_overlay": {
+                "sha256": sha256(args.stock_overlay),
+                "labels": len(labels),
+                "apply_checked": args.ufdt_apply is not None,
+            },
             "mkbootimg_sha256": sha256(args.mkbootimg),
             "hardware_boot_tested": False,
         }
@@ -539,8 +720,15 @@ def main(argv=None):
                         help="upstream checkout containing initramfs/init")
     parser.add_argument("--initramfs-root", type=Path, required=True,
                         help="prepared offline aarch64 Alpine root directory")
+    parser.add_argument("--stock-overlay", type=Path, required=True,
+                        help="the stock dtbo entry ABL applies (entry 16)")
+    parser.add_argument("--ufdt-apply", type=Path,
+                        help="optional libufdt ufdt_apply_overlay for an offline apply check")
     parser.add_argument("--boot", type=int, required=True,
                         help="1 disables UFS; 2 enables UFS")
+    parser.add_argument("--root", default="none",
+                        help="none (RAM probe) or userdata: tethered M2, hand over "
+                             "to Arch on userdata with an allowlist of userdata only")
     parser.add_argument("--out", type=Path, required=True,
                         help="new boot.img path; sibling artifacts derive from its name")
     args = parser.parse_args(argv)

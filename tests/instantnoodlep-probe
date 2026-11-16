@@ -69,6 +69,9 @@ def make_rootfs(parent):
     (root / "etc").mkdir(parents=True)
     (root / "bin/busybox").write_text("synthetic aarch64 BusyBox\n")
     (root / "usr/sbin/dropbear").write_text("synthetic aarch64 Dropbear\n")
+    (root / "sbin").mkdir(exist_ok=True)
+    for tool in ("sbin/e2fsck", "usr/sbin/dumpe2fs", "usr/sbin/resize2fs"):
+        (root / tool).write_text("synthetic aarch64 e2fsprogs\n")
     # A probe must remove every inherited write request, even a malformed one.
     (root / "etc/omamobile-ufs-rw").write_text("boot_b userdata\n")
     (root / "etc/omamobile-ufs-rw-luns").write_text("sdb\n")
@@ -124,6 +127,26 @@ DTS = r'''/dts-v1/;
 '''
 
 
+# A stock-like overlay: fragments target labels the base does not define, so
+# dtc -@ records them in __fixups__ (stock entry 16 has 156 of these).
+OVERLAY_DTS = r'''/dts-v1/;
+/plugin/;
+&pm8150_gpios { qcom,downstream = "x"; };
+&BOB { regulator-min-microvolt = <3008000>; };
+&qupv3_se4_i2c { status = "okay"; touch@20 { compatible = "synaptics-s3908"; }; };
+'''
+OVERLAY_LABELS = ["BOB", "pm8150_gpios", "qupv3_se4_i2c"]
+OVERLAY = None
+
+
+def make_overlay(parent):
+    source = parent / "entry16.dts"
+    output = parent / "entry16.dtbo"
+    source.write_text(OVERLAY_DTS)
+    run(["dtc", "-q", "-@", "-I", "dts", "-O", "dtb", "-o", output, source])
+    return output
+
+
 def make_dtb(parent, name="base", text=DTS):
     source = parent / (name + ".dts")
     output = parent / (name + ".dtb")
@@ -141,6 +164,7 @@ def builder_args(kernel, dtb, key, rootfs, boot, out):
         "--mkbootimg", MKBOOTIMG,
         "--omarchy-mobile", UPSTREAM,
         "--initramfs-root", rootfs,
+        "--stock-overlay", OVERLAY,
         "--boot", boot,
         "--out", out,
     ]
@@ -160,6 +184,7 @@ def test_cli(work):
         "--mkbootimg", work / "mkbootimg.py",
         "--omarchy-mobile", work / "missing-upstream",
         "--initramfs-root", work / "missing-rootfs",
+        "--stock-overlay", work / "missing.dtbo",
     ]
     result = call_builder(*args, "--boot", 3, "--out", "invalid.img", cwd=work)
     require(result.returncode != 0 and "--boot must be 1" in result.stderr,
@@ -327,6 +352,10 @@ def test_full(work, private, public):
 
     kernel = work / "Image.dummy"
     kernel.write_bytes(b"dummy kernel, not executed\n")
+    global OVERLAY
+    OVERLAY = make_overlay(work)
+    require(probe.overlay_labels(OVERLAY) == OVERLAY_LABELS,
+            "overlay labels were not read from __fixups__")
     dtb = make_dtb(work)
     original_hash = probe.sha256(dtb)
     rootfs = make_rootfs(work / "input")
@@ -361,7 +390,21 @@ def test_full(work, private, public):
         expected = "disabled" if boot == 1 else "okay"
         require(probe.fdt_get(paths["dtb"], probe.UFS_NODE, "status") == expected,
                 f"boot {boot} UFS status is not {expected}")
-        probe.verify_probe_dtb(paths["dtb"], boot)
+        probe.verify_probe_dtb(paths["dtb"], boot, OVERLAY_LABELS)
+        require(probe.fdt_cells(paths["dtb"], "/", "oplus,dtsi_no") == [0x4D63],
+                "oplus,dtsi_no missing")
+        handles = [probe.fdt_cells(paths["dtb"], f"{probe.SINK}/{label}",
+                                   "phandle")[0] for label in OVERLAY_LABELS]
+        require(len(set(handles)) == len(handles) and
+                not set(handles) & probe.fdt_phandles(dtb),
+                "sink phandles collide")
+        merged = work / f"merged{boot}.dtb"
+        run(["fdtoverlay", "-i", paths["dtb"], "-o", merged, OVERLAY])
+        require(probe.fdt_get(merged, f"{probe.SINK}/qupv3_se4_i2c/touch@20",
+                              "compatible") == "synaptics-s3908",
+                "overlay fragment did not land in the sink")
+        require(probe.fdt_get(merged, probe.UFS_NODE, "status") == expected,
+                "overlay changed a real node")
     require(probe.sha256(dtb) == original_hash, "builder modified the input DTB")
     require(probe.sha256(built[1]["ramdisk"]) == probe.sha256(built[2]["ramdisk"]),
             "boot selector changed the initramfs")
@@ -404,7 +447,34 @@ def test_full(work, private, public):
             "oversized kernel was not refused")
     require(not (work / "output/oversized.img").exists(),
             "size refusal left an image")
-    print("ok - generated-DTB refusals, boot 1 and 2, edits, headers and sha256")
+    # Tethered M2 (--root userdata): allowlist exactly userdata, no
+    # omamobile.initramfs on the command line, boot 2 only.
+    out = Path("output/tethered.img")
+    result = call(*builder_args(kernel, dtb, public, rootfs, 2, out),
+                  "--root", "userdata")
+    require(result.returncode == 0, f"tethered build failed: {result.stderr}")
+    paths = probe.artifact_paths(work / out)
+    probe.assert_allowlist(paths["ramdisk"], "userdata")
+    require(probe.cpio_file(paths["ramdisk"], probe.ALLOWLIST).decode().split()
+            == ["userdata"], "tethered allowlist is not exactly userdata")
+    manifest = json.loads(paths["manifest"].read_text())
+    cmdline = manifest["header"]["command line args"]
+    require("omamobile.initramfs" not in cmdline and
+            "systemd.watchdog_sec=20" in cmdline,
+            f"tethered cmdline wrong: {cmdline}")
+    require(manifest["root"] == "userdata", "manifest lacks root mode")
+    raises(probe.BuildError,
+           lambda: probe.assert_allowlist(built[2]["ramdisk"], "userdata"),
+           "lacks /etc/omamobile-ufs-rw")
+    raises(probe.BuildError,
+           lambda: probe.assert_allowlist(paths["ramdisk"], "none"),
+           "allowlist")
+    result = call(*builder_args(kernel, dtb, public, rootfs, 1,
+                                "output/tethered-boot1.img"),
+                  "--root", "userdata")
+    require(result.returncode != 0 and "needs --boot 2" in result.stderr,
+            "tethered with UFS off was not refused")
+    print("ok - generated-DTB refusals, boot 1 and 2, tethered root, edits, headers and sha256")
 
 
 def main():
