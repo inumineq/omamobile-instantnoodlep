@@ -4,6 +4,29 @@
 Newest first. Findings that matter beyond one subsystem go here; subsystem
 detail lives in the *-PLAN.md files.
 
+## 2026-11-16 (evening): R7, K2 passes R1-R5; M1a complete
+
+- [V] K2 built offline: `~/src/l` branch `instantnoodlep-k2` @
+  `a28aaf1a09db` (linux-omarchy-mobile `317d87dc2db0` + our four DTS
+  commits), arm64 defconfig + upstream `kernel/configs/omamobile.config` +
+  `device/instantnoodlep/kernel.config` with `LOCALVERSION=-instantnoodlep-k2`,
+  `LLVM=1`. kernelrelease `7.3.0-rc6-instantnoodlep-k2-ga28aaf1a09db`,
+  `Image.gz` 15,573,890 bytes. Images built with the PR #44 builder
+  (`--stock-overlay` entry 16, `--ufdt-apply` check, probe key).
+- [V] R1/R2 (UFS off): `Booting OKAY`, SSH after ~6 s, 8 CPUs, MemTotal
+  11688880 kB, only `loop*` block devices, watchdog fed. R3: UFS node
+  `disabled`. dmesg is cleaner than K1: no `qcom-pon` -EEXIST and no
+  deferred dwc3/cpufreq; only the misaligned-image and PSCI PC-mode
+  firmware notes, the `aux_bridge` -ENODEV and the expected `qcom_wdt`
+  modprobe failure (K2 builds it in, so the module is absent).
+- [V] R4 (UFS on): 121 of 122 `ro` flags read 1, the one 0 is
+  `/sys/block/sda/ro` (node removed by design), `/dev/sda` absent, no UFS
+  errors. R5: stock `.591` from `_a`, slot flags identical to the K2 P5
+  capture.
+- M1a (RAM-only first light, both kernels) is done. Next per the plan:
+  the persistent M1b install, gated on R5 (MSM package) and the owner's
+  writes to slot B.
+
 ## 2026-11-16 (afternoon, later): M1a first light; R2-R5
 
 - [V] Owner ran `fastboot set_active a` (gated). Stock `.591` booted from
