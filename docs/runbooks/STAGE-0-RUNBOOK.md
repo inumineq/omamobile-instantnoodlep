@@ -275,7 +275,9 @@ fastboot reboot
   partitions [V: AOSP `fs_mgr/libsnapshot/snapshot.cpp` `GetCowName`
   appends `-cow`]. They mean this is a Virtual A/B device with an update
   snapshot still present, which is expected right after an A3b install.
-  Not a stop here; B4 checks that the merge has finished.
+  Not a stop here; B4 checks that the snapshot is gone. [V 2026-11-16]
+  On the owner's phone they were present while both ABL and fastbootd
+  already reported `snapshot-update-status:none`.
 - **Stop:** `fastboot reboot fastboot` is rejected or the phone never shows
   fastbootd. Then restore path 1 is unproven: report it before phase C.
 - **Rollback:** if the phone sits in fastbootd: choose **only** "Reboot
@@ -292,15 +294,21 @@ in Android (on the charger, 15-30 min), then:
 ```sh
 adb reboot fastboot
 fastboot getvar snapshot-update-status
+fastboot getvar all 2>&1 | grep -c 'is-logical:.*-cow:yes'
 fastboot reboot
 ```
 
-- **Expect:** `snapshot-update-status: none`. [V: AOSP
-  `fastboot/device/variables.cpp` `GetSnapshotUpdateStatus` returns
-  `snapshotted`, `merging` or `none` from the boot control HAL.]
-- **Stop:** `merging` or `snapshotted`: boot stock (`fastboot reboot`),
-  wait 30 min more and repeat. Still not `none` after a few hours: report
-  it and do nothing else. **Never** run `fastboot snapshot-update cancel`
+- **Expect:** `snapshot-update-status: none` **and** a count of `0`.
+  [V: AOSP `fastboot/device/variables.cpp` `GetSnapshotUpdateStatus`
+  returns `snapshotted`, `merging` or `none` from the boot control HAL.]
+  The status alone is not enough: on this phone it read `none` while all
+  fifteen `_a-cow` partitions were still in `super` [V 2026-11-16, B3
+  captures]. [I] libsnapshot deletes the COW partitions only when it
+  completes the merge, so a count of `0` is the evidence that it did.
+- **Stop:** `merging` or `snapshotted`, or a count above `0`: boot stock
+  (`fastboot reboot`), leave it booted 30 min more and repeat. Still not
+  `none` and `0` after a few hours and at least two full boots: report it
+  and do nothing else; the coordinator decides. **Never** run `fastboot snapshot-update cancel`
   or `fastboot snapshot-update merge`, and pick nothing from the fastbootd
   menu except "Reboot system now".
 - **Why it gates C2:** AOSP fastbootd refuses to erase or flash
