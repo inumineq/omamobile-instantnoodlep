@@ -5,8 +5,8 @@
 Usage: tools/build-instantnoodlep-probe --kernel Image.gz --dtb board.dtb \
          --ssh-key ~/.ssh/id_ed25519.pub --mkbootimg /path/to/mkbootimg.py \
          --omarchy-mobile /path/to/omarchy-mobile \
-         --initramfs-root /path/to/aarch64-alpine-root --boot 1 \
-         --out out/boot.img
+         --initramfs-root /path/to/aarch64-alpine-root \
+         --stock-overlay dtbo-entry16.dtbo --boot 1 --out out/boot.img
 
 --initramfs-root is a prepared, offline aarch64 Alpine root with BusyBox,
 Dropbear, iproute2, util-linux and kmod, plus qcom_wdt matching the kernel.
@@ -16,6 +16,17 @@ RAM-probe settings, and packs with the host cpio and gzip. This follows the
 structure of upstream's flame and dipper probe builders without Docker or
 network access. mkbootimg.py and its sibling unpack_bootimg.py come from AOSP
 system/tools/mkbootimg. dtc's fdtget/fdtput tools must be on PATH.
+
+--stock-overlay is the dtbo entry stock ABL applies on this unit (entry 16 of
+the owner's factory dtbo.img, extracted with mkdtboimg.py; never committed).
+ABL refuses a RAM boot whose DTB the overlay cannot apply to, and it picks
+the base DTB by oplus,dtsi_no. So the probe DTB gets oplus,dtsi_no and
+oplus,pcb_range as in stock, plus an "overlay sink": a __symbols__ table
+that points every label the overlay needs at a disabled dummy node under
+/__ovl_sink__ (no compatible, so nothing there is populated). No fragment
+touches a real node. Verified on the phone 2026-11-16 (NOTES).
+--ufdt-apply optionally names AOSP libufdt's ufdt_apply_overlay to check
+offline that the overlay applies.
 
 --boot 1 disables the UFS host. --boot 2 enables it. Both disable every
 remoteproc node and force USB peripheral mode without a role switch. The
@@ -74,6 +85,11 @@ COMPATIBLE = ["oneplus,instantnoodlep", "qcom,sm8250"]
 MSM_ID = [0x164, 0x10000, 0x164, 0x20001]
 BOARD_ID = [0x08, 0x00, 0x00, 0x00]
 ALLOWLIST = "etc/omamobile-ufs-rw"
+# Stock base-DTB selectors for project 19811 (R4 note, stock boot DTB 3).
+OPLUS_DTSI_NO = [0x4D63]
+OPLUS_PCB_RANGE = [0x0, 0x38]
+SINK = "/__ovl_sink__"
+SYMBOLS = "/__symbols__"
 
 
 class BuildError(Exception):
@@ -267,8 +283,9 @@ def property_present(dtb, node, prop):
     return result.returncode == 0
 
 
-def verify_probe_dtb(dtb, boot):
+def verify_probe_dtb(dtb, boot, labels):
     require_identity(dtb)
+    verify_overlay_sink(dtb, labels)
     if fdt_get(dtb, USB_NODE, "dr_mode") != "peripheral":
         raise BuildError("probe USB dr_mode is not peripheral")
     if property_present(dtb, USB_NODE, "usb-role-switch"):
@@ -282,7 +299,97 @@ def verify_probe_dtb(dtb, boot):
         raise BuildError(f"probe UFS host status is not {want}")
 
 
-def make_probe_dtb(source, output, boot):
+def fdt_phandles(path):
+    """Every phandle value in a flattened DTB (structure block walk)."""
+    blob = Path(path).read_bytes()
+    magic, _, off_struct, off_strings = struct.unpack_from(">4I", blob, 0)
+    if magic != 0xD00DFEED:
+        raise BuildError(f"not a flattened device tree: {path}")
+    found, pos = set(), off_struct
+    while True:
+        (token,) = struct.unpack_from(">I", blob, pos)
+        pos += 4
+        if token == 1:  # FDT_BEGIN_NODE
+            pos = (blob.index(b"\0", pos) + 4) & ~3
+        elif token == 3:  # FDT_PROP
+            length, name_off = struct.unpack_from(">II", blob, pos)
+            pos += 8
+            end = blob.index(b"\0", off_strings + name_off)
+            name = blob[off_strings + name_off:end]
+            if name in (b"phandle", b"linux,phandle") and length == 4:
+                found.add(struct.unpack_from(">I", blob, pos)[0])
+            pos = (pos + length + 3) & ~3
+        elif token in (2, 4):  # FDT_END_NODE, FDT_NOP
+            continue
+        elif token == 9:  # FDT_END
+            return found
+        else:
+            raise BuildError(f"bad FDT token {token} in {path}")
+
+
+def overlay_labels(overlay):
+    text = run(["fdtget", "-p", overlay, "/__fixups__"]).decode(
+        "utf-8", "replace")
+    labels = sorted(set(text.split()))
+    if not labels:
+        raise BuildError("--stock-overlay has no __fixups__ labels")
+    for label in labels:
+        if not label.replace("_", "").replace("-", "").isalnum():
+            raise BuildError(f"unexpected overlay label: {label!r}")
+    return labels
+
+
+def add_overlay_sink(dtb, labels):
+    for node in (SINK, SYMBOLS):
+        if node.lstrip("/") in fdt_children(dtb, "/"):
+            raise BuildError(f"input DTB already has {node}")
+    run(["fdtput", "-t", "x", dtb, "/", "oplus,dtsi_no",
+         *[f"{v:x}" for v in OPLUS_DTSI_NO]])
+    run(["fdtput", "-t", "x", dtb, "/", "oplus,pcb_range",
+         *[f"{v:x}" for v in OPLUS_PCB_RANGE]])
+    run(["fdtput", "-c", dtb, SINK, SYMBOLS,
+         *[f"{SINK}/{label}" for label in labels]])
+    phandle = max(fdt_phandles(dtb), default=0) + 1
+    for label in labels:
+        node = f"{SINK}/{label}"
+        run(["fdtput", "-t", "s", dtb, node, "status", "disabled"])
+        run(["fdtput", "-t", "u", dtb, node, "phandle", str(phandle)])
+        run(["fdtput", "-t", "s", dtb, SYMBOLS, label, node])
+        phandle += 1
+
+
+def verify_overlay_sink(dtb, labels):
+    if fdt_cells(dtb, "/", "oplus,dtsi_no") != OPLUS_DTSI_NO:
+        raise BuildError("probe oplus,dtsi_no is not 0x4d63")
+    if fdt_cells(dtb, "/", "oplus,pcb_range") != OPLUS_PCB_RANGE:
+        raise BuildError("probe oplus,pcb_range is not <0 0x38>")
+    if property_present(dtb, SINK, "compatible"):
+        raise BuildError(f"{SINK} must not have a compatible")
+    for label in labels:
+        node = f"{SINK}/{label}"
+        if fdt_get(dtb, SYMBOLS, label) != node:
+            raise BuildError(f"__symbols__ {label} does not point into {SINK}")
+        if fdt_get(dtb, node, "status") != "disabled":
+            raise BuildError(f"sink node is not disabled: {node}")
+        fdt_cells(dtb, node, "phandle")
+    symbols = run(["fdtget", "-p", dtb, SYMBOLS]).decode().split()
+    if sorted(symbols) != labels:
+        raise BuildError("__symbols__ holds labels the overlay does not need")
+
+
+def check_overlay_applies(ufdt_apply, dtb, overlay, work):
+    merged = work / "overlay-check.dtb"
+    result = subprocess.run([str(ufdt_apply), str(dtb), str(overlay),
+                             str(merged)], stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT)
+    if result.returncode != 0 or not merged.is_file():
+        raise BuildError("the stock overlay does not apply to the probe DTB:\n"
+                         + result.stdout.decode("utf-8", "replace"))
+    if merged.stat().st_size > DTB_LOAD_GAP:
+        raise BuildError("post-overlay DTB exceeds ABL's 2 MiB DTB window")
+
+
+def make_probe_dtb(source, output, boot, labels):
     require_identity(source)
     shutil.copyfile(source, output)
     run(["fdtput", "-t", "s", output, USB_NODE, "dr_mode", "peripheral"])
@@ -292,7 +399,8 @@ def make_probe_dtb(source, output, boot):
         run(["fdtput", "-t", "s", output, node, "status", "disabled"])
     run(["fdtput", "-t", "s", output, UFS_NODE, "status",
          "disabled" if boot == 1 else "okay"])
-    verify_probe_dtb(output, boot)
+    add_overlay_sink(output, labels)
+    verify_probe_dtb(output, boot, labels)
 
 
 def padded(size):
@@ -454,6 +562,7 @@ def build(args):
         "--dtb": args.dtb,
         "--ssh-key": args.ssh_key,
         "--mkbootimg": args.mkbootimg,
+        "--stock-overlay": args.stock_overlay,
     }
     for name, path in inputs.items():
         if not path.is_file():
@@ -470,6 +579,9 @@ def build(args):
         if shutil.which(tool) is None:
             raise BuildError(f"required host tool is missing: {tool}")
     validate_public_key(args.ssh_key)
+    if args.ufdt_apply is not None and not os.access(args.ufdt_apply, os.X_OK):
+        raise BuildError(f"--ufdt-apply is not executable: {args.ufdt_apply}")
+    labels = overlay_labels(args.stock_overlay)
     if args.mkbootimg.name != "mkbootimg.py":
         raise BuildError("--mkbootimg must name AOSP mkbootimg.py")
 
@@ -478,7 +590,10 @@ def build(args):
             prefix=".instantnoodlep-probe-", dir=paths["boot"].parent) as temp:
         work = Path(temp)
         staged = {name: work / path.name for name, path in paths.items()}
-        make_probe_dtb(args.dtb, staged["dtb"], args.boot)
+        make_probe_dtb(args.dtb, staged["dtb"], args.boot, labels)
+        if args.ufdt_apply is not None:
+            check_overlay_applies(args.ufdt_apply, staged["dtb"],
+                                  args.stock_overlay, work)
         build_initramfs(args.initramfs_root, shared_init, args.ssh_key,
                         staged["ramdisk"], work)
         expected_size = check_image_sizes(
@@ -491,7 +606,7 @@ def build(args):
         info, unpacked = read_back_boot(
             staged["boot"], args.mkbootimg, args.kernel,
             staged["ramdisk"], staged["dtb"], work)
-        verify_probe_dtb(unpacked / "dtb", args.boot)
+        verify_probe_dtb(unpacked / "dtb", args.boot, labels)
 
         outputs = {}
         for name in ("boot", "dtb", "ramdisk"):
@@ -510,6 +625,11 @@ def build(args):
             },
             "outputs": outputs,
             "shared_init_sha256": sha256(shared_init),
+            "stock_overlay": {
+                "sha256": sha256(args.stock_overlay),
+                "labels": len(labels),
+                "apply_checked": args.ufdt_apply is not None,
+            },
             "mkbootimg_sha256": sha256(args.mkbootimg),
             "hardware_boot_tested": False,
         }
@@ -539,6 +659,10 @@ def main(argv=None):
                         help="upstream checkout containing initramfs/init")
     parser.add_argument("--initramfs-root", type=Path, required=True,
                         help="prepared offline aarch64 Alpine root directory")
+    parser.add_argument("--stock-overlay", type=Path, required=True,
+                        help="the stock dtbo entry ABL applies (entry 16)")
+    parser.add_argument("--ufdt-apply", type=Path,
+                        help="optional libufdt ufdt_apply_overlay for an offline apply check")
     parser.add_argument("--boot", type=int, required=True,
                         help="1 disables UFS; 2 enables UFS")
     parser.add_argument("--out", type=Path, required=True,

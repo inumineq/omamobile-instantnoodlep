@@ -40,14 +40,20 @@ named with each. Never run a block with a `{{...}}` still in it.
 - `{{K1_KERNEL}}`, `{{K1_DTB}}` — the K1 kernel image and its original DTB
   (plan 5.5-5.6). Chosen in P2. The builder writes `out/boot.probe.dtb` for
   boot 1 and derives the boot-2 DTB name from `{{BOOT2_IMG}}`.
-- `{{SSH_KEY}}` — the owner's local ssh key for the USB gadget link (plan
-  goal 2). Chosen in P2.
+- `{{SSH_KEY}}` — the public half of a passphrase-less key used only for
+  the USB gadget link (plan goal 2), e.g. `~/.ssh/omamobile_probe.pub`, so
+  an agent shell without ssh-agent can log in. The host side needs
+  `172.16.42.2/24` on the NCM interface (NetworkManager connection
+  `omamobile`), and dropbear makes a new host key each boot
+  (`UserKnownHostsFile=/dev/null`).
 - `{{MKBOOTIMG}}` — the `mkbootimg` tool, from the laptop tools setup
   (RESTORE-ASSETS R4). Filled before P2.
 - `{{UFDT_APPLY_OVERLAY}}` — libufdt's `ufdt_apply_overlay`, from the
   laptop tools setup (RESTORE-ASSETS R4). Filled before P3.
 - `{{DTBO_ENTRY}}` — the board-id-8 entry blob from the P3 dump. Filled
-  in P3.
+  in P3. The builder takes it as `--stock-overlay` and adds the overlay
+  sink plus `oplus,dtsi_no`/`oplus,pcb_range`, without which ABL refuses
+  the RAM boot (NOTES 2026-11-16).
 - `{{BOOT2_IMG}}` — path of the boot-2 image (UFS on). Filled by the
   build at the top of R4.
 - `{{M1_BACKUP_DIR}}` — a directory outside the repo for the R6 backups.
@@ -112,7 +118,7 @@ offline aarch64 Alpine root prepared as described by the builder's `--help`;
 adjust those two local paths if needed.
 
 ```sh
-tools/build-instantnoodlep-probe --omarchy-mobile "$HOME/omarchy-mobile" --initramfs-root "$HOME/instantnoodlep-initramfs-root" --boot 1 --kernel {{K1_KERNEL}} --dtb {{K1_DTB}} --ssh-key {{SSH_KEY}} --mkbootimg {{MKBOOTIMG}} --out out/boot.img
+tools/build-instantnoodlep-probe --omarchy-mobile "$HOME/omarchy-mobile" --initramfs-root "$HOME/instantnoodlep-initramfs-root" --boot 1 --kernel {{K1_KERNEL}} --dtb {{K1_DTB}} --ssh-key {{SSH_KEY}} --mkbootimg {{MKBOOTIMG}} --stock-overlay {{DTBO_ENTRY}} --ufdt-apply {{UFDT_APPLY_OVERLAY}} --out out/boot.img
 fdtget -t x out/boot.probe.dtb / qcom,msm-id
 fdtget -t x out/boot.probe.dtb / qcom,board-id
 fdtget -t s out/boot.probe.dtb / compatible
@@ -253,7 +259,7 @@ host enabled (plan 5.5). Record its path as `{{BOOT2_IMG}}`. This build is
 laptop/offline:
 
 ```sh
-tools/build-instantnoodlep-probe --omarchy-mobile "$HOME/omarchy-mobile" --initramfs-root "$HOME/instantnoodlep-initramfs-root" --boot 2 --kernel {{K1_KERNEL}} --dtb {{K1_DTB}} --ssh-key {{SSH_KEY}} --mkbootimg {{MKBOOTIMG}} --out {{BOOT2_IMG}}
+tools/build-instantnoodlep-probe --omarchy-mobile "$HOME/omarchy-mobile" --initramfs-root "$HOME/instantnoodlep-initramfs-root" --boot 2 --kernel {{K1_KERNEL}} --dtb {{K1_DTB}} --ssh-key {{SSH_KEY}} --mkbootimg {{MKBOOTIMG}} --stock-overlay {{DTBO_ENTRY}} --ufdt-apply {{UFDT_APPLY_OVERLAY}} --out {{BOOT2_IMG}}
 ```
 
 Then (phone):

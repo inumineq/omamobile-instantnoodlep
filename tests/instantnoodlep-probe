@@ -124,6 +124,26 @@ DTS = r'''/dts-v1/;
 '''
 
 
+# A stock-like overlay: fragments target labels the base does not define, so
+# dtc -@ records them in __fixups__ (stock entry 16 has 156 of these).
+OVERLAY_DTS = r'''/dts-v1/;
+/plugin/;
+&pm8150_gpios { qcom,downstream = "x"; };
+&BOB { regulator-min-microvolt = <3008000>; };
+&qupv3_se4_i2c { status = "okay"; touch@20 { compatible = "synaptics-s3908"; }; };
+'''
+OVERLAY_LABELS = ["BOB", "pm8150_gpios", "qupv3_se4_i2c"]
+OVERLAY = None
+
+
+def make_overlay(parent):
+    source = parent / "entry16.dts"
+    output = parent / "entry16.dtbo"
+    source.write_text(OVERLAY_DTS)
+    run(["dtc", "-q", "-@", "-I", "dts", "-O", "dtb", "-o", output, source])
+    return output
+
+
 def make_dtb(parent, name="base", text=DTS):
     source = parent / (name + ".dts")
     output = parent / (name + ".dtb")
@@ -141,6 +161,7 @@ def builder_args(kernel, dtb, key, rootfs, boot, out):
         "--mkbootimg", MKBOOTIMG,
         "--omarchy-mobile", UPSTREAM,
         "--initramfs-root", rootfs,
+        "--stock-overlay", OVERLAY,
         "--boot", boot,
         "--out", out,
     ]
@@ -160,6 +181,7 @@ def test_cli(work):
         "--mkbootimg", work / "mkbootimg.py",
         "--omarchy-mobile", work / "missing-upstream",
         "--initramfs-root", work / "missing-rootfs",
+        "--stock-overlay", work / "missing.dtbo",
     ]
     result = call_builder(*args, "--boot", 3, "--out", "invalid.img", cwd=work)
     require(result.returncode != 0 and "--boot must be 1" in result.stderr,
@@ -327,6 +349,10 @@ def test_full(work, private, public):
 
     kernel = work / "Image.dummy"
     kernel.write_bytes(b"dummy kernel, not executed\n")
+    global OVERLAY
+    OVERLAY = make_overlay(work)
+    require(probe.overlay_labels(OVERLAY) == OVERLAY_LABELS,
+            "overlay labels were not read from __fixups__")
     dtb = make_dtb(work)
     original_hash = probe.sha256(dtb)
     rootfs = make_rootfs(work / "input")
@@ -361,7 +387,21 @@ def test_full(work, private, public):
         expected = "disabled" if boot == 1 else "okay"
         require(probe.fdt_get(paths["dtb"], probe.UFS_NODE, "status") == expected,
                 f"boot {boot} UFS status is not {expected}")
-        probe.verify_probe_dtb(paths["dtb"], boot)
+        probe.verify_probe_dtb(paths["dtb"], boot, OVERLAY_LABELS)
+        require(probe.fdt_cells(paths["dtb"], "/", "oplus,dtsi_no") == [0x4D63],
+                "oplus,dtsi_no missing")
+        handles = [probe.fdt_cells(paths["dtb"], f"{probe.SINK}/{label}",
+                                   "phandle")[0] for label in OVERLAY_LABELS]
+        require(len(set(handles)) == len(handles) and
+                not set(handles) & probe.fdt_phandles(dtb),
+                "sink phandles collide")
+        merged = work / f"merged{boot}.dtb"
+        run(["fdtoverlay", "-i", paths["dtb"], "-o", merged, OVERLAY])
+        require(probe.fdt_get(merged, f"{probe.SINK}/qupv3_se4_i2c/touch@20",
+                              "compatible") == "synaptics-s3908",
+                "overlay fragment did not land in the sink")
+        require(probe.fdt_get(merged, probe.UFS_NODE, "status") == expected,
+                "overlay changed a real node")
     require(probe.sha256(dtb) == original_hash, "builder modified the input DTB")
     require(probe.sha256(built[1]["ramdisk"]) == probe.sha256(built[2]["ramdisk"]),
             "boot selector changed the initramfs")
