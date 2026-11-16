@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Host test for tools/instantnoodlep-slot-b-mark on a synthetic GPT."""
+import importlib.machinery
+import importlib.util
+import struct
+import sys
+import tempfile
+import zlib
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+loader = importlib.machinery.SourceFileLoader(
+    "slot_b_mark", str(ROOT / "tools/instantnoodlep-slot-b-mark"))
+spec = importlib.util.spec_from_loader("slot_b_mark", loader)
+mark = importlib.util.module_from_spec(spec)
+loader.exec_module(mark)
+S, LAST = mark.SECTOR, mark.LAST_LBA
+COUNT = 96
+
+
+def fail(message):
+    print(f"not ok - {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def entries(attrs_b=0x0037000000000000, name_b="boot_b"):
+    out = bytearray()
+    for i in range(COUNT):
+        e = bytearray(128)
+        e[0:16] = bytes([i + 1]) * 16
+        name = name_b if i == 34 else ("boot_a" if i == 10 else f"p{i}")
+        attrs = attrs_b if i == 34 else (0x0077000000000000 if i == 10 else 0)
+        struct.pack_into("<QQQ", e, 32, 10 + i, 10 + i, attrs)
+        e[56:56 + 2 * len(name)] = name.encode("utf-16le")
+        out += e
+    return bytes(out)
+
+
+def header(cur, bak, ent_lba, array):
+    h = bytearray(mark.HEADER.pack(b"EFI PART", 0x10000, 92, 0, 0, cur, bak,
+                                   6, LAST - 5, b"G" * 16, ent_lba, COUNT,
+                                   128, zlib.crc32(array)))
+    struct.pack_into("<I", h, 16, zlib.crc32(h))
+    return bytes(h) + bytes(S - 92)
+
+
+def windows(**kw):
+    array = entries(**kw)
+    primary = bytes(S) + header(1, LAST, 2, array) + array + bytes(S * 3)
+    base = LAST - 7
+    backup = bytes(S * 3) + array + bytes(S) + header(LAST, 1, LAST - 4, array)
+    assert len(primary) == len(backup) == 8 * S
+    assert backup[(LAST - 4 - base) * S:][:len(array)] == array
+    return primary, backup
+
+
+def must_refuse(primary, backup, text):
+    with tempfile.TemporaryDirectory() as t:
+        try:
+            mark.build(primary, backup, Path(t))
+        except mark.MarkError as error:
+            if text not in str(error):
+                fail(f"refused for the wrong reason: {error}")
+            return
+    fail(f"not refused: {text}")
+
+
+primary, backup = windows()
+with tempfile.TemporaryDirectory() as t:
+    m = mark.build(primary, backup, Path(t))
+    lbas = [s["lba"] for s in m["sectors"]]
+    if lbas != [1, 3, LAST - 3, LAST]:
+        fail(f"changed sectors {lbas}")
+    new = bytearray(primary)
+    for s in m["sectors"][:2]:
+        new[s["lba"] * S:(s["lba"] + 1) * S] = (Path(t) / s["file"]).read_bytes()
+    h = mark.parse_header(new[S:2 * S])
+    arr = bytes(new[2 * S:2 * S + COUNT * 128])
+    if zlib.crc32(arr) != h["ecrc"]:
+        fail("array CRC after the write does not check")
+    (after,) = struct.unpack_from("<Q", arr, 34 * 128 + 48)
+    (other,) = struct.unpack_from("<Q", arr, 10 * 128 + 48)
+    if after != 0x0037000000000000 | 1 << 54 or other != 0x0077000000000000:
+        fail(f"wrong attributes after: {after:#x} {other:#x}")
+    if bytes(new[:S]) != primary[:S] or bytes(new[4 * S:]) != primary[4 * S:]:
+        fail("bytes outside the two primary sectors changed")
+print("ok - marks bit 54 of boot_b in both copies, four sectors, CRCs check")
+
+must_refuse(*windows(attrs_b=0x0037000000000000 | 1 << 54), "already marked")
+must_refuse(*windows(attrs_b=0x0037000000000000 | 1 << 55), "unbootable")
+must_refuse(*windows(name_b="vendor_b"), "not boot_b")
+p, b = windows()
+bad = bytearray(p)
+bad[2 * S + 5] ^= 1
+must_refuse(bytes(bad), b, "entry array CRC wrong")
+bad = bytearray(p)
+bad[S + 40] ^= 1
+must_refuse(bytes(bad), b, "header CRC wrong")
+must_refuse(p[:-S], b, "exactly 8 sectors")
+print("ok - refuses a marked, unbootable or renamed entry, bad CRCs, short reads")

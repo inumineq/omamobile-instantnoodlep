@@ -126,13 +126,12 @@ OnePlus's fork does the same is [I] until seen on the phone.
   header). Upstream allows this only as a named per-device exception in
   CONTRIBUTING §3.1, run by hand, once per `boot_b` install, never from a
   service [U/CONTRIBUTING.md:60; U/AGENTS.md:14]. No device has an entry.
-- So B5 waits until (a) M1b B4 has passed and (b) the owner decides it
-  locally, recording the deviation from upstream (or the maintainer adds
-  an entry). It gets its own runbook amendment here before it runs: a
-  laptop-side script that builds the four new sectors from a fresh read,
-  shows that only those four differ, and writes them from the guarded
-  initramfs. That needs `sde` in a one-off allowlist; the runbook must
-  name it.
+- So B5 waits until (a) M1b B4 has passed (done 2026-11-17) and (b) the
+  owner decides it locally, recording the deviation from upstream (or the
+  maintainer adds an entry). Runbook: §7 B5. The sectors are built on the
+  laptop by `tools/instantnoodlep-slot-b-mark`, which proves only those
+  four differ; the write runs from Arch with a one-off
+  `blockdev --setrw /dev/sde` that B5 names and undoes.
 
 ## 6. Risks
 
@@ -219,7 +218,50 @@ fastboot reboot                                    # agent
 - Record in NOTES; close the tethered amendment (STORAGE-M2 §3a) as
   superseded.
 
-### B5. Success mark: not authorised by this plan (see §5)
+### B5. Success mark (amendment 2026-11-17; owner go, once per `boot_b` install)
+
+Not covered by upstream: CONTRIBUTING §3.1 has no Qualcomm entry, and our
+house rule 3 limits writes to slot-B boot images and `userdata`. Running
+B5 is a local owner decision that records this one exception. The entry
+it would need upstream: device instantnoodlep, LUN `sde` (LUN 4, 4096-byte
+sectors), LBAs 1, 3, 655356 and 655359, attribute bit 54 of entry 34
+(`boot_b`), the header CRC and the array CRC of both copies.
+
+1. Agent, reads only: fresh reads of `sde` LBA 0-7 and 655352-655359
+   from Arch (`dd iflag=direct`), then
+   `tools/instantnoodlep-slot-b-mark --primary ... --backup ... --out ...`.
+   Expect exactly LBAs 1, 3, 655356, 655359; attributes before = bootable,
+   not successful; after = the same plus bit 54. 1 byte changed in each
+   array sector, 8 in each header (two CRCs). The original four sectors
+   are kept beside the new ones (private, SHA256SUMS). Stop on any
+   refusal.
+2. Owner go, then agent over SSH as root (files pushed to `/tmp` first,
+   sha256 checked on the phone):
+   ```sh
+   blockdev --setrw /dev/sde
+   for l in 1 3 655356 655359; do
+     dd if=/tmp/b5/sde-lba$l.bin of=/dev/sde bs=4096 seek=$l count=1 \
+        conv=notrunc,fsync oflag=direct
+   done
+   blockdev --setro /dev/sde
+   for l in 1 3 655356 655359; do
+     dd if=/dev/sde bs=4096 skip=$l count=1 iflag=direct 2>/dev/null | sha256sum
+   done
+   ```
+   - Expect: each read-back sha256 equals the manifest's; `ro` 1 again.
+   - Stop: any mismatch. Then write the four `orig/` sectors back the same
+     way and read them back (Rollback), before any reboot.
+3. Agent: `systemctl reboot --reboot-argument=bootloader`, then
+   `fastboot getvar all`. Expect `slot-successful:b: yes`,
+   `slot-unbootable:b: no`, `current-slot: b`, slot A unchanged. Then
+   `fastboot reboot` and SSH.
+
+- Rollback after a reboot: ABL falls back to the backup GPT if the
+  primary is bad [I]; the `orig/` sectors restore the state before B5;
+  last resort RESTORE-RUNBOOK (MSM package).
+- After B5, a broken `boot_b` no longer falls back to stock: fastboot by
+  `reboot bootloader` or buttons, then flash a known-good `boot_b`
+  (which clears the mark: B5 runs again after each `boot_b` install).
 
 ## 8. Open [I]s and what answers each
 
