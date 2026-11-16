@@ -4,6 +4,24 @@
 Newest first. Findings that matter beyond one subsystem go here; subsystem
 detail lives in the *-PLAN.md files.
 
+## 2026-11-16 (evening): restore assets R5, MSM package on disk
+
+- [V] Restore assets on local disk (2026-11-16): MSM package version
+  OxygenOS 11.0.4.4 (`IN11BA`, EU) for IN2023, archive tested
+  (`unzip -t`: no errors). The region shows in the package's marker file
+  (`..._Oxygen-OS-11.0.4.4.IN11BA`) and in its `build_path.txt`
+  (`SM8250/19811_R/.../OXYGEN_EU`; 19811 is our project). The `.ops`
+  MD5 matches the package's own `md5sum_pack.md5`. Archive SHA-256
+  d9f5c6c54247... Location: owner's local disk, outside the repo.
+- [V] The package ships `MsmDownloadTool V4.0.exe` and `MsmDownloadTool
+  V4.0_factory.exe`, not the `_Win7.exe` variant RESTORE-ASSETS R5
+  expected. [I] Use `V4.0.exe` (it ships with this `.ops`); never the
+  `_factory` tool or "SMT Download" (they can erase IMEI/Widevine).
+- The owner has a native Windows partition for EDL (no VM). Not yet
+  dry-run: seeing "Qualcomm HS-USB QDLoader 9008" in Device Manager
+  without flashing is the optional next check.
+- With R2-R5 passed, ticket #4 (restore assets) can close.
+
 ## 2026-11-16 (evening): R7, K2 passes R1-R5; M1a complete
 
 - [V] K2 built offline: `~/src/l` branch `instantnoodlep-k2` @
