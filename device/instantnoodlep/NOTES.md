@@ -4,6 +4,33 @@
 Newest first. Findings that matter beyond one subsystem go here; subsystem
 detail lives in the *-PLAN.md files.
 
+## 2026-11-17 (night, later): M1b B4-B5 — slot B marked, M1b complete
+
+- [V] B4: `systemctl reboot --reboot-argument=bootloader` reaches
+  fastboot in 6 s. Retry count after the first Linux boot: 7 -> 6; a
+  fastboot visit costs none; the next Linux boot came up unattended (SSH
+  at 15 s, `running`, no failed units).
+- [V] B5 (owner go; local exception to house rule 3, not covered by
+  upstream CONTRIBUTING §3.1): `tools/instantnoodlep-slot-b-mark` built
+  the four sectors from a fresh read (attributes 0x002f... -> 0x006f...;
+  1 byte per array sector, 8 per header). Pre-check disk == originals,
+  one-off `blockdev --setrw /dev/sde`, four `dd ... oflag=direct`
+  writes, `--setro`, all four read-backs match. A re-read of both copies
+  parses with valid CRCs and reads as already marked.
+- [V] After B5: `slot-successful:b: yes`, `slot-unbootable:b: no`,
+  `current-slot: b`, slot A unchanged. A further Linux boot left
+  `slot-retry-count:b` at 5, so ABL no longer counts down and will not
+  fall back to stock on its own.
+- From here: a broken `boot_b` means fastboot by `reboot bootloader` or
+  buttons, never a silent fallback. Every `boot_b` flash clears the mark
+  (Q/FastbootCmds.c:1024-1049), so B5 runs again after each kernel
+  install. The original sectors and the reads are kept privately in
+  `captures/2026-11-17/m1b/b5/`.
+- M1b is complete: Omarchy boots from slot B by default with the Arch root
+  on `userdata`. Open: display/touch (M3), network and time, the two
+  Qualcomm firstboot steps (keyring), pushing the device-package fixes
+  (0.0.2 usb0, 0.0.3 systemd-firstboot mask) into a rebuilt rootfs.
+
 ## 2026-11-17 (night): M1b B0-B4 — Omarchy boots from slot B
 
 - [V] B0: slot A active, both slots successful and bootable, unlocked.
