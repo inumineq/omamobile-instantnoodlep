@@ -140,10 +140,12 @@ adb shell getprop | grep -E 'ro\.build\.(fingerprint|display\.id|date\.utc|versi
 
 The device is end-of-life: no further OTAs will come [V scouting §1.1].
 The "final build" is the newest EEA build that Oxygen Updater offers for
-IN2023 [I: most likely `IN2023_13.1.0.587(EX01)` or `.586`, scouting
-§1.1]. Any successful A/B install, full or incremental, local or over the
-air, writes the **inactive** slot and makes it active [V AOSP A/B, scouting
-§2]. Decide from A3's slot and build:
+IN2023 [V 2026-11-16, stage-0 A3 on the owner's IN2023 and ticket #4 R2:
+`IN2023_13.1.0.591(EX01)`, build date 2025-10-11, offered by Oxygen
+Updater as a full zip; the older `.587`/`.586` guess is answered in
+scouting §1.1]. Any successful A/B install, full or incremental, local or
+over the air, writes the **inactive** slot and makes it active [V AOSP A/B,
+scouting §2]. Decide from A3's slot and build:
 
 - **(a) `_a` and on the final build:** nothing moves. Restore-assets R2
   downloads the full OTA of the running build. Go on to A4.
