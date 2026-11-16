@@ -159,7 +159,8 @@ air, writes the **inactive** slot and makes it active [V AOSP A/B, scouting
 - **(c) `_b`:** local-install the full zip of the final build. It writes
   `_a` and moves stock to A. If `_b` runs an older build, this is a normal
   upgrade. If `_b` already runs the final build, it is a same-version
-  install, and whether the Oplus updater accepts that is [I] (scouting §2).
+  install. [V 2026-11-16, owner's IN2023] The Oplus updater accepts it
+  (scouting §2).
 
 Both (b2) and (c) are writes by the stock updater, not by this runbook, so
 each one is the owner's decision. For either, download the final build's
@@ -244,8 +245,12 @@ grep -E 'current-slot|slot-(successful|unbootable|retry-count)|unlocked|secure|h
   `slot-successful: yes`, `slot-unbootable: no` and a retry count. Slot b
   values are recorded as they are (they are the baseline for the ticket
   "Slot-B bootable marking on Qualcomm: the named GPT-attribute
-  exception"). `has-slot:boot/dtbo/vbmeta: yes`; [I] no
-  `init_boot`/`vendor_boot` lines.
+  exception"). `has-slot:boot: yes`; `partition-type:` lines for
+  `boot_a/_b`, `dtbo_a/_b` and `vbmeta_a/_b`; no `init_boot`/`vendor_boot`
+  lines. [V 2026-11-16] This ABL prints `has-slot` only for `boot`,
+  `modem` and `system` (`no`), not for `dtbo`/`vbmeta`; the `_a`/`_b`
+  `partition-type` lines are what show those are slotted.
+  `version-bootloader` comes back empty on this ABL [V 2026-11-16].
 - **Stop:** `current-slot: b` (same reason as A3; see the A3b decision tree); `unlocked: yes` when you
   never unlocked; `getvar all` fails.
 - **Rollback:** n/a (read-only).
@@ -264,12 +269,49 @@ fastboot reboot
 - **Expect:** the phone shows fastbootd (a recovery-style screen);
   `is-userspace: yes`; `is-logical:system_a: yes` and friends (dynamic
   partitions inside `super`); `is-logical:userdata: no`. The last command
-  boots stock.
+  boots stock. [V 2026-11-16] fastbootd prints no `partition-size:super`
+  line; that is fine.
+- **Note:** `is-logical:<name>_a-cow: yes` lines are libsnapshot COW
+  partitions [V: AOSP `fs_mgr/libsnapshot/snapshot.cpp` `GetCowName`
+  appends `-cow`]. They mean this is a Virtual A/B device with an update
+  snapshot still present, which is expected right after an A3b install.
+  Not a stop here; B4 checks that the merge has finished.
 - **Stop:** `fastboot reboot fastboot` is rejected or the phone never shows
   fastbootd. Then restore path 1 is unproven: report it before phase C.
 - **Rollback:** if the phone sits in fastbootd: choose **only** "Reboot
   system now" with the volume keys and Power, or run `fastboot reboot`.
   Never choose a wipe or format entry from that menu.
+
+### B4. Snapshot merge finished (read-only; required before phase C)
+
+After any OTA or local install (A3b), Virtual A/B merges the update
+snapshot in the background after the first good boot. Until it finishes,
+the active slot still reads through the snapshot. Leave the phone booted
+in Android (on the charger, 15-30 min), then:
+
+```sh
+adb reboot fastboot
+fastboot getvar snapshot-update-status
+fastboot reboot
+```
+
+- **Expect:** `snapshot-update-status: none`. [V: AOSP
+  `fastboot/device/variables.cpp` `GetSnapshotUpdateStatus` returns
+  `snapshotted`, `merging` or `none` from the boot control HAL.]
+- **Stop:** `merging` or `snapshotted`: boot stock (`fastboot reboot`),
+  wait 30 min more and repeat. Still not `none` after a few hours: report
+  it and do nothing else. **Never** run `fastboot snapshot-update cancel`
+  or `fastboot snapshot-update merge`, and pick nothing from the fastbootd
+  menu except "Reboot system now".
+- **Why it gates C2:** AOSP fastbootd refuses to erase or flash
+  `userdata`, `metadata` or `misc` while the status is `snapshotted` or
+  `merging` [V: AOSP `fastboot/device/commands.cpp`
+  `IsProtectedPartitionDuringMerge`], because wiping them mid-merge can
+  leave the active slot unbootable. `fastboot oem unlock` runs in ABL, not
+  fastbootd, and wipes `userdata`; whether this ABL applies the same guard
+  is [I]. Do not rely on it.
+- **Rollback:** `fastboot reboot`. [I] A reboot during a merge is safe;
+  libsnapshot resumes the merge on the next boot.
 
 ### Gate G1 (owner decides, before phase C)
 
@@ -282,9 +324,11 @@ All must be true:
 2. Phases A and B are pasted back, and the coordinator has confirmed
    `current-slot: a`, `IN2023` and which A3b case applied.
 3. The Widevine security level is recorded (A5).
-4. Everything on the phone is backed up off the phone (photos, 2FA apps,
+4. B4 shows `snapshot-update-status: none`, checked after the last
+   install and on the same day as C2.
+5. Everything on the phone is backed up off the phone (photos, 2FA apps,
    Signal/WhatsApp backups, eSIM if any). **The unlock wipes everything.**
-5. [I] The owner accepts the side effects of an unlocked bootloader on
+6. [I] The owner accepts the side effects of an unlocked bootloader on
    stock Android: hardware-backed Play Integrity fails, so banking and
    ID apps (MitID, MobilePay) may refuse to run. Widevine may drop to L3
    (scouting §4). The orange-state warning shows at every boot.
@@ -596,7 +640,7 @@ you paste contains a match. Device-tree node names and aliases such as
 `serial@a90000` or `serial0 = &uart6` match the `serial` pattern but are
 not identifiers; values such as `androidboot.serialno=` or a
 `serial-number` property are. Paste D5 only after checking that every
-match in it is a node name. Paste the filtered outputs from A3, B2, B3, C3,
+match in it is a node name. Paste the filtered outputs from A3, B2, B3, B4, C3,
 D5, `luns.txt`, `pci-root.txt`, `ufs-luns.txt` (paths and numbers only),
 `bootloader-ab.txt` and the A5 Widevine level. Do **not** paste
 `live.dts`, `dmesg`, `getvar-all*.txt`, `getprop-all.txt`, any `.bin` file

@@ -4,6 +4,42 @@
 Newest first. Findings that matter beyond one subsystem go here; subsystem
 detail lives in the *-PLAN.md files.
 
+## 2026-11-16: stage 0 phases A-B, stock moved to slot A
+
+- [V] A3b case (c) applied and worked. Stock ran
+  `IN2023_13.1.0.591(EX01)` from `_b`; the owner local-installed the same
+  `.591` full zip, and the A3 rerun shows `ro.boot.slot_suffix` = `_a`,
+  the same fingerprint, `flash.locked` = `1`, `green`. **The Oplus updater
+  accepts a same-version full zip**, so `a3b-contingency.md` is no longer
+  needed.
+- [V] B2 (ABL fastboot, locked): `current-slot:a`, `unlocked:no`,
+  `secure:yes`. Slot flags: a and b both `successful:yes`,
+  `unbootable:no`, `retry-count:6`. Slot b is still marked good after
+  stock left it; that is the baseline for the ticket "Slot-B bootable
+  marking on Qualcomm: the named GPT-attribute exception".
+- [V] No `init_boot` or `vendor_boot` partitions. `boot`, `dtbo`,
+  `vbmeta`, `vbmeta_system` are raw and slotted (`_a`/`_b`
+  `partition-type` lines). This ABL reports `has-slot` only for `boot`,
+  `modem` and `system` (`no`). `version-bootloader` is empty.
+  `max-download-size` is 805306368 (768 MiB).
+- [V] B3: fastbootd is reachable (`is-userspace: yes`), so restore path 1
+  is proven. `super-partition-name:super`. Logical partitions in `super`:
+  `system`, `system_ext`, `vendor`, `product`, `odm` and ten `my_*`
+  (Oplus) partitions, all `_a` in the current-slot metadata.
+  `userdata` is not logical and is 0x36F3453000 bytes (about 236 GB).
+- [V] **Virtual A/B.** Every logical partition had an `_a-cow` twin right
+  after the install, meaning an update snapshot was still present. [I]
+  The background merge had not finished. AOSP fastbootd refuses to erase
+  `userdata`/`metadata`/`misc` mid-merge; whether ABL's `oem unlock` does
+  is unknown, so the runbook now has B4 (`snapshot-update-status: none`)
+  as a hard gate before C2. Pending: the owner's B4 result.
+- Consequence for later milestones [I]: `super` is Virtual A/B, so a
+  future stock OTA would use snapshots too. The port never writes `super`
+  (AGENTS.md rule 3), so nothing changes in the safety model, but the
+  M1b `--set-active` step must also be preceded by a `none` merge status
+  (AOSP fastbootd refuses slot changes while `merging` [V: AOSP
+  `fastboot/device/commands.cpp` `SetActiveHandler`]).
+
 ## 2026-11-15 (late): M1 split, RAM-only plan
 
 - The owner chose to split M1 on the wayfinder map. **M1a** is a RAM-only

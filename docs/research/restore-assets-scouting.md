@@ -199,6 +199,12 @@ Findings:
   guides suggest it does (they offer the same build for local install), but
   it must be tested. If the phone is one build behind, the official OTA
   flips slots by itself.
+- [V, stage-0 on the owner's IN2023, 2026-11-16] **The Oplus updater
+  accepts a same-version full zip.** A local install of the `.591` full
+  zip while stock ran `.591` from `_b` booted with `ro.boot.slot_suffix`
+  = `_a`, the same fingerprint, still locked and `green`. The phone is
+  Virtual A/B: the install left `*_a-cow` snapshot partitions in `super`
+  that must merge before any wipe (STAGE-0-RUNBOOK B4).
 - [I] A downgrade via local install is normally refused by the Oplus
   updater (rollback packages are special "rollback" builds that wipe data).
   Do not use a rollback package for slot moving.
