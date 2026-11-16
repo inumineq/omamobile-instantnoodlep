@@ -1,0 +1,158 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Build the four GPT sectors that mark slot B successful on instantnoodlep.
+
+BRINGUP-M1b-PLAN 5/B5. Input: two private reads of the boot LUN (`sde`,
+4096-byte sectors), LBA 0-7 and the last 8 LBAs. Output: the four changed
+sectors (primary header, primary array sector holding `boot_b`, backup
+array sector, backup header), each as its own file, plus a manifest.
+
+It changes exactly one bit (54, successful) of `boot_b`'s attributes in
+both copies and the two CRCs per header, and refuses anything else: a
+different layout, bad CRCs before, an entry that is not `boot_b`, slot B
+already marked, unbootable set, or a diff outside those four sectors.
+It never touches the phone; the write is a runbook step.
+"""
+import argparse
+import hashlib
+import json
+import struct
+import sys
+import zlib
+from pathlib import Path
+
+SECTOR = 4096
+LAST_LBA = 655359
+WINDOW = 8
+BOOT_B = "boot_b"
+BOOT_B_INDEX = 34
+SUCCESS_BIT = 54
+UNBOOTABLE_BIT = 55
+ATTR_OFFSET = 48
+HEADER = struct.Struct("<8sIIIIQQQQ16sQIII")
+
+
+class MarkError(Exception):
+    """The input is not the layout this tool was written for."""
+
+
+def parse_header(sector):
+    fields = HEADER.unpack_from(sector, 0)
+    names = ("sig", "rev", "size", "crc", "res", "cur", "bak", "first",
+             "last", "guid", "entries", "count", "esize", "ecrc")
+    header = dict(zip(names, fields))
+    if header["sig"] != b"EFI PART" or header["size"] != 92:
+        raise MarkError("not a GPT header")
+    raw = bytearray(sector[:92])
+    raw[16:20] = b"\0\0\0\0"
+    if zlib.crc32(raw) != header["crc"]:
+        raise MarkError(f"header CRC wrong at LBA {header['cur']}")
+    return header
+
+
+def entry_location(header):
+    index_bytes = BOOT_B_INDEX * header["esize"]
+    return header["entries"] + index_bytes // SECTOR, index_bytes % SECTOR
+
+
+def mark_copy(window, base_lba, header_lba):
+    """Return (new window, changed LBAs) for one GPT copy."""
+    window = bytearray(window)
+    off = (header_lba - base_lba) * SECTOR
+    header = parse_header(window[off:off + SECTOR])
+    if header["cur"] != header_lba:
+        raise MarkError(f"header at LBA {header_lba} says it is at {header['cur']}")
+    if header["esize"] != 128 or header["count"] * 128 % SECTOR:
+        raise MarkError("unexpected entry size or count")
+    start = (header["entries"] - base_lba) * SECTOR
+    length = header["count"] * header["esize"]
+    if start < 0 or start + length > len(window):
+        raise MarkError("entry array is outside the read window")
+    array = window[start:start + length]
+    if zlib.crc32(array) != header["ecrc"]:
+        raise MarkError(f"entry array CRC wrong for the copy at LBA {header_lba}")
+    entry = array[BOOT_B_INDEX * 128:(BOOT_B_INDEX + 1) * 128]
+    name = entry[56:128].decode("utf-16le").rstrip("\0")
+    if name != BOOT_B:
+        raise MarkError(f"entry {BOOT_B_INDEX} is {name!r}, not {BOOT_B}")
+    (attrs,) = struct.unpack_from("<Q", entry, ATTR_OFFSET)
+    if attrs >> UNBOOTABLE_BIT & 1:
+        raise MarkError("boot_b is marked unbootable; fix that first")
+    if attrs >> SUCCESS_BIT & 1:
+        raise MarkError("boot_b is already marked successful")
+    struct.pack_into("<Q", array, BOOT_B_INDEX * 128 + ATTR_OFFSET,
+                     attrs | 1 << SUCCESS_BIT)
+    window[start:start + length] = array
+    header_raw = bytearray(window[off:off + 92])
+    struct.pack_into("<I", header_raw, 88, zlib.crc32(array))
+    header_raw[16:20] = b"\0\0\0\0"
+    struct.pack_into("<I", header_raw, 16, zlib.crc32(header_raw))
+    window[off:off + 92] = header_raw
+    entry_lba, _ = entry_location(header)
+    return bytes(window), sorted({header_lba, entry_lba}), attrs
+
+
+def changed_lbas(old, new, base_lba):
+    return [base_lba + i for i in range(len(old) // SECTOR)
+            if old[i * SECTOR:(i + 1) * SECTOR] != new[i * SECTOR:(i + 1) * SECTOR]]
+
+
+def build(primary, backup, out):
+    if len(primary) != WINDOW * SECTOR or len(backup) != WINDOW * SECTOR:
+        raise MarkError(f"each read must be exactly {WINDOW} sectors")
+    backup_base = LAST_LBA - WINDOW + 1
+    new_p, want_p, attrs_p = mark_copy(primary, 0, 1)
+    new_b, want_b, attrs_b = mark_copy(backup, backup_base, LAST_LBA)
+    if attrs_p != attrs_b:
+        raise MarkError("the two copies disagree on boot_b's attributes")
+    got = changed_lbas(primary, new_p, 0) + changed_lbas(backup, new_b, backup_base)
+    want = want_p + want_b
+    if got != want or len(got) != 4:
+        raise MarkError(f"changed sectors {got}, expected exactly {want}")
+    for window, base in ((new_p, 0), (new_b, backup_base)):
+        header_lba = 1 if base == 0 else LAST_LBA
+        o = (header_lba - base) * SECTOR
+        h = parse_header(window[o:o + SECTOR])
+        s = (h["entries"] - base) * SECTOR
+        if zlib.crc32(window[s:s + h["count"] * 128]) != h["ecrc"]:
+            raise MarkError("rebuilt array CRC does not check")
+    out.mkdir(parents=True, exist_ok=True)
+    sectors = []
+    for lba in got:
+        window, base = (new_p, 0) if lba < backup_base else (new_b, backup_base)
+        data = window[(lba - base) * SECTOR:(lba - base + 1) * SECTOR]
+        path = out / f"sde-lba{lba}.bin"
+        path.write_bytes(data)
+        sectors.append({"lba": lba, "file": path.name,
+                        "sha256": hashlib.sha256(data).hexdigest()})
+    manifest = {
+        "device": "instantnoodlep", "lun": "sde", "sector": SECTOR,
+        "entry": {"name": BOOT_B, "index": BOOT_B_INDEX},
+        "attributes_before": f"{attrs_p:#018x}",
+        "attributes_after": f"{attrs_p | 1 << SUCCESS_BIT:#018x}",
+        "sectors": sectors,
+    }
+    (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    return manifest
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--primary", type=Path, required=True,
+                        help="read of sde LBA 0-7")
+    parser.add_argument("--backup", type=Path, required=True,
+                        help=f"read of sde LBA {LAST_LBA - WINDOW + 1}-{LAST_LBA}")
+    parser.add_argument("--out", type=Path, required=True)
+    args = parser.parse_args(argv)
+    try:
+        manifest = build(args.primary.read_bytes(), args.backup.read_bytes(), args.out)
+    except (MarkError, OSError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    print(json.dumps(manifest, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
