@@ -246,6 +246,11 @@ the R1-R6 steps of `docs/runbooks/RESTORE-ASSETS.md`.
   [Q/PartitionTableUpdate.c:194-199,258-260]. [I] With
   `slot-unbootable:a = no`, OnePlus's ABL should write nothing. Step P5
   makes that a precondition, and R5 compares the slot flags afterwards.
+- [V 2026-11-16] Exception: when `LoadImageAndAuth` fails during a
+  `fastboot boot`, ABL marks the active slot unbootable, makes the other
+  slot active and cold-resets [Q/VerifiedBoot.c:1508-1515]. Seen on the
+  phone after a second RAM boot in one fastboot session. Rule: cold-reboot
+  to the bootloader between RAM boots (NOTES 2026-11-16 afternoon).
 
 ### 5.5 Initramfs, storage guard and watchdog
 
