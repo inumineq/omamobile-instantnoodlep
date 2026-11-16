@@ -46,8 +46,11 @@ named with each. Never run a block with a `{{...}}` still in it.
   (RESTORE-ASSETS R4). Filled before P2.
 - `{{UFDT_APPLY_OVERLAY}}` — libufdt's `ufdt_apply_overlay`, from the
   laptop tools setup (RESTORE-ASSETS R4). Filled before P3.
-- `{{DTBO_ENTRY}}` — the board-id-8 entry blob from the P3 dump. Filled
-  in P3.
+- `{{DTBO_ENTRY}}` — the stock dtbo entry ABL picks on this board:
+  entry 16 ("kona MTP 19811", `qcom,board-id = <0x10008 0>`), because
+  stock boots with `ro.boot.dtbo_idx = 16` (stage-0 A3) and `Q/` picks the
+  entry from board data only, not from our DTB [V: Q/LocateDeviceTree.c
+  `GetBoardDtb`]. Filled 2026-11-16; result in NOTES.md.
 - `{{BOOT2_IMG}}` — path of the boot-2 image (UFS on). Filled by the
   build at the top of R4.
 - `{{M1_BACKUP_DIR}}` — a directory outside the repo for the R6 backups.

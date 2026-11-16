@@ -421,6 +421,11 @@ phone proves.
 
 ## 9. Results
 
-(none yet; append with dates and the kernel release that produced them)
+- 2026-11-16, P3 (offline): the stock overlay (dtbo entry 16, picked by
+  board data, `ro.boot.dtbo_idx = 16`) cannot apply to the probe DTB; `Q/`
+  then refuses the boot. Predicted R1 result: outcome (a). The stub
+  variant would graft 60 fragments onto real nodes; the exact-match
+  variant needs socinfo (STAGE-0 A6), not the live DT. Details: NOTES.md
+  2026-11-16 (morning).
 
 Open questions: the [I] items above, tracked in docs/STAGE-0.md section 5.
