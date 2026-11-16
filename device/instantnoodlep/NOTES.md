@@ -4,6 +4,44 @@
 Newest first. Findings that matter beyond one subsystem go here; subsystem
 detail lives in the *-PLAN.md files.
 
+## 2026-11-17 (night): M1b B0-B4 — Omarchy boots from slot B
+
+- [V] B0: slot A active, both slots successful and bootable, unlocked.
+- [V] B1: the `boot_b` image (tethered image + PON `mode-bootloader = 2`,
+  `mode-recovery = 1` + `systemd.debug_shell=ttyGS0`, PR #50) RAM-booted.
+  `reboot(2)` with RESTART2 "bootloader" from the initramfs reached
+  fastboot in about 4 s without passing through stock. So the PON magic
+  0x2 is this ABL's fastboot mode.
+- [V] B2 (owner go): `flash boot_b`, `flash userdata`, `set_active b` in
+  one session, all OKAY. Flashing `boot_b` cleared
+  `slot-successful:b` (yes -> no) as Q/ predicts. With threaded flashing,
+  `set_active` does not wait for the userdata thread (only erase and
+  reboot do, Q/FastbootCmds.c:2001,3423-3432), so we waited 3 min before
+  it. Read-back: `current-slot: b`, b not successful, bootable, retry 7;
+  slot A unchanged.
+- [V] B3: `fastboot reboot` booted Linux from flash; the initramfs handed
+  over to Arch on `sda23` and the panel showed a console. Boot then
+  stopped at `systemd-firstboot`'s console prompt (locale, timezone, root
+  password), which is Before=sysinit and needs a keyboard. That is also
+  why T4's Arch never started sshd. Masked from the debug shell on
+  `/dev/ttyACM0`; the boot went on (sshd, networkd, usb0 172.16.42.1).
+  dodge masks it in its device package for the same reason; ours does
+  from 0.0.3.
+- [V] Arch: PID 1 systemd, K2, root ext4 rw (the initramfs grew it to
+  217 GiB), `RuntimeWatchdogUSec=20s`, about 10 GiB RAM free, SDDM active.
+- [V] B4: firstboot ran from `/etc/omamobile/firstboot.conf`, written over
+  SSH by a laptop script that hashes the password locally (no secret in
+  any image or on the laptop). It created the user, set hostname and
+  timezone, deleted the conf. Three Omarchy steps failed: `vulkan.sh` (no
+  GPU driver yet) and two `hardware/qualcomm/*` steps that run pacman,
+  because the phone's keyring lacks the local build key and there is no
+  network. The RTC reads 2026-10-26 (no time sync yet).
+- Host: a udev rule (`TAG+="uaccess"` for `1d6b:0104`) gives the owner
+  `/dev/ttyACM0` across reconnects.
+- Slot B now runs on retries (started at 7; one boot used). Next: settle
+  with one planned reboot (`reboot bootloader` path), then decide B5, the
+  GPT success mark.
+
 ## 2026-11-16 (night): M2 T3/T4 — a stock boot erases the Arch root
 
 - [V] T3 done on the owner's go: the personalized rootfs copy (only public
