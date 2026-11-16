@@ -274,11 +274,13 @@ ssh root@172.16.42.1 'dmesg | grep ufs-ro'
 ssh root@172.16.42.1 'ls /dev/sda'
 ```
 
-- **Expect:** every disk and every partition reads `ro=1`; `/dev/sda` is
+- **Expect:** every partition and every disk except `sda` reads `ro=1`;
+  `/sys/block/sda/ro` reads 0 by design, because the guard deletes the
+  `/dev/sda` node instead (partitions are guarded one by one); `/dev/sda` is
   absent (the guard removed the main LUN's whole-disk node, plan goal 3);
   the init logs "no allowlist ... every partition read-only"; no UFS
   errors in dmesg.
-- **Stop:** any `ro=0`; `/dev/sda` present and writable; UFS errors.
+- **Stop:** any `ro=0` other than `/sys/block/sda/ro`; `/dev/sda` present and writable; UFS errors.
 - **Rollback:** `ssh root@172.16.42.1 'reboot -f'`, or the R1 rollback if
   hung. Stock boots from slot A.
 
