@@ -23,7 +23,9 @@ initramfs never contains /etc/omamobile-ufs-rw, so there is no write allowlist.
 
 The 64 MiB image cap is [I], a conservative limit until stage 0 records the
 IN2023 boot partition size. It is not a measured device limit. The separate
-kernel/DTB overlap check follows device/instantnoodlep/BRINGUP-M1-PLAN.md 5.2.
+kernel/DTB size check follows the ABL load model in
+docs/research/abl-kernel-size.md (Q/ BootLinux.c) and
+device/instantnoodlep/BRINGUP-M1-PLAN.md 5.2.
 For OUT.img, the other outputs are OUT.probe.dtb, OUT.initramfs.cpio.gz,
 OUT.manifest.json and OUT.SHA256SUMS. Existing outputs are never overwritten.
 The last stdout line is a RAM-boot command template; this tool never runs it.
@@ -54,8 +56,18 @@ CMDLINE = ("console=tty0 panic=10 omamobile.initramfs clk_ignore_unused "
            "pd_ignore_unused printk.devkmsg=on")
 BOOT_IMAGE_MAX = 64 * 1024 * 1024
 SIZE_LIMIT_EVIDENCE = "[I] conservative cap; IN2023 boot partition size is not measured"
-# Q's ABL layout leaves this gap below the ramdisk for its DTB placement.
+# Q's ABL places the DTB 2 MiB + one page below the ramdisk (DT_SIZE_2MB +
+# page, Q/BootLinux.c:207-209) and rejects a larger post-overlay DTB
+# (Q/BootLinux.c:400-405).
 DTB_LOAD_GAP = 2 * 1024 * 1024 + PAGE
+# Q's ABL never reads the header's addr fields; it computes load addresses
+# from the reserved kernel region (Q/BootLinux.c:141-217,876-879) with PCD
+# defaults KernelLoadAddress 0x00080000 and RamdiskEndAddress 0x05600000
+# (QcomModulePkg.dec:157,160). OnePlus's fork values are [I], but the
+# community 7.2.0 kernel (49,020,928 bytes decompressed) boots, so its
+# region is far above the old 16 MiB header gap. See
+# docs/research/abl-kernel-size.md.
+KERNEL_REGION = 0x05600000 - 0x00080000
 USB_NODE = "/soc@0/usb@a6f8800/usb@a600000"
 UFS_NODE = "/soc@0/ufshc@1d84000"
 COMPATIBLE = ["oneplus,instantnoodlep", "qcom,sm8250"]
@@ -287,15 +299,37 @@ def padded(size):
     return (size + PAGE - 1) // PAGE * PAGE
 
 
-def check_image_sizes(kernel_size, ramdisk_size, dtb_size):
+def kernel_image_size(path):
+    """Payload bytes ABL will hold at the kernel load address.
+
+    Q/ decompresses a gzip kernel at KernelLoadAddr into the region below
+    the DTB slot (Q/BootLinux.c:652-671) and checks the decompressed image
+    size against that region (Q/BootLinux.c:720-726), so the guard must
+    measure the decompressed size, not the compressed file.
+    """
+    with path.open("rb") as stream:
+        is_gzip = stream.read(2) == b"\x1f\x8b"
+    if is_gzip:
+        return len(run(["gzip", "-dc", path]))
+    return path.stat().st_size
+
+
+def check_image_sizes(kernel_size, ramdisk_size, dtb_size, kernel_image=None):
     if kernel_size <= 0 or ramdisk_size <= 0 or dtb_size <= 0:
         raise BuildError("kernel, initramfs and DTB must all be non-empty")
-    used = kernel_size + dtb_size + DTB_LOAD_GAP
-    room = RAMDISK_OFF - KERNEL_OFF
-    if used > room:
+    if kernel_image is None:
+        kernel_image = kernel_size
+    if dtb_size > DTB_LOAD_GAP:
         raise BuildError(
-            f"kernel+DTB+load gap is {used} bytes; only {room} fit before "
-            "the ramdisk (plan 5.2 overlap guard)")
+            f"DTB is {dtb_size} bytes; ABL reserves only {DTB_LOAD_GAP} "
+            "(2 MiB + one page) below the ramdisk for it "
+            "(Q/BootLinux.c:207-209,400-405)")
+    used = kernel_image + padded(ramdisk_size + PAGE) + DTB_LOAD_GAP
+    if used > KERNEL_REGION:
+        raise BuildError(
+            f"decompressed kernel+initramfs+DTB gap is {used} bytes; the "
+            f"reserved kernel region holds only {KERNEL_REGION} "
+            "(Q/BootLinux.c:200-215; docs/research/abl-kernel-size.md)")
     image_size = PAGE + padded(kernel_size) + padded(ramdisk_size) + padded(dtb_size)
     if image_size > BOOT_IMAGE_MAX:
         raise BuildError(
@@ -390,7 +424,8 @@ def read_back_boot(boot, mkbootimg, kernel, ramdisk, dtb, work):
         if not extracted.is_file() or sha256(extracted) != sha256(source):
             raise BuildError(f"read-back {name} payload differs from the input")
     if boot.stat().st_size != check_image_sizes(
-            kernel.stat().st_size, ramdisk.stat().st_size, dtb.stat().st_size):
+            kernel.stat().st_size, ramdisk.stat().st_size, dtb.stat().st_size,
+            kernel_image_size(kernel)):
         raise BuildError("read-back image size disagrees with its page layout")
     assert_no_allowlist(out / "ramdisk")
     return info, out
@@ -448,7 +483,7 @@ def build(args):
                         staged["ramdisk"], work)
         expected_size = check_image_sizes(
             args.kernel.stat().st_size, staged["ramdisk"].stat().st_size,
-            staged["dtb"].stat().st_size)
+            staged["dtb"].stat().st_size, kernel_image_size(args.kernel))
         pack_boot(args.mkbootimg, args.kernel, staged["ramdisk"],
                   staged["dtb"], staged["boot"])
         if staged["boot"].stat().st_size != expected_size:

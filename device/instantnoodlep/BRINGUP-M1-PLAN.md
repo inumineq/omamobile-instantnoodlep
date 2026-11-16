@@ -179,6 +179,7 @@ the R1-R6 steps of `docs/runbooks/RESTORE-ASSETS.md`.
   load/authenticate boot image" [U/tools/dipper/build-boot.py:17-37]. [I]
   So: keep the kernel lean and the initramfs small, record both sizes, and
   treat that error as "too big" before anything else.
+- Note (2026-11-16, [docs/research/abl-kernel-size.md](../../docs/research/abl-kernel-size.md)): in `Q/` the header offsets are file-layout fields, not load addresses, and the kernel-size check is on the decompressed image against the reserved region [Q/BootLinux.c:200-215,652-671,720-726], so the builder's guard now checks that quantity (and the DTB's own 2 MiB + page slot), not the 16 MiB header gap.
 - Cmdline (in the header): `console=tty0 panic=10 omamobile.initramfs
   clk_ignore_unused pd_ignore_unused printk.devkmsg=on`. `clk_ignore_unused`
   and `pd_ignore_unused` [V: PM/kernel-cmdline.conf]. `omamobile.initramfs`
