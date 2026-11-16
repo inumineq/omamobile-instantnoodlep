@@ -28,6 +28,12 @@ touches a real node. Verified on the phone 2026-11-16 (NOTES).
 --ufdt-apply optionally names AOSP libufdt's ufdt_apply_overlay to check
 offline that the overlay applies.
 
+--root userdata (STORAGE-M2-PLAN 3a, tethered M2; needs --boot 2) drops
+omamobile.initramfs from the command line so the shared init hands over to
+Arch on userdata, packs /etc/omamobile-ufs-rw = userdata and
+/etc/omamobile-root-label = omamobile-root, and adds systemd.watchdog_sec=20.
+It is still a RAM boot; the tool never writes the phone.
+
 --boot 1 disables the UFS host. --boot 2 enables it. Both disable every
 remoteproc node and force USB peripheral mode without a role switch. The
 initramfs never contains /etc/omamobile-ufs-rw, so there is no write allowlist.
@@ -65,6 +71,13 @@ DTB_OFF = 0x01F00000
 HEADER_VERSION = 2
 CMDLINE = ("console=tty0 panic=10 omamobile.initramfs clk_ignore_unused "
            "pd_ignore_unused printk.devkmsg=on")
+# --root userdata (STORAGE-M2-PLAN 3a, tethered M2): no omamobile.initramfs,
+# so the shared init hands over to Arch on userdata; systemd must take over
+# the hardware watchdog the busybox feeder armed (30 s) once it is killed.
+ROOT_CMDLINE = ("console=tty0 panic=10 clk_ignore_unused pd_ignore_unused "
+                "printk.devkmsg=on systemd.watchdog_sec=20")
+ROOT_ALLOWLIST = "userdata"
+ROOT_LABEL = "omamobile-root"
 BOOT_IMAGE_MAX = 64 * 1024 * 1024
 SIZE_LIMIT_EVIDENCE = "[I] conservative cap; IN2023 boot partition size is not measured"
 # Q's ABL places the DTB 2 MiB + one page below the ramdisk (DT_SIZE_2MB +
@@ -199,7 +212,36 @@ def assert_no_allowlist(ramdisk):
         raise BuildError("write allowlist /etc/omamobile-ufs-rw is present in the written initramfs")
 
 
-def build_initramfs(rootfs, shared_init, key, output, work):
+def cpio_file(ramdisk, name):
+    import gzip
+    archive = gzip.decompress(ramdisk.read_bytes())
+    for pattern in (name, "./" + name):
+        data = run(["cpio", "-i", "--to-stdout", "--quiet", pattern],
+                   data=archive)
+        if data:
+            return data
+    raise BuildError(f"/{name} is missing or empty in the initramfs")
+
+
+def assert_allowlist(ramdisk, root):
+    """--root none: no allowlist at all. --root userdata: exactly userdata."""
+    if root == "none":
+        assert_no_allowlist(ramdisk)
+        return
+    names = cpio_names(ramdisk)
+    if ALLOWLIST not in names:
+        raise BuildError("--root userdata image lacks /etc/omamobile-ufs-rw")
+    if cpio_file(ramdisk, ALLOWLIST).decode().split() != [ROOT_ALLOWLIST]:
+        raise BuildError("allowlist must be exactly 'userdata'")
+    if cpio_file(ramdisk, "etc/omamobile-root-label").decode().strip() != ROOT_LABEL:
+        raise BuildError("root-label policy must be omamobile-root")
+    for extra in ("etc/omamobile-ufs-rw-luns", "etc/omamobile-root-mode",
+                  "etc/omamobile-nfsroot"):
+        if extra in names:
+            raise BuildError(f"--root userdata image must not contain /{extra}")
+
+
+def build_initramfs(rootfs, shared_init, key, output, work, root="none"):
     stage = work / "rootfs"
     shutil.copytree(rootfs, stage, symlinks=True)
     (stage / "proc").mkdir(exist_ok=True)
@@ -218,15 +260,20 @@ def build_initramfs(rootfs, shared_init, key, output, work):
     # survive from the prepared root. omamobile.initramfs also blocks handoff.
     for name in ("omamobile-ufs-rw", "omamobile-ufs-rw-luns",
                  "omamobile-nfsroot", "omamobile-simplefb-trig",
-                 "omamobile-bringup-probe"):
+                 "omamobile-bringup-probe", "omamobile-root-label",
+                 "omamobile-root-mode"):
         remove_file(etc / name)
+    if root == "userdata":
+        (etc / "omamobile-ufs-rw").write_text(ROOT_ALLOWLIST + "\n")
+        (etc / "omamobile-root-label").write_text(ROOT_LABEL + "\n")
     (etc / "omamobile-compatible").write_text(COMPATIBLE[0] + "\n")
     (etc / "omamobile-usb-product").write_text(
-        "OnePlus 8 Pro RAM-only probe\n")
+        "OnePlus 8 Pro RAM-only probe\n" if root == "none"
+        else "OnePlus 8 Pro tethered Omarchy Mobile\n")
     (stage / "init").write_text(patch_init(shared_init.read_text()))
     (stage / "init").chmod(0o755)
     pack_rootfs(stage, output)
-    assert_no_allowlist(output)
+    assert_allowlist(output, root)
 
 
 def fdt_get(dtb, node, prop, kind="s"):
@@ -446,7 +493,7 @@ def check_image_sizes(kernel_size, ramdisk_size, dtb_size, kernel_image=None):
     return image_size
 
 
-def pack_boot(mkbootimg, kernel, ramdisk, dtb, output):
+def pack_boot(mkbootimg, kernel, ramdisk, dtb, output, cmdline=CMDLINE):
     run([
         sys.executable, mkbootimg,
         "--header_version", HEADER_VERSION,
@@ -460,7 +507,7 @@ def pack_boot(mkbootimg, kernel, ramdisk, dtb, output):
         "--kernel", kernel,
         "--ramdisk", ramdisk,
         "--dtb", dtb,
-        "--cmdline", CMDLINE,
+        "--cmdline", cmdline,
         "--output", output,
     ])
 
@@ -482,7 +529,7 @@ def info_int(info, key):
         raise BuildError(f"unpack_bootimg info has no numeric {key}") from error
 
 
-def assert_boot_info(info, kernel_size, ramdisk_size, dtb_size):
+def assert_boot_info(info, kernel_size, ramdisk_size, dtb_size, cmdline=CMDLINE):
     expected_ints = {
         "kernel_size": kernel_size,
         "kernel load address": BASE + KERNEL_OFF,
@@ -505,7 +552,7 @@ def assert_boot_info(info, kernel_size, ramdisk_size, dtb_size):
                 f"read-back header disagrees for {key}: {actual}, expected {expected}")
     expected_strings = {
         "boot magic": "ANDROID!",
-        "command line args": CMDLINE,
+        "command line args": cmdline,
         "additional command line args": "",
         "recovery dtbo offset": "0x0000000000000000",
     }
@@ -515,7 +562,7 @@ def assert_boot_info(info, kernel_size, ramdisk_size, dtb_size):
                 f"read-back header disagrees for {key}: {info.get(key)!r}")
 
 
-def read_back_boot(boot, mkbootimg, kernel, ramdisk, dtb, work):
+def read_back_boot(boot, mkbootimg, kernel, ramdisk, dtb, work, root="none"):
     unpack = mkbootimg.with_name("unpack_bootimg.py")
     if not unpack.is_file():
         raise BuildError(f"missing sibling AOSP tool: {unpack}")
@@ -526,7 +573,8 @@ def read_back_boot(boot, mkbootimg, kernel, ramdisk, dtb, work):
     ]).decode("utf-8", "replace")
     info = parse_boot_info(text)
     assert_boot_info(info, kernel.stat().st_size,
-                     ramdisk.stat().st_size, dtb.stat().st_size)
+                     ramdisk.stat().st_size, dtb.stat().st_size,
+                     ROOT_CMDLINE if root == "userdata" else CMDLINE)
     for name, source in (("kernel", kernel), ("ramdisk", ramdisk), ("dtb", dtb)):
         extracted = out / name
         if not extracted.is_file() or sha256(extracted) != sha256(source):
@@ -535,7 +583,7 @@ def read_back_boot(boot, mkbootimg, kernel, ramdisk, dtb, work):
             kernel.stat().st_size, ramdisk.stat().st_size, dtb.stat().st_size,
             kernel_image_size(kernel)):
         raise BuildError("read-back image size disagrees with its page layout")
-    assert_no_allowlist(out / "ramdisk")
+    assert_allowlist(out / "ramdisk", root)
     return info, out
 
 
@@ -553,6 +601,10 @@ def artifact_paths(out):
 def build(args):
     if args.boot not in (1, 2):
         raise BuildError("--boot must be 1 (UFS disabled) or 2 (UFS enabled)")
+    if args.root not in ("none", "userdata"):
+        raise BuildError("--root must be none or userdata")
+    if args.root == "userdata" and args.boot != 2:
+        raise BuildError("--root userdata needs --boot 2 (UFS enabled)")
     paths = artifact_paths(args.out.absolute())
     for path in paths.values():
         if path.exists() or path.is_symlink():
@@ -572,8 +624,15 @@ def build(args):
         raise BuildError(f"shared init not found: {shared_init}")
     if not args.initramfs_root.is_dir():
         raise BuildError("--initramfs-root must name a prepared root directory")
-    for relative in ("bin/busybox", "usr/sbin/dropbear"):
-        if not (args.initramfs_root / relative).exists():
+    needed = ["bin/busybox", "usr/sbin/dropbear"]
+    if args.root == "userdata":
+        needed += ["e2fsck", "dumpe2fs", "resize2fs"]
+    for relative in needed:
+        if "/" not in relative:
+            if not any((args.initramfs_root / d / relative).exists()
+                       for d in ("sbin", "usr/sbin", "bin", "usr/bin")):
+                raise BuildError(f"initramfs root lacks {relative}")
+        elif not (args.initramfs_root / relative).exists():
             raise BuildError(f"initramfs root lacks {relative}")
     for tool in ("bash", "cpio", "fdtget", "fdtput", "find", "gzip", "sort"):
         if shutil.which(tool) is None:
@@ -595,17 +654,18 @@ def build(args):
             check_overlay_applies(args.ufdt_apply, staged["dtb"],
                                   args.stock_overlay, work)
         build_initramfs(args.initramfs_root, shared_init, args.ssh_key,
-                        staged["ramdisk"], work)
+                        staged["ramdisk"], work, args.root)
         expected_size = check_image_sizes(
             args.kernel.stat().st_size, staged["ramdisk"].stat().st_size,
             staged["dtb"].stat().st_size, kernel_image_size(args.kernel))
         pack_boot(args.mkbootimg, args.kernel, staged["ramdisk"],
-                  staged["dtb"], staged["boot"])
+                  staged["dtb"], staged["boot"],
+                  ROOT_CMDLINE if args.root == "userdata" else CMDLINE)
         if staged["boot"].stat().st_size != expected_size:
             raise BuildError("mkbootimg output has an unexpected size")
         info, unpacked = read_back_boot(
             staged["boot"], args.mkbootimg, args.kernel,
-            staged["ramdisk"], staged["dtb"], work)
+            staged["ramdisk"], staged["dtb"], work, args.root)
         verify_probe_dtb(unpacked / "dtb", args.boot, labels)
 
         outputs = {}
@@ -618,6 +678,7 @@ def build(args):
         manifest = {
             "device": "instantnoodlep",
             "boot": args.boot,
+            "root": args.root,
             "header": info,
             "boot_image_limit": {
                 "bytes": BOOT_IMAGE_MAX,
@@ -665,6 +726,9 @@ def main(argv=None):
                         help="optional libufdt ufdt_apply_overlay for an offline apply check")
     parser.add_argument("--boot", type=int, required=True,
                         help="1 disables UFS; 2 enables UFS")
+    parser.add_argument("--root", default="none",
+                        help="none (RAM probe) or userdata: tethered M2, hand over "
+                             "to Arch on userdata with an allowlist of userdata only")
     parser.add_argument("--out", type=Path, required=True,
                         help="new boot.img path; sibling artifacts derive from its name")
     args = parser.parse_args(argv)

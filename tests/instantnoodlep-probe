@@ -69,6 +69,9 @@ def make_rootfs(parent):
     (root / "etc").mkdir(parents=True)
     (root / "bin/busybox").write_text("synthetic aarch64 BusyBox\n")
     (root / "usr/sbin/dropbear").write_text("synthetic aarch64 Dropbear\n")
+    (root / "sbin").mkdir(exist_ok=True)
+    for tool in ("sbin/e2fsck", "usr/sbin/dumpe2fs", "usr/sbin/resize2fs"):
+        (root / tool).write_text("synthetic aarch64 e2fsprogs\n")
     # A probe must remove every inherited write request, even a malformed one.
     (root / "etc/omamobile-ufs-rw").write_text("boot_b userdata\n")
     (root / "etc/omamobile-ufs-rw-luns").write_text("sdb\n")
@@ -444,7 +447,34 @@ def test_full(work, private, public):
             "oversized kernel was not refused")
     require(not (work / "output/oversized.img").exists(),
             "size refusal left an image")
-    print("ok - generated-DTB refusals, boot 1 and 2, edits, headers and sha256")
+    # Tethered M2 (--root userdata): allowlist exactly userdata, no
+    # omamobile.initramfs on the command line, boot 2 only.
+    out = Path("output/tethered.img")
+    result = call(*builder_args(kernel, dtb, public, rootfs, 2, out),
+                  "--root", "userdata")
+    require(result.returncode == 0, f"tethered build failed: {result.stderr}")
+    paths = probe.artifact_paths(work / out)
+    probe.assert_allowlist(paths["ramdisk"], "userdata")
+    require(probe.cpio_file(paths["ramdisk"], probe.ALLOWLIST).decode().split()
+            == ["userdata"], "tethered allowlist is not exactly userdata")
+    manifest = json.loads(paths["manifest"].read_text())
+    cmdline = manifest["header"]["command line args"]
+    require("omamobile.initramfs" not in cmdline and
+            "systemd.watchdog_sec=20" in cmdline,
+            f"tethered cmdline wrong: {cmdline}")
+    require(manifest["root"] == "userdata", "manifest lacks root mode")
+    raises(probe.BuildError,
+           lambda: probe.assert_allowlist(built[2]["ramdisk"], "userdata"),
+           "lacks /etc/omamobile-ufs-rw")
+    raises(probe.BuildError,
+           lambda: probe.assert_allowlist(paths["ramdisk"], "none"),
+           "allowlist")
+    result = call(*builder_args(kernel, dtb, public, rootfs, 1,
+                                "output/tethered-boot1.img"),
+                  "--root", "userdata")
+    require(result.returncode != 0 and "needs --boot 2" in result.stderr,
+            "tethered with UFS off was not refused")
+    print("ok - generated-DTB refusals, boot 1 and 2, tethered root, edits, headers and sha256")
 
 
 def main():
