@@ -46,8 +46,11 @@ named with each. Never run a block with a `{{...}}` still in it.
   (RESTORE-ASSETS R4). Filled before P2.
 - `{{UFDT_APPLY_OVERLAY}}` — libufdt's `ufdt_apply_overlay`, from the
   laptop tools setup (RESTORE-ASSETS R4). Filled before P3.
-- `{{DTBO_ENTRY}}` — the board-id-8 entry blob from the P3 dump. Filled
-  in P3.
+- `{{DTBO_ENTRY}}` — the stock dtbo entry ABL picks on this board:
+  entry 16 ("kona MTP 19811", `qcom,board-id = <0x10008 0>`), because
+  stock boots with `ro.boot.dtbo_idx = 16` (stage-0 A3) and `Q/` picks the
+  entry from board data only, not from our DTB [V: Q/LocateDeviceTree.c
+  `GetBoardDtb`]. Filled 2026-11-16; result in NOTES.md.
 - `{{BOOT2_IMG}}` — path of the boot-2 image (UFS on). Filled by the
   build at the top of R4.
 - `{{M1_BACKUP_DIR}}` — a directory outside the repo for the R6 backups.
@@ -199,7 +202,11 @@ fastboot -s <serial> boot out/boot.img
   to flash.
 - **Rollback:** on a hang, hold Power + Volume Up for 10-30 s; stock
   boots from slot A. If it lands in fastboot: `fastboot -s <serial>
-  reboot`. Left alone, the no-host crash plus `panic=10` does the same by
+  reboot`. **After a refusal, never send a second `fastboot boot` in the
+  same fastboot session:** run `fastboot -s <serial> reboot bootloader`
+  first. [V 2026-11-16] A second RAM boot after a refused one failed AVB
+  and ABL marked slot A unbootable and switched to slot B
+  (`HandleActiveSlotUnbootable`, NOTES 2026-11-16 afternoon). Left alone, the no-host crash plus `panic=10` does the same by
   itself in about 75 s (plan 5.5).
 
 ### R2. Read-only checks over SSH, boot 1 (phone)
@@ -270,11 +277,13 @@ ssh root@172.16.42.1 'dmesg | grep ufs-ro'
 ssh root@172.16.42.1 'ls /dev/sda'
 ```
 
-- **Expect:** every disk and every partition reads `ro=1`; `/dev/sda` is
+- **Expect:** every partition and every disk except `sda` reads `ro=1`;
+  `/sys/block/sda/ro` reads 0 by design, because the guard deletes the
+  `/dev/sda` node instead (partitions are guarded one by one); `/dev/sda` is
   absent (the guard removed the main LUN's whole-disk node, plan goal 3);
   the init logs "no allowlist ... every partition read-only"; no UFS
   errors in dmesg.
-- **Stop:** any `ro=0`; `/dev/sda` present and writable; UFS errors.
+- **Stop:** any `ro=0` other than `/sys/block/sda/ro`; `/dev/sda` present and writable; UFS errors.
 - **Rollback:** `ssh root@172.16.42.1 'reboot -f'`, or the R1 rollback if
   hung. Stock boots from slot A.
 
