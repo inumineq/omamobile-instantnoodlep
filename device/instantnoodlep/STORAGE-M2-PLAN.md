@@ -257,6 +257,96 @@ behaviour [V: U/tests/storage-guard:4-9].
   update `boot_b`; updates then go through the laptop's fastboot
   (`bin/omamobile push`), recorded in NOTES. [I until §1.1 is filled]
 
+## 3a. Amendment 2026-11-16: tethered M2 before M1b
+
+Owner decision (2026-11-16, owner follows the recommendation): run M2
+**tethered** now, and do M1b afterwards. M1b waits on the GPT-attribute
+exception (#808, questions posted 2026-11-16) and AVB on `boot_b` (#10).
+Tethered M2 needs neither, because it writes no slot-B image and no GPT
+attribute.
+
+What changes against sections 1-4:
+
+- **Boot path:** every boot is a RAM-only `fastboot boot` from the laptop
+  (proven by M1a with K1 and K2, NOTES 2026-11-16). The image is the M1a
+  builder's output with two differences:
+  - the cmdline has no `omamobile.initramfs`, so `boot_arch` hands off to
+    Arch on `userdata`;
+  - the packed allowlist is `/etc/omamobile-ufs-rw` = `userdata` and
+    nothing else.
+
+  `UFS_RW_LUNS` stays empty: `userdata` is `sda23` on `sda`, the always
+  allowlisted main LUN [V: captures by-name-root; U/initramfs/init:100-116].
+  The DTB keeps the overlay sink and `oplus,*` selectors (PR #44).
+- **One write, owner-gated:** `fastboot flash userdata <rootfs image>`
+  from ABL fastboot. There is no `boot_b`/`dtbo_b` flash, no
+  `--set-active` and no mark. G0's M1b/GPT items are waived for this
+  variant only; the restore-asset item stays (MSM package R5).
+- **Stock after the write:** slot A still boots stock if the phone starts
+  without the laptop. Its `/data` entry is f2fs with `formattable`
+  [V: stock `/vendor/etc/fstab.qcom`]. [I] AOSP `fs_mgr` formats a
+  `formattable` partition only when it looks wiped (no ext4/f2fs
+  superblock). Our root is ext4, so stock should stop at recovery's
+  "Cannot load Android system" instead of formatting it. **Never choose
+  "Factory data reset" there**: that reformats `userdata` and erases the
+  Arch root. Choose "Reboot"/power off and boot tethered. Check on the
+  first stock boot after T3, if one happens.
+- **Way back to Android:** recovery "Factory data reset" (stock on slot A
+  reformats `userdata` as f2fs). Nothing else changed.
+
+### Tethered runbook (T)
+
+Agent-run steps are non-writing (AGENTS rule 1); T3 is the owner's write.
+
+**T0 — offline builds (laptop, agent).** The rootfs image comes from
+upstream's contributor flow (`tools/fetch-published`, `build-packages
+--local instantnoodlep`, `build-rootfs --local instantnoodlep`) with the
+K2 kernel's modules. The tethered boot image comes from
+`tools/build-instantnoodlep-probe` in a `--root userdata` mode (to be
+added; plan item above). Expect: the rootfs `.img.zst` + `.sha256` +
+MANIFEST, a boot image whose read-back cmdline lacks
+`omamobile.initramfs` and whose initramfs holds exactly `userdata` in
+`/etc/omamobile-ufs-rw`. Stop: anything else in the allowlist; build
+failures. Rollback: n/a.
+
+**T1 — preflight (phone, agent, read-only).** `adb reboot bootloader`;
+`fastboot getvar all`: `current-slot:a`, `unlocked:yes`,
+`partition-size:userdata` equal to the stage-0 value,
+`max-download-size`. Stop: anything else. Rollback: `fastboot reboot`.
+
+**T2 — RAM test boot of the tethered image *before* the write (agent).**
+With `userdata` still f2fs, the init finds no `omamobile-root` and must
+stop in the initramfs without mounting anything rw. That proves the
+guard path on this phone before the write exists. Expect: SSH up, `dmesg`
+shows the allowlist `userdata` loaded, `/sys/block/sda/sda23/ro` = 0,
+every other partition `ro=1`, and the init's "no root" message. Stop: any
+other partition writable; any mount of `sda23`. Rollback: `reboot -f`.
+
+**T3 — the write (owner, gated).**
+
+```sh
+unzstd -k out/<rootfs>.img.zst
+sha256sum -c out/<rootfs>.img.zst.sha256
+fastboot getvar current-slot          # a
+fastboot flash userdata out/<rootfs>.img
+```
+
+- Expect: `Sending sparse 'userdata' n/m ... OKAY`, `Writing 'userdata'
+  OKAY` for every chunk.
+- Stop: any `FAILED`. Stay in fastboot. Slot A is untouched.
+- Rollback: the way back above (factory reset from stock recovery).
+
+**T4 — first tethered boot (agent).** `fastboot boot <tethered image>`.
+Expect: the init grows the file system, logs `omamobile: arch: switching
+to Arch Linux on /dev/sda23`, and systemd starts. The phone's own
+first-boot flow follows per upstream. Stop: the init stays in the
+initramfs (read its message over the ACM console/SSH), or a guard
+violation. Rollback: `reboot -f`, or Power+Vol Up; stock slot A starts,
+see "Stock after the write".
+
+**T5 — record.** NOTES entry with the image hashes, the first-boot log
+lines and the read-only state of every non-allowlisted partition.
+
 ## 4. Gated runbook
 
 Offline first (G0-G4, laptop only, no phone), then owner gates (R1-R6,
