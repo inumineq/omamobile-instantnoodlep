@@ -37,6 +37,13 @@ detail lives in the *-PLAN.md files.
   `oem unlock` does is unknown. The runbook now has B4 (status `none`
   **and** no `-cow` partitions) as a hard gate before C2. Pending: the
   owner's B4 result.
+- [V] Restore-assets R4 ran offline on the laptop
+  (`docs/research/r4-stock-images.md`): boot header v2, page size 4096;
+  `boot` and `dtbo` are **chained** in stock vbmeta (`Flags: 0`), so ticket
+  #10 lands in the chain case (option B, a test-key footer on `boot_b`).
+  All 19 dtbo table entries have id/rev/custom 0; overlays and base DTBs
+  are matched on `qcom,msm-id`/`qcom,board-id` plus the Oplus property
+  `oplus,dtsi_no` (0x4d63 = our project 19811).
 - Consequence for later milestones [I]: `super` is Virtual A/B, so a
   future stock OTA would use snapshots too. The port never writes `super`
   (AGENTS.md rule 3), so nothing changes in the safety model, but the
