@@ -79,6 +79,32 @@ there: nothing was rewritten, no remote was added, and nothing was pushed to
 any remote (derekross included). No fork head exists to record. [I] whether
 the owner wants a noreply-identified fork is an owner decision, not mine.
 
+## 2026-11-16 (late morning): B4 fails — snapshot still live, merge stalled
+
+- [V] B4: `snapshot-update-status: none`, `-cow` count **15**, about ten
+  hours and at least three boots after the `.591` install.
+- [V] `/dev/block/mapper/` in the running Android lists every `<name>_a`
+  next to a mapped `<name>_a-cow`, so first-stage init still maps the
+  snapshot. [I] The merge has stalled; the boot HAL's `none` does not
+  reflect it on this Oplus build.
+- [V] Props: `ro.virtual_ab.enabled=true`, `init.svc.update_engine=running`,
+  `sys.oplus.update_engine.log=0`. Logcat holds no update_engine,
+  snapuserd or libsnapshot lines; `update_engine_client --follow` from
+  `adb shell` fails to bind. Softwareopdatering shows nothing pending.
+- [V] A6 socinfo: SM8250, `soc_id` 356, revision 2.1, `hw_platform` MTP,
+  `platform_version` 0x10000 (major 1), `platform_subtype_id` 0,
+  `foundry_id` 1, `pmic_model` 0x1001E (PMIC 0 = model 0x1E, PM8150
+  [I]), `pmic_die_revision` 0x30000. For an exact DTB match (M1a option
+  2) the DTB needs `qcom,msm-id = <0x10164 0x20001>` (foundry 1 in bits
+  16-23, `Q/LocateDeviceTree.c` foundry check) and a `qcom,pmic-id`
+  matching every PMIC slot; socinfo exposes only PMIC 0, so the rest
+  comes from D4 (`dmesg` under temporary root) or a guess that costs one
+  safe boot.
+- Decision (owner follows the recommendation): one night idle on the
+  charger, then B4; if still stalled, R5 + backups, then a stock factory
+  reset while locked (AOSP recovery finishes pending merges before
+  wiping), then B4. Unlock stays blocked until B4 shows `0`.
+
 ## 2026-11-16: stage 0 phases A-B, stock moved to slot A
 
 - [V] A3b case (c) applied and worked. Stock ran
