@@ -4,6 +4,81 @@
 Newest first. Findings that matter beyond one subsystem go here; subsystem
 detail lives in the *-PLAN.md files.
 
+## 2026-11-16 (night, omabook): M1a P2 offline probe builds (K1), K2 D1 baseline, K2 push gate
+
+Part 1 — M1a runbook P2, offline (no phone was touched):
+
+- [V] `OMAMOBILE=~/src/omarchy-mobile MKBOOTIMG=~/aosp-tools/system/tools/mkbootimg/mkbootimg.py python3 tests/instantnoodlep-probe`
+  exited 0; all five parts ok, `0 skipped part(s)` (CLI refusals; identity/
+  watchdog/size guards; initramfs; AOSP v2 read-back; both happy paths).
+- [V] `python3 tools/build-instantnoodlep-probe --help`, then the builder with
+  `--boot 1 --out ~/android/build/probe/boot1.img` and `--boot 2 --out
+  ~/android/build/probe/boot2.img`, `--kernel
+  ~/android/build/k1/arch/arm64/boot/Image.gz` (kernelrelease
+  `7.2.0-instantnoodlep-k1-g3c5440e9dd3c`), `--dtb
+  ~/android/build/k1/arch/arm64/boot/dts/qcom/sm8250-oneplus-instantnoodlep.dtb`,
+  `--initramfs-root ~/android/build/initramfs-root`, `--omarchy-mobile
+  ~/src/omarchy-mobile` @ 6c11752ae4c3, `--mkbootimg
+  ~/aosp-tools/system/tools/mkbootimg/mkbootimg.py`, `--ssh-key
+  ~/.ssh/id_ed25519.pub`: both exited 0 ("Built and read back ..."). The PR
+  #37 decompressed-kernel guard passes: `gzip -dc Image.gz | wc -c` =
+  42,072,576 bytes against the 89,128,960-byte (0x05600000-0x00080000)
+  reserved kernel region.
+- Builder commit: `git log -1 -- tools/build-instantnoodlep-probe` =
+  21fff4bdf58267547efee6b0ca7b2c9c70e53442 (#37); worktree head
+  adfe244bee1809e75d24b4fb1d1603e964c7de8a.
+- Images (tool SHA256SUMS, outputs in ~/android/build/probe, outside git):
+  boot1.img 23,314,432 bytes sha256
+  92f2b76c28f3161bc2aa0c8dd435c1914b9554283a02123099ad2b02803d003c; boot2.img
+  23,314,432 bytes sha256
+  4712a16d753617f38e7c3ea2b2dc2635ff2a3c9e5da49486076a226a3eccce02; probe DTBs
+  126,816 / 126,812 bytes (de816c9c..., 33eda1d8...); initramfs identical for
+  both boots, 7,867,485 bytes sha256
+  f0775df9affd0ee08ae2df83f27fd4ac212c15134983d7a7aa94dfa53a16e366.
+- Manifest key fields (both boots): device instantnoodlep, boot 1/2, header
+  v2, page 4096, kernel 0x00008000, ramdisk 0x01000000, tags 0x00000100, dtb
+  0x01f00000, kernel_size 15,314,546, ramdisk size 7,867,485,
+  boot_image_limit 67,108,864 with [I] evidence, hardware_boot_tested=false,
+  shared_init_sha256 93d7d9d214ed9c9f6747ad8b8b7c27e26e6daa0f68e1d3635c40e0609c7d9c45,
+  mkbootimg_sha256 37d84b3d162e0bc62e36c1f4e1c63c85ea0caa9f29be023eb2f8efe006ad948c.
+- [V] `fdtget` on the probe DTBs: compatible `oneplus,instantnoodlep
+  qcom,sm8250`, msm-id `164 10000 164 20001`, board-id `8 0 0 0` (exactly as
+  5.2); UFS status `disabled` (boot 1) / `okay` (boot 2);
+  `etc/omamobile-ufs-rw` absent from the cpio (grep count 0).
+- The builder's last stdout line is a `fastboot -s <serial> boot ...`
+  template; it was not run (house rule 1).
+
+Part 2 — K2 D1 baseline (DTS-PORT-PLAN gate D1), offline in ~/src/l with a
+`git worktree add` of base 317d87dc2db0 (worktree removed afterwards; no K2
+commit changed, head still a28aaf1a09db8889ed156212286e942e411dbe93). venv
+~/android/build/venv-dt (dtschema 2026.9) active, `nice -n 19`, ARCH=arm64,
+separate O= dirs ~/android/build/k2-d1/{base,head}, logs in
+~/android/build/k2-d1/logs:
+
+- [V] `make dt_binding_check` (full): base EXIT=0, head EXIT=0; 0 warning and
+  0 error lines in both logs; the normalized diagnostic lines are identical
+  between base and head (10 each, pre-existing dtschema hints only), so the
+  new `oneplus,instantnoodlep` entry in arm/qcom.yaml passes with no new
+  schema error.
+- [V] `make dtbs_check DT_SCHEMA_FILES=Documentation/devicetree/bindings/arm/qcom.yaml`
+  (the schema file the plan names at DTS-PORT-PLAN.md:342; the instantnoodlep
+  DTB is named at :334/:343): first attempt EXIT=2 on both trees because
+  `dtbs_check` needs a `.config` (`make ARCH=arm64 defconfig` in each O dir
+  first, EXIT=0; CONFIG_ARCH_QCOM=y gates the DTB). Then base EXIT=0 with
+  1926 schema-checked DTBs (`[C]` lines), head EXIT=0 with 1927 — the extra
+  one is `qcom/sm8250-oneplus-instantnoodlep.dtb` (head log line 2082), with
+  no diagnostic output. 0 warnings and 0 errors in both logs; no head-only
+  warnings. Gate D1 passes.
+
+Part 3 — K2 fork push gate: STOPPED at the email check. [V] `git log
+--format='%an <%ae> | %cn <%ce>' 317d87dc2db0..instantnoodlep-k2` in ~/src/l:
+all four commits (b184aa0e0, 5567bd380, f18746472, a28aaf1a0) are authored
+and committed with the owner's personal email address,
+not a `@users.noreply.github.com` address. Per the gate, Part 3 stopped
+there: nothing was rewritten, no remote was added, and nothing was pushed to
+any remote (derekross included). No fork head exists to record. [I] whether
+the owner wants a noreply-identified fork is an owner decision, not mine.
+
 ## 2026-11-16: stage 0 phases A-B, stock moved to slot A
 
 - [V] A3b case (c) applied and worked. Stock ran
