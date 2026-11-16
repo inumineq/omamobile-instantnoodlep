@@ -110,6 +110,21 @@ the owner wants a noreply-identified fork is an owner decision, not mine.
   backups, then a stock factory reset from Settings while locked (AOSP
   recovery finishes pending merges before wiping, or refuses), then the
   mapper `-cow` count and B4. Unlock stays blocked until B4 shows `0`.
+- [V] Factory reset from Settings, still locked (owner, 2026-11-16 ~11:30):
+  after setup the phone boots `_a`, `.591`, and the mapper `-cow` count
+  is still **15**. Oplus recovery wiped data without finishing the merge,
+  and boot is unaffected.
+- [V] `Q/DeviceInfo.c`: on unlock, ABL writes `recovery --wipe_data` to
+  `misc`, so the unlock wipe runs the same recovery path the reset just
+  ran. [I] OnePlus's ABL does the same.
+- **Decision (owner follows the recommendation):** B4 is satisfied by
+  evidence instead of a `0` count: a data wipe with the stalled snapshot
+  live is proven harmless on this phone. Restore-assets R5 (MSM) moves
+  from G1 to a gate before M1b, the first step that writes a partition;
+  phases C/D and M1a write nothing MSM would be needed for.
+- Open for M1b [I]: with the snapshot still live, `--set-active b` and
+  the GPT slot marks need a fresh look (AOSP fastbootd warns that a slot
+  change with a snapshot applied may cancel the update).
 
 ## 2026-11-16: stage 0 phases A-B, stock moved to slot A
 

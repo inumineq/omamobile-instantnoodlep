@@ -327,7 +327,9 @@ fastboot reboot
      `bootable/recovery/install/wipe_data.cpp` `FinishPendingSnapshotMerges`;
      I for Oplus recovery]. The unlock wipes everything anyway, so nothing
      extra is lost, and Oplus's recovery is tested while locked.
-  3. B4 again. `0`: go on to G1. Still above `0`: stop; decision note.
+  3. B4 again. `0`: go on to G1. Still above `0` but the phone boots
+     `_a` normally after the reset: the wipe path is proven harmless with
+     the snapshot live (decision 2026-11-16, NOTES.md); go on to G1.
 - Read-only probes that did **not** work without root, so do not repeat
   them: `logcat` (update_engine logs nothing here,
   `sys.oplus.update_engine.log=0`), `/sys/block/dm-*/dm/name` (hidden by
@@ -352,13 +354,14 @@ All must be true:
 
 1. The restore-assets ticket is resolved: the OTA matches A3's fingerprint
    exactly (or passes the R2 incremental-and-date fallback) and R3 passes;
-   the zip is on the laptop, not only on the phone; the MSM package is on
-   disk.
+   the zip is on the laptop, not only on the phone. The MSM package (R5)
+   is a gate before M1b, not before phase C (decision 2026-11-16).
 2. Phases A and B are pasted back, and the coordinator has confirmed
    `current-slot: a`, `IN2023` and which A3b case applied.
 3. The Widevine security level is recorded (A5).
-4. B4 shows `snapshot-update-status: none` **and** a `-cow` count of `0`, checked after the last
-   install and on the same day as C2.
+4. B4 passes (`snapshot-update-status: none` **and** a `-cow` count of
+   `0`, checked after the last install and on the same day as C2), or
+   its stalled-snapshot branch (step 3) applies.
 5. Everything on the phone is backed up off the phone (photos, 2FA apps,
    Signal/WhatsApp backups, eSIM if any). **The unlock wipes everything.**
 6. [I] The owner accepts the side effects of an unlocked bootloader on
