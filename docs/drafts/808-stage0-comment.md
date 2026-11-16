@@ -36,31 +36,42 @@ the GPT-attribute exception conversation in the questions below.
 
 ## Answers to the stage-0 questions
 
-1. **Boot images present:** {{Q1 — STAGE-0-RUNBOOK B2 (`getvar all`
-   `has-slot:`/`partition-type:` lines) and RESTORE-ASSETS R4 (payload
-   partition list). Expected: `boot`, `dtbo`, `vbmeta`, maybe
-   `vbmeta_system`; expected not: `init_boot`, `vendor_boot`,
-   `vendor_kernel_boot`.}}
+1. **Boot images present:** `boot`, `dtbo`, `vbmeta` and `vbmeta_system`,
+   all slotted raw partitions (`partition-type:boot_a:raw` and friends).
+   No `init_boot`, `vendor_boot` or `vendor_kernel_boot`, neither in
+   `getvar all` nor in the OTA payload (44 partitions). Note this ABL
+   prints `has-slot:` only for `boot`, `modem` and `system` (`no`); the
+   `_a`/`_b` `partition-type:` lines are what show `dtbo`/`vbmeta` are
+   slotted.
 2. **Where the slot flags live:** {{Q2 — STAGE-0-RUNBOOK D5 (GPT
    attribute parser on the `boot_a`/`boot_b` entries) compared with B2
    (`getvar` slot flags). If they agree: GPT attributes, shown without
    writing anything.}}
-3. **GPT/LUN layout around `super` and `userdata`:** {{Q3 —
-   STAGE-0-RUNBOOK B3 (fastbootd `is-logical:*`, `super-partition-name`,
-   `partition-size:super/userdata`) and D4 (`by-name-root.txt`,
-   `luns.txt`).}}
+3. **GPT/LUN layout around `super` and `userdata`:** fastbootd is
+   reachable (`is-userspace:yes`); `super-partition-name:super`. `system`,
+   `system_ext`, `vendor`, `product`, `odm` and ten Oplus `my_*`
+   partitions are logical on slot A; `userdata` is physical
+   (`is-logical:userdata:no`, `partition-size:userdata:0x36F3453000`,
+   about 236 GB). No `partition-size:super` line is printed. Virtual A/B:
+   right after the slot move every logical partition still had its `_a-cow`
+   twin while `snapshot-update-status` already read `none`.
+   {{Q3 — LUN of `boot_b`/`dtbo_b` vs `userdata`: STAGE-0-RUNBOOK D4
+   (`by-name-root.txt`, `luns.txt`).}}
 4. **Does the stock bootloader apply a board dtbo:** yes —
-   `ro.boot.dtbo_idx=16` (already collected; see "Known facts so far").
-   {{Q4 — re-confirm from the STAGE-0-RUNBOOK A3 rerun after the A3b
-   move, and D5 (`androidboot.dtbo_idx` in `/proc/cmdline`).}}
+   `ro.boot.dtbo_idx=16`, re-confirmed on the A3 rerun after the slot move
+   (that rerun differs from the pre-move capture only in
+   `ro.boot.slot_suffix`). {{Q4 — `androidboot.dtbo_idx` in
+   `/proc/cmdline`: STAGE-0-RUNBOOK D5.}}
 5. **Panel node and its compatible in the live device tree:** {{Q5 —
    STAGE-0-RUNBOOK D4 (`live.dts`).}}
 6. **UART base address for earlycon:** {{Q6 — STAGE-0-RUNBOOK D5
    (`stdout-path`/`serial@` greps of `live.dts`). Note: `serial0` in the
    community DTS is the Bluetooth UART, so this may be "none usable".}}
 7. **Boot image header version, page size, offsets, stock cmdline:**
-   {{Q7 — RESTORE-ASSETS R4 (`unpack_bootimg --format=info` on the OTA's
-   `boot.img`). Expected: header v2, page size 4096.}}
+   header **v2**, page size **4096**, read offline from the stock `boot.img`
+   of the verified `.591` OTA (R4, 2026-11-16).
+   {{Q7 — offsets and stock cmdline: RESTORE-ASSETS R4, full
+   `unpack_bootimg --format=info` output on the OTA's `boot.img`.}}
 8. **Stock `vbmeta`: hash descriptors or chained partitions, which
    flags:** {{Q8 — RESTORE-ASSETS R4 (`avbtool info_image` on
    `vbmeta.img`).}}
@@ -90,11 +101,13 @@ before the slot move and the unlock:
 - `ro.boot.dtbo_idx=16`: the stock bootloader applies a board dtbo
   (answers question 4).
 - Slot situation: stock was found **running from slot B**
-  (`ro.boot.slot_suffix=_b`). Before anything else, stock is moved back
-  to slot A by the stock updater's own local install of the final build's
-  full zip (an A/B install writes the inactive slot). {{Slot outcome —
-  STAGE-0-RUNBOOK A3b and the A3 rerun: `ro.boot.slot_suffix=_a` on
-  `IN2023_13.1.0.591(EX01)`, or the stop that was hit instead.}}
+  (`ro.boot.slot_suffix=_b`). It was moved back to slot A by the stock
+  updater's own local install of the final build's full zip (an A/B
+  install writes the inactive slot; the zip was verified on the laptop
+  first). The Oplus updater accepts a same-version local install: the A3
+  rerun shows `ro.boot.slot_suffix=_a` on `IN2023_13.1.0.591(EX01)`, same
+  fingerprint, still `flash.locked=1`, `vbmeta.device_state=locked`,
+  `verifiedbootstate=green`.
 
 ## Questions for the maintainer
 
@@ -140,10 +153,9 @@ before the slot move and the unlock:
 
 One data point that may matter for #828 (`install-phone` now stops unless
 `current-slot` is exactly `a` or `b`): on this phone
-`fastboot getvar current-slot` prints {{current-slot value format —
-STAGE-0-RUNBOOK B2, after the A3b move; expected exactly `a`. If this ABL
-prints `_a`, an empty value or anything else, that is a finding for
-#828.}}.
+`fastboot getvar current-slot` prints exactly `a` (no underscore), so
+`install-phone`'s `a`/`b` check passes unchanged; nothing to report on
+#828.
 
 If the answers above look right, I would still be glad to see the phone
 on the Wanted list in DEVICES.md, and I can collect further read-only

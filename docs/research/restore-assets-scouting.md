@@ -57,6 +57,7 @@ Claims that rest only on them are marked [I], with the URL as a pointer.
 | OOS 13.1 | `13.1.0.586` (Feb 2024 SPL, India: `IN2021_13.1.0.586(EX01)`) | 2024-02 | [I] https://thetechoutlook.com/news/os/oneplus-8-and-8-pro-receive-the-oxygenos-13-1-0-586-update-in-india-february-2024-android-security-patch |
 | OOS 13.1 | `13.1.0.587`, April 2024 SPL, announced as the "last scheduled update". India first, "other regions soon" | 2024-04 | [I] https://www.tuttoandroid.net/news/2024/04/25/oneplus-8-pro-ultimo-aggiornamento-1040937/ (AndroidAuthority 403) |
 | OOS 13.1 | `13.1.0.590`, **India only** (`IN2021_13.1.0.590(EX01)`), no new SPL | 2024-06-12 | [V] https://www.thetechoutlook.com/news/os/oneplus-8-8-pro-gets-its-final-oxygenos-13-1-0-590-update-a-final-goodbye-from-oneplus/ |
+| OOS 13.1 | `IN2023_13.1.0.591(EX01)`, EEA, build date 2025-10-11; received over the air; Oxygen Updater offers the full zip | 2025-10-11 | [V 2026-11-16: stage-0 A3 on the owner's IN2023 (ticket #3); Oxygen Updater offer + verified laptop zip (ticket #4 R2/R3)] |
 
 Findings:
 
@@ -67,6 +68,11 @@ Findings:
   (or 586).** I found no source naming an EU 587 or 590 build. 590 was
   India-only [V above]. The owner's own A3 output decides this. Do not
   assume.
+  **Answered 2026-11-16** [V: stage-0 A3 on the owner's IN2023, ticket #3;
+  Oxygen Updater full-zip offer and verified laptop copy, ticket #4
+  R2/R3]: the latest and final EEA build is `IN2023_13.1.0.591(EX01)`
+  (build date 2025-10-11), which the unit received over the air. The
+  `.587` guess above was wrong; see the `.591` table row above.
 - [I] **The display id format changed between 13.0 and 13.1:**
   `IN2023_11_F.xx` (13.0) versus `IN2023_13.1.0.5xx(EX01)` (13.1). Which of
   these appears in `ro.build.display.id` and which in `ro.build.version.ota`
