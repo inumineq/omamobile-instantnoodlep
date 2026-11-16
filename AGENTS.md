@@ -8,10 +8,18 @@ first; their rules win over anything written here.
 
 House rules for work in this repository:
 
-1. **Hardware access goes through the owner.** No agent has hands on the
-   phone. Every command that touches the device is prepared with: the exact
-   command block, the expected output (Expect), a stop condition, and a
-   rollback. The owner runs it and pastes the output back.
+1. **Hardware access: agents run non-writing commands, the owner gates writes.**
+   With the phone attached to the owner's laptop, an agent may itself run
+   commands that write no partition: `adb shell` reads (also with root),
+   `adb push`/`pull`/`install`, `fastboot getvar`, `fastboot reboot`,
+   `fastboot boot <image>` (RAM only) and reboots. Anything that writes
+   flash or wipes (`fastboot flash`, `erase`, `set_active`/`--set-active`,
+   `oem lock`/`unlock`, `flashing *`, `snapshot-update`, factory reset,
+   `dd` to a block device) is prepared with the exact command block, the
+   expected output (Expect), a stop condition and a rollback, and runs
+   only after the owner's explicit go for that step. Steps that need the
+   phone's screen (taps, button combos) stay with the owner. (Owner
+   decision 2026-11-16.)
 2. **Evidence discipline.** Every claim is [V] (checked, with a source or
    file:line) or [I] (inference to check on the device). No in-between.
 3. **Safety model first.** Never write to `super` or any `_a` partition;

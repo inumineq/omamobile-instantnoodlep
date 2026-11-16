@@ -219,6 +219,27 @@ printf 'widevine-security-level: %s\n' 'L1' | tee "captures/$D/widevine.txt"   #
 - **Rollback:** uninstall the app.
 - Paste the security level only. Do not paste ID fields the app may show.
 
+### A6. socinfo for the M1a exact-match variant (read-only)
+
+Input for M1a step P4 (`device/instantnoodlep/NOTES.md` 2026-11-16, M1a
+P3). ABL skips the stock dtbo only on an exact DTB match, which needs the
+board's platform type, subtype, foundry and PMIC models. No stock DTB
+carries `qcom,pmic-id` [V: r4-stock-images.md §3], so these values come
+from the SoC info that the downstream kernel exports. **Never read
+`serial_number` in that directory**; the command names each file.
+
+```sh
+adb shell 'cd /sys/devices/soc0 && ls; for f in machine family soc_id revision hw_platform platform_version platform_subtype platform_subtype_id foundry_id pmic_model pmic_die_revision chip_family raw_device_family raw_device_number nproduct_id; do [ -r "$f" ] && echo "$f: $(cat "$f")"; done' | tee "captures/$D/socinfo.txt"
+```
+
+- **Expect:** [I] `soc_id: 356` (`0x164`, SM8250), `hw_platform: MTP`
+  (platform type 8), a `platform_subtype_id`, a `foundry_id` and a
+  `pmic_model`. A missing file is fine; record what is there.
+- **Stop:** none. If `soc0` does not exist, record that.
+- **Rollback:** n/a.
+- Paste the `name: value` lines. The `ls` line shows file names only; do
+  not `cat` `serial_number`.
+
 ---
 
 ## Phase B: bootloader fastboot, still locked (read-only)
@@ -310,7 +331,32 @@ fastboot reboot
 - **Stop:** `merging` or `snapshotted`, or a count above `0`: boot stock
   (`fastboot reboot`), leave it booted 30 min more and repeat. Still not
   `none` and `0` after a few hours and at least two full boots: report it
-  and do nothing else; the coordinator decides. **Never** run `fastboot snapshot-update cancel`
+  and do nothing else; the coordinator decides.
+- **If the count stays above `0`** (seen 2026-11-16: status `none`, all
+  fifteen `_a-cow` mapped as live dm devices under `/dev/block/mapper/`,
+  `update_engine` silent and not bindable from `adb shell`), the decided
+  order is:
+  1. Check that it is not running: `adb shell 'ps -A -o PID,NAME,TIME |
+     grep -iE "snapuserd|update_engine"'` twice, 60 s apart. No
+     `snapuserd` and no CPU time on `update_engine` means not started;
+     waiting does not help (2026-11-16). A live count without fastboot:
+     `adb shell 'ls /dev/block/mapper/ | grep -c -- "-cow$"'`.
+  2. Restore-assets R5 (MSM package) and the G1 backups
+     first, then a **factory reset from Settings while still locked**. It
+     runs recovery's wipe path, which in AOSP finishes a pending snapshot
+     merge before wiping and refuses to wipe if it cannot [V: AOSP
+     `bootable/recovery/install/wipe_data.cpp` `FinishPendingSnapshotMerges`;
+     I for Oplus recovery]. The unlock wipes everything anyway, so nothing
+     extra is lost, and Oplus's recovery is tested while locked.
+  3. B4 again. `0`: go on to G1. Still above `0` but the phone boots
+     `_a` normally after the reset: the wipe path is proven harmless with
+     the snapshot live (decision 2026-11-16, NOTES.md); go on to G1.
+- Read-only probes that did **not** work without root, so do not repeat
+  them: `logcat` (update_engine logs nothing here,
+  `sys.oplus.update_engine.log=0`), `/sys/block/dm-*/dm/name` (hidden by
+  SELinux), `/proc/diskstats`, `update_engine_client --follow` ("Failed
+  to bind()") and `update_engine_client --merge`
+  (`EX_TRANSACTION_FAILED`). **Never** run `fastboot snapshot-update cancel`
   or `fastboot snapshot-update merge`, and pick nothing from the fastbootd
   menu except "Reboot system now".
 - **Why it gates C2:** AOSP fastbootd refuses to erase or flash
@@ -329,13 +375,14 @@ All must be true:
 
 1. The restore-assets ticket is resolved: the OTA matches A3's fingerprint
    exactly (or passes the R2 incremental-and-date fallback) and R3 passes;
-   the zip is on the laptop, not only on the phone; the MSM package is on
-   disk.
+   the zip is on the laptop, not only on the phone. The MSM package (R5)
+   is a gate before M1b, not before phase C (decision 2026-11-16).
 2. Phases A and B are pasted back, and the coordinator has confirmed
    `current-slot: a`, `IN2023` and which A3b case applied.
 3. The Widevine security level is recorded (A5).
-4. B4 shows `snapshot-update-status: none` **and** a `-cow` count of `0`, checked after the last
-   install and on the same day as C2.
+4. B4 passes (`snapshot-update-status: none` **and** a `-cow` count of
+   `0`, checked after the last install and on the same day as C2), or
+   its stalled-snapshot branch (step 3) applies.
 5. Everything on the phone is backed up off the phone (photos, 2FA apps,
    Signal/WhatsApp backups, eSIM if any). **The unlock wipes everything.**
 6. [I] The owner accepts the side effects of an unlocked bootloader on
@@ -650,7 +697,7 @@ you paste contains a match. Device-tree node names and aliases such as
 `serial@a90000` or `serial0 = &uart6` match the `serial` pattern but are
 not identifiers; values such as `androidboot.serialno=` or a
 `serial-number` property are. Paste D5 only after checking that every
-match in it is a node name. Paste the filtered outputs from A3, B2, B3, B4, C3,
+match in it is a node name. Paste the filtered outputs from A3, A6, B2, B3, B4, C3,
 D5, `luns.txt`, `pci-root.txt`, `ufs-luns.txt` (paths and numbers only),
 `bootloader-ab.txt` and the A5 Widevine level. Do **not** paste
 `live.dts`, `dmesg`, `getvar-all*.txt`, `getprop-all.txt`, any `.bin` file

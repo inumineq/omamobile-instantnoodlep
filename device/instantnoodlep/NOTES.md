@@ -4,6 +4,136 @@
 Newest first. Findings that matter beyond one subsystem go here; subsystem
 detail lives in the *-PLAN.md files.
 
+## 2026-11-16 (evening): R7, K2 passes R1-R5; M1a complete
+
+- [V] K2 built offline: `~/src/l` branch `instantnoodlep-k2` @
+  `a28aaf1a09db` (linux-omarchy-mobile `317d87dc2db0` + our four DTS
+  commits), arm64 defconfig + upstream `kernel/configs/omamobile.config` +
+  `device/instantnoodlep/kernel.config` with `LOCALVERSION=-instantnoodlep-k2`,
+  `LLVM=1`. kernelrelease `7.3.0-rc6-instantnoodlep-k2-ga28aaf1a09db`,
+  `Image.gz` 15,573,890 bytes. Images built with the PR #44 builder
+  (`--stock-overlay` entry 16, `--ufdt-apply` check, probe key).
+- [V] R1/R2 (UFS off): `Booting OKAY`, SSH after ~6 s, 8 CPUs, MemTotal
+  11688880 kB, only `loop*` block devices, watchdog fed. R3: UFS node
+  `disabled`. dmesg is cleaner than K1: no `qcom-pon` -EEXIST and no
+  deferred dwc3/cpufreq; only the misaligned-image and PSCI PC-mode
+  firmware notes, the `aux_bridge` -ENODEV and the expected `qcom_wdt`
+  modprobe failure (K2 builds it in, so the module is absent).
+- [V] R4 (UFS on): 121 of 122 `ro` flags read 1, the one 0 is
+  `/sys/block/sda/ro` (node removed by design), `/dev/sda` absent, no UFS
+  errors. R5: stock `.591` from `_a`, slot flags identical to the K2 P5
+  capture.
+- M1a (RAM-only first light, both kernels) is done. Next per the plan:
+  the persistent M1b install, gated on R5 (MSM package) and the owner's
+  writes to slot B.
+
+## 2026-11-16 (afternoon, later): M1a first light; R2-R5
+
+- [V] Owner ran `fastboot set_active a` (gated). Stock `.591` booted from
+  `_a`; after one boot the flags read `slot-successful:a:yes`,
+  `unbootable:no`. `abl_log` is no help: it holds only locked, green boots.
+- [V] **The DTB recipe that ABL accepts** (one change per boot, each
+  boot from a fresh fastboot session):
+  - boot3 = boot1 + an "overlay sink": a hand-written `__symbols__` that
+    points all 156 labels the stock dtbo entry 16 needs at disabled
+    dummy nodes under `/__ovl_sink__` (no `compatible`, explicit
+    `phandle`s). libufdt applies entry 16 offline, and the result has
+    zero diff outside the sink. ABL still refused (same silent fallback
+    to fastboot).
+  - boot4 = boot3 + `oplus,dtsi_no = <0x4d63>` and `oplus,pcb_range =
+    <0 0x38>` in `/`. **ABL booted it**: USB CDC NCM + ACM on the laptop
+    after 8 s. [I] OnePlus's ABL needs `oplus,dtsi_no` to pick the base
+    DTB (R4 note §3), and the overlay must apply.
+  - The sink holds 90 downstream compatibles (none `fixed-clock`, irqchip
+    or timer, so no `OF_DECLARE` scan picks them up); mainline does not
+    populate children of a root node without `compatible`.
+  - ABL merges the overlay's root properties: the live `/compatible`
+    becomes `qcom,kona-mtp qcom,kona qcom,mtp` and `qcom,board-id`
+    `<0x10008 0>`. [I] Matters for anything keyed on the machine
+    compatible.
+- [V] SSH needs a key without a passphrase (no agent in the agent's
+  shell): boot5/boot6 add `~/.ssh/omamobile_probe.pub` to
+  `authorized_keys`. Host side: NetworkManager connection `omamobile`,
+  `172.16.42.2/24` on the NCM interface. dropbear makes a new host key
+  each boot, so use `UserKnownHostsFile=/dev/null`.
+- [V] **R2 (boot5, UFS off):** `7.2.0-instantnoodlep-k1-g3c5440e9dd3c`,
+  8 CPUs, MemTotal 11689748 kB, only `loop*` block devices, the busybox
+  watchdog feeder runs on `/dev/watchdog0`. The cmdline ABL passed has
+  `androidboot.dtbo_idx=16`, `androidboot.dtb_idx=0`, `slot_suffix=_a`.
+  dmesg: `qcom-pon` on `pmic@a` fails with -EEXIST, dwc3 at `a800000`
+  (second USB) and cpufreq-hw defer on interconnect, `qcom_wdt` module
+  load fails (watchdog0 still present).
+- [V] **R3:** `/sys/firmware/fdt` saved; UFS node `disabled` as built.
+- [V] **R4 (boot6 = boot5 with UFS on):** the init logged "no allowlist
+  ... every partition read-only", removed `/dev/sda`, and set every other
+  disk and all partitions `ro=1` (121 of 122 `ro` files). The one `ro=0`
+  is `/sys/block/sda/ro`, the whole-disk flag of the LUN whose node the
+  guard deletes by design (plan goal 3: partitions are guarded one by one
+  so `userdata` can later be allowlisted). No UFS errors. This matches the
+  plan but not the runbook's literal Expect ("every disk ro=1"), so R4 was
+  stopped there and the runbook Expect is now corrected.
+- [V] **R5:** stock `.591` from `_a`; slot flags equal before and after.
+- [V] USB gotcha: after a `reboot -f` from the probe, stock once came up
+  in USB MIDI mode (`18d1:4ee8`, no adb); the owner switched the USB mode
+  on screen.
+- Next: fold the sink + `oplus,*` recipe and the probe key into
+  `tools/build-instantnoodlep-probe`, then R7 (K2 kernel).
+
+## 2026-11-16 (afternoon): stage-0 D4/D5, M1a R1, an ABL slot swap
+
+- [V] D4 ran read-only with temp root (`/debug_ramdisk/su`; the `su` on
+  `PATH` is Oplus's own `/product/bin/su` and refuses). Radio backup of
+  `persist`, `modemst1`, `modemst2`, `fsg`, `fsc` and `param` (no `ocdt`
+  on this unit); every file size equals `blockdev --getsize64`. The images
+  stay in the private captures folder. All 19 slotted bootloader
+  partitions read `same` across `_a`/`_b`.
+- [V] D5 from the captures: stock cmdline has `androidboot.dtbo_idx=16`
+  and `androidboot.dtb_idx=3`. Boot DTB 3 is "kona v2.1 SoC 19811":
+  `qcom,msm-id = <0x164 0x20001>`, `qcom,board-id = <0 0>`,
+  `oplus,dtsi_no = <0x4d63>`, `oplus,pcb_range = <0 0x38>`, no
+  `qcom,pmic-id` (no stock boot DTB carries one). An exact match that skips
+  the dtbo needs every bit in `ALL_BITS_SET`, i.e. the PMIC model at all 16
+  indices, foundry and soft-SKU [Q/LocateDeviceTree.h:141-151,
+  LocateDeviceTree.c:550-620,1032-1036]. socinfo only gives index 0
+  (`pmic_model` 0x1001E), and the boot-time revid lines had rolled out of
+  dmesg and pstore, so the exact-match variant was dropped for the sink
+  variant below. The live DT lists PM8150 x2, PM8150B x2, PM8150L x2,
+  PM8009 x2 and PMX55 (`pmxprairie`) on SPMI. `boot_b` and `dtbo_b` live
+  on LUN 4 (`sde`), `userdata` on LUN 0 (`sda`).
+- [V] P5 passed (`current-slot:a`, unlocked, flags as C3).
+- [V] **R1:** `fastboot boot boot1.img` answered `Booting OKAY`, yet the
+  phone stayed in fastboot and kept answering `getvar`; no USB NCM device
+  came up. The slot flags afterwards equalled P5. In `Q/`, `CmdBoot`
+  replies OKAY after `LoadImageAndAuth` and before `BootLinux`
+  [Q/FastbootCmds.c:2869-2894], so AVB passed and `BootLinux` refused
+  (DTB selection or overlay) and fell back to fastboot. This is P4
+  outcome (a), a clean refusal; the on-screen reason was not captured.
+- [V] **Then a second `fastboot boot` (the Magisk image, same fastboot
+  session) made ABL swap slots.** The transfer ended in `Status read
+  failed (No such device)`, stock came up from `_b` with
+  `ro.boot.bootreason=bootloader`, and fastboot then showed
+  `current-slot:b`, `slot-unbootable:a:yes`, `slot-retry-count:b:7`.
+  That is `HandleActiveSlotUnbootable`: mark the active slot unbootable,
+  `SetActiveSlot` the other, cold reset [Q/PartitionTableUpdate.c:1471-1528].
+  `Q/` calls it when `LoadImageAndAuth` fails on an A/B device, and
+  `CmdBoot` sets `MultiSlotBoot`, so a RAM boot reaches it as well
+  [Q/QcomModulePkg/Library/avb/VerifiedBoot.c:1508-1515 at `6922a8a066a6`].
+  [I] The likely trigger is `KeyMasterSetRotAndBootState`
+  [VerifiedBoot.c:1492], which keymaster accepts once per power cycle;
+  R1 had already called it. Nothing on `boot`/`dtbo`/`vbmeta` was written;
+  the GPT attribute write was ABL's own.
+- Consequences:
+  - Plan 5.4 ("ABL writes nothing on a RAM boot") is wrong in one case:
+    a failed `fastboot boot` can mark the active slot unbootable and swap
+    slots. **After any refused RAM boot, cold-reboot to the bootloader
+    (`fastboot reboot bootloader`) before the next `fastboot boot`.** The
+    M1 runbook now says so.
+  - While stock runs from `_b`, house rule 3 forbids writing `boot_b`.
+    Back to `_a` needs `fastboot set_active a` (owner-gated write).
+    `SetActiveSlot` clears the unbootable bit and switches the UFS boot
+    LUN [Q/PartitionTableUpdate.c:1379-1466]; both LUNs carry identical
+    bootloaders (D4), so this is the same move as the stage-0 slot move.
+
 ## 2026-11-16 (night, omabook): M1a P2 offline probe builds (K1), K2 D1 baseline, K2 push gate
 
 Part 1 — M1a runbook P2, offline (no phone was touched):
@@ -78,6 +208,103 @@ not a `@users.noreply.github.com` address. Per the gate, Part 3 stopped
 there: nothing was rewritten, no remote was added, and nothing was pushed to
 any remote (derekross included). No fork head exists to record. [I] whether
 the owner wants a noreply-identified fork is an owner decision, not mine.
+
+## 2026-11-16 (late morning): B4 fails — snapshot still live, merge stalled
+
+- [V] B4: `snapshot-update-status: none`, `-cow` count **15**, about ten
+  hours and at least three boots after the `.591` install.
+- [V] `/dev/block/mapper/` in the running Android lists every `<name>_a`
+  next to a mapped `<name>_a-cow`, so first-stage init still maps the
+  snapshot. [I] The merge has stalled; the boot HAL's `none` does not
+  reflect it on this Oplus build.
+- [V] Props: `ro.virtual_ab.enabled=true`, `init.svc.update_engine=running`,
+  `sys.oplus.update_engine.log=0`. Logcat holds no update_engine,
+  snapuserd or libsnapshot lines; `update_engine_client --follow` from
+  `adb shell` fails to bind. Softwareopdatering shows nothing pending.
+- [V] A6 socinfo: SM8250, `soc_id` 356, revision 2.1, `hw_platform` MTP,
+  `platform_version` 0x10000 (major 1), `platform_subtype_id` 0,
+  `foundry_id` 1, `pmic_model` 0x1001E (PMIC 0 = model 0x1E, PM8150
+  [I]), `pmic_die_revision` 0x30000. For an exact DTB match (M1a option
+  2) the DTB needs `qcom,msm-id = <0x10164 0x20001>` (foundry 1 in bits
+  16-23, `Q/LocateDeviceTree.c` foundry check) and a `qcom,pmic-id`
+  matching every PMIC slot; socinfo exposes only PMIC 0, so the rest
+  comes from D4 (`dmesg` under temporary root) or a guess that costs one
+  safe boot.
+- [V] 11:10: `ps -A` shows no `snapuserd`, and `update_engine` at 0 s CPU
+  time since boot, unchanged over 60 s. `update_engine_client --merge`
+  (the stock `cleanupSuccessfulUpdate` call) fails from `adb shell` with
+  `EX_TRANSACTION_FAILED`. `/proc/diskstats` and `ls -l
+  /dev/block/mapper` came back empty (denied). [I] The merge was never
+  started rather than running slowly, so waiting a night is dropped.
+- Decision (owner follows the recommendation): R5 (MSM package) and
+  backups, then a stock factory reset from Settings while locked (AOSP
+  recovery finishes pending merges before wiping, or refuses), then the
+  mapper `-cow` count and B4. Unlock stays blocked until B4 shows `0`.
+- [V] Factory reset from Settings, still locked (owner, 2026-11-16 ~11:30):
+  after setup the phone boots `_a`, `.591`, and the mapper `-cow` count
+  is still **15**. Oplus recovery wiped data without finishing the merge,
+  and boot is unaffected.
+- [V] `Q/DeviceInfo.c`: on unlock, ABL writes `recovery --wipe_data` to
+  `misc`, so the unlock wipe runs the same recovery path the reset just
+  ran. [I] OnePlus's ABL does the same.
+- **Decision (owner follows the recommendation):** B4 is satisfied by
+  evidence instead of a `0` count: a data wipe with the stalled snapshot
+  live is proven harmless on this phone. Restore-assets R5 (MSM) moves
+  from G1 to a gate before M1b, the first step that writes a partition;
+  phases C/D and M1a write nothing MSM would be needed for.
+- Open for M1b [I]: with the snapshot still live, `--set-active b` and
+  the GPT slot marks need a fresh look (AOSP fastbootd warns that a slot
+  change with a snapshot applied may cancel the update).
+
+## 2026-11-16 (morning): M1a P3 offline dtbo check — the stock overlay cannot apply
+
+Laptop only, no phone. Inputs: the stock `dtbo.img` from the verified
+`.591` OTA (R4), the P2 probe DTBs `boot1.probe.dtb`/`boot2.probe.dtb`
+(sha256 `de816c9c…`/`33eda1d8…`), libufdt's overlay code built from
+`system/libufdt` `657f54c72d9e` and dtc 1.8.1 `fdtoverlay`. Outputs stay
+in `~/android/build/p3/`, outside git.
+
+- [V] Which entry: `Q/` chooses the dtbo entry from the board data alone
+  (`GetBoardDtb` → `ReadDtbFindMatch(..., VARIANT_MATCH)` over the dtbo
+  entries); our DTB plays no part. Stock boots with `ro.boot.dtbo_idx =
+  16` (A3), i.e. entry 16, "kona MTP 19811", `qcom,board-id = <0x10008 0>`
+  (variant 8, major 1), `oplus,dtsi_no = 0x4d63`. [I] OnePlus's ABL picks
+  the same entry for a RAM boot, since the board has not changed.
+- [V] Entry 16 has 101 fragments, all `target = <&label>` (no
+  `target-path`), and 156 distinct `__fixups__` labels.
+- [V] **Applying it to either probe DTB fails** in both tools: libufdt
+  "No node __symbols__ in main dtb", `fdtoverlay` `FDT_ERR_BADOFFSET`.
+  The probe DTBs are built without `-@`.
+- [V] `Q/` returns "Error: Dtb overlay failed" when `ApplyOverlay` fails
+  (`Q/BootLinux.c`, after `GetBoardDtb`) and does not boot. Exact-match
+  skip is not in play: our DTB has no `qcom,pmic-id`, so `CheckAllBitsSet`
+  cannot pass. **Prediction for R1: outcome (a), a clean refusal in
+  fastboot, nothing written** [I until the phone shows it; OnePlus's ABL
+  is a closed fork].
+- [V] Label-stub variant, sized: the same DTS compiled with `-@` (606
+  symbols) resolves only 12 of the 156 labels (`soc`, `tlmm`,
+  `spmi_bus`, `mdss_mdp`, `mdss_dsi0/1`, `sdhc_2`, `intc`, `pdc`,
+  `tsens0`, `bt_en_sleep`, `ts_int_active`); libufdt then stops at
+  `clock_rpmh`. Stubbing the other 144 would make it apply, but 60
+  fragments target real mainline nodes (`soc` 14, `tlmm` 8, `spmi_bus` 5,
+  `mdss_mdp` 32, `sdhc_2` 1) and would graft downstream nodes into them.
+  [I] That is outcome (c) by construction, so the stub variant is not a
+  safe M1a option.
+- [V] Exact-match variant, corrected input: no stock base DTB carries
+  `qcom,pmic-id` (R4, all 21 checked), so the plan's "PMIC ids from the
+  stock live DT" cannot work. The match needs the board's platform type,
+  subtype, foundry id and every PMIC model from SoC info. STAGE-0-RUNBOOK
+  has a new read-only step A6 (`/sys/devices/soc0`, never
+  `serial_number`). [I] Downstream socinfo may expose only the first
+  PMIC; a full list may need D4 with root.
+- For the owner (P4), in order of risk: (1) accept outcome (a) as the
+  first finding and boot `boot1.img` unchanged, since a refusal writes
+  nothing; (2) prepare the exact-match variant after A6; (3) no stub
+  variant. Option (1) costs one boot and tests the prediction.
+- **P4 decision (owner, 2026-11-16): option (1).** The owner follows the
+  recommendation: R1 boots `boot1.img` unchanged and records whether ABL
+  refuses (outcome a) or boots. If it refuses, the exact-match variant
+  (option 2) is next, built from the A6 socinfo capture. No stub variant.
 
 ## 2026-11-16: stage 0 phases A-B, stock moved to slot A
 
