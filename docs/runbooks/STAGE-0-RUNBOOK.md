@@ -219,6 +219,27 @@ printf 'widevine-security-level: %s\n' 'L1' | tee "captures/$D/widevine.txt"   #
 - **Rollback:** uninstall the app.
 - Paste the security level only. Do not paste ID fields the app may show.
 
+### A6. socinfo for the M1a exact-match variant (read-only)
+
+Input for M1a step P4 (`device/instantnoodlep/NOTES.md` 2026-11-16, M1a
+P3). ABL skips the stock dtbo only on an exact DTB match, which needs the
+board's platform type, subtype, foundry and PMIC models. No stock DTB
+carries `qcom,pmic-id` [V: r4-stock-images.md §3], so these values come
+from the SoC info that the downstream kernel exports. **Never read
+`serial_number` in that directory**; the command names each file.
+
+```sh
+adb shell 'cd /sys/devices/soc0 && ls; for f in machine family soc_id revision hw_platform platform_version platform_subtype platform_subtype_id foundry_id pmic_model pmic_die_revision chip_family raw_device_family raw_device_number nproduct_id; do [ -r "$f" ] && echo "$f: $(cat "$f")"; done' | tee "captures/$D/socinfo.txt"
+```
+
+- **Expect:** [I] `soc_id: 356` (`0x164`, SM8250), `hw_platform: MTP`
+  (platform type 8), a `platform_subtype_id`, a `foundry_id` and a
+  `pmic_model`. A missing file is fine; record what is there.
+- **Stop:** none. If `soc0` does not exist, record that.
+- **Rollback:** n/a.
+- Paste the `name: value` lines. The `ls` line shows file names only; do
+  not `cat` `serial_number`.
+
 ---
 
 ## Phase B: bootloader fastboot, still locked (read-only)
@@ -650,7 +671,7 @@ you paste contains a match. Device-tree node names and aliases such as
 `serial@a90000` or `serial0 = &uart6` match the `serial` pattern but are
 not identifiers; values such as `androidboot.serialno=` or a
 `serial-number` property are. Paste D5 only after checking that every
-match in it is a node name. Paste the filtered outputs from A3, B2, B3, B4, C3,
+match in it is a node name. Paste the filtered outputs from A3, A6, B2, B3, B4, C3,
 D5, `luns.txt`, `pci-root.txt`, `ufs-luns.txt` (paths and numbers only),
 `bootloader-ab.txt` and the A5 Widevine level. Do **not** paste
 `live.dts`, `dmesg`, `getvar-all*.txt`, `getprop-all.txt`, any `.bin` file

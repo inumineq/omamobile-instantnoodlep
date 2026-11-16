@@ -79,6 +79,56 @@ there: nothing was rewritten, no remote was added, and nothing was pushed to
 any remote (derekross included). No fork head exists to record. [I] whether
 the owner wants a noreply-identified fork is an owner decision, not mine.
 
+## 2026-11-16 (morning): M1a P3 offline dtbo check — the stock overlay cannot apply
+
+Laptop only, no phone. Inputs: the stock `dtbo.img` from the verified
+`.591` OTA (R4), the P2 probe DTBs `boot1.probe.dtb`/`boot2.probe.dtb`
+(sha256 `de816c9c…`/`33eda1d8…`), libufdt's overlay code built from
+`system/libufdt` `657f54c72d9e` and dtc 1.8.1 `fdtoverlay`. Outputs stay
+in `~/android/build/p3/`, outside git.
+
+- [V] Which entry: `Q/` chooses the dtbo entry from the board data alone
+  (`GetBoardDtb` → `ReadDtbFindMatch(..., VARIANT_MATCH)` over the dtbo
+  entries); our DTB plays no part. Stock boots with `ro.boot.dtbo_idx =
+  16` (A3), i.e. entry 16, "kona MTP 19811", `qcom,board-id = <0x10008 0>`
+  (variant 8, major 1), `oplus,dtsi_no = 0x4d63`. [I] OnePlus's ABL picks
+  the same entry for a RAM boot, since the board has not changed.
+- [V] Entry 16 has 101 fragments, all `target = <&label>` (no
+  `target-path`), and 156 distinct `__fixups__` labels.
+- [V] **Applying it to either probe DTB fails** in both tools: libufdt
+  "No node __symbols__ in main dtb", `fdtoverlay` `FDT_ERR_BADOFFSET`.
+  The probe DTBs are built without `-@`.
+- [V] `Q/` returns "Error: Dtb overlay failed" when `ApplyOverlay` fails
+  (`Q/BootLinux.c`, after `GetBoardDtb`) and does not boot. Exact-match
+  skip is not in play: our DTB has no `qcom,pmic-id`, so `CheckAllBitsSet`
+  cannot pass. **Prediction for R1: outcome (a), a clean refusal in
+  fastboot, nothing written** [I until the phone shows it; OnePlus's ABL
+  is a closed fork].
+- [V] Label-stub variant, sized: the same DTS compiled with `-@` (606
+  symbols) resolves only 12 of the 156 labels (`soc`, `tlmm`,
+  `spmi_bus`, `mdss_mdp`, `mdss_dsi0/1`, `sdhc_2`, `intc`, `pdc`,
+  `tsens0`, `bt_en_sleep`, `ts_int_active`); libufdt then stops at
+  `clock_rpmh`. Stubbing the other 144 would make it apply, but 60
+  fragments target real mainline nodes (`soc` 14, `tlmm` 8, `spmi_bus` 5,
+  `mdss_mdp` 32, `sdhc_2` 1) and would graft downstream nodes into them.
+  [I] That is outcome (c) by construction, so the stub variant is not a
+  safe M1a option.
+- [V] Exact-match variant, corrected input: no stock base DTB carries
+  `qcom,pmic-id` (R4, all 21 checked), so the plan's "PMIC ids from the
+  stock live DT" cannot work. The match needs the board's platform type,
+  subtype, foundry id and every PMIC model from SoC info. STAGE-0-RUNBOOK
+  has a new read-only step A6 (`/sys/devices/soc0`, never
+  `serial_number`). [I] Downstream socinfo may expose only the first
+  PMIC; a full list may need D4 with root.
+- For the owner (P4), in order of risk: (1) accept outcome (a) as the
+  first finding and boot `boot1.img` unchanged, since a refusal writes
+  nothing; (2) prepare the exact-match variant after A6; (3) no stub
+  variant. Option (1) costs one boot and tests the prediction.
+- **P4 decision (owner, 2026-11-16): option (1).** The owner follows the
+  recommendation: R1 boots `boot1.img` unchanged and records whether ABL
+  refuses (outcome a) or boots. If it refuses, the exact-match variant
+  (option 2) is next, built from the A6 socinfo capture. No stub variant.
+
 ## 2026-11-16: stage 0 phases A-B, stock moved to slot A
 
 - [V] A3b case (c) applied and worked. Stock ran
