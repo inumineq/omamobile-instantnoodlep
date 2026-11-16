@@ -4,6 +4,46 @@
 Newest first. Findings that matter beyond one subsystem go here; subsystem
 detail lives in the *-PLAN.md files.
 
+## 2026-11-16 (night): M2 T3/T4 — a stock boot erases the Arch root
+
+- [V] T3 done on the owner's go: the personalized rootfs copy (only public
+  SSH keys added, plus the usb0 networkd/NetworkManager files from
+  `omamobile-device-instantnoodlep` 0.0.2) went to `userdata` as a 12-part
+  sparse image, all OKAY. "Writing OKAY 0.001s" per part is normal: ABL
+  writes userdata in a background thread and the next command waits for it
+  (Q/FastbootCmds.c `SparseImgFlashThread`, `WaitForFlashFinished`); the
+  following `fastboot reboot bootloader` took 118 s for that reason.
+- [I] T4 first tethered boot reached Arch: usb0 kept 172.16.42.1 and
+  answered ping for hours, but port 22 refused and the initramfs getty on
+  ttyGS0 was dead (both killed by `kill -9 -1` before `switch_root`).
+  Why sshd never listened is open; a debug image with
+  `systemd.debug_shell=ttyGS0` is built for the next attempt.
+- [V] The owner then force-rebooted. Stock Android started from slot A
+  (logo), failed on userdata and stopped in OnePlus recovery (language
+  picker). Only "reboot" was chosen, no wipe. Afterwards `blkid` on
+  sda23 reads `TYPE="f2fs"` (magic 0xF2F52010 at 0x400): the ext4 root
+  is gone. So one stock boot reformats an ext4 userdata on its own; the
+  earlier [I] that AOSP formats only a wiped-looking partition is wrong
+  for this build.
+- Consequence: tethered M2 on `userdata` is fragile. Every unplanned
+  reboot (watchdog bite, `panic=10`, flat battery, buttons) boots slot A
+  and erases the root. Recommendation (owner follows recommendations):
+  move to M1b, Linux as the default boot on slot B, before writing
+  userdata again. It needs its own plan (rule 6) and owner gates for
+  `boot_b` and `set_active b`.
+- [V] Button gotcha: Volume Up + Volume Down held with the cable in while
+  the phone starts lands in EDL (`05c6:9008`, nine 15 s cycles seen on
+  the host), not fastboot. Nothing talked to it; it is harmless. The owner
+  reached fastboot by holding Volume Up + Volume Down from recovery's
+  "reboot".
+- [V] Host gotcha: the NCM interface name follows the USB port
+  (`enp0s13f0u1` vs `u2`); the `omamobile` NetworkManager connection no
+  longer pins an interface name.
+- [V] The K2 DT's PMIC `pon@800` nodes carry no `mode-bootloader`/
+  `mode-recovery`, so Linux cannot `reboot bootloader`; [I] adding
+  `mode-bootloader = <0x2>` (QC ABL's FASTBOOT_MODE) gives a way back to
+  fastboot that skips Android.
+
 ## 2026-11-16 (evening): restore assets R5, MSM package on disk
 
 - [V] Restore assets on local disk (2026-11-16): MSM package version
