@@ -1,6 +1,16 @@
 <!-- SPDX-License-Identifier: MIT -->
 # GNSS-M5-PLAN: SDX55 location over QRTR on instantnoodlep
 
+> 2026-11-17 implementation addendum: read [MODEM-M5-DELTA.md](MODEM-M5-DELTA.md)
+> first. [V: D/K17:7-10,33-87 in that delta] The public device uses a
+> flashless-specific MHI profile and Sahara host loader, not generic SDX55
+> support alone. Its endpoint DTS, MBI route, exact candidate config,
+> packages, firmware exclusions and first RAM-boot gate are specified there.
+> [I] That first gate stops at ports and `mmcli -L`; SIM, registration,
+> GNSS tracking and all later tests below need a separate owner go.
+> Private-state provenance blocks release until resolved; no build or
+> phone test was performed for this addendum.
+
 House-rule-6 gate for the GNSS subsystem on the OnePlus 8 Pro IN2023. This
 is a documentation-only plan: no code, kernel config, firmware or device
 state is changed here.
@@ -118,7 +128,7 @@ content. Runtime backing must be isolated, private, and owner-approved.
 
 | Area | Candidate | Gate / decision |
 | --- | --- | --- |
-| PCIe/MHI | Enable only the modem port verified by MODEM-M5 O2; mainline `pci_generic` brings up SDX55 and exposes IPCR/QMI channels | MODEM-M5 O2-O4 and R1 first; no modem-child DTS node |
+| PCIe/MHI | Enable only the modem port verified by MODEM-M5 O2; reviewed flashless MHI/Sahara profile must reach AMSS before IPCR/QMI channels are usable [V: MODEM-M5-DELTA §1-3] | MODEM-M5 O2-O4 and R1 first; flashless endpoint/profile required [V: MODEM-M5-DELTA §2-3] |
 | QRTR | `CONFIG_QRTR`, `CONFIG_QRTR_MHI`, and userland QRTR name service | MODEM-M5 O6/R2; record unit/package names |
 | GNSS core | No new kernel driver initially; no `CONFIG_GNSS` requirement for QMI LOC-to-ModemManager. If project needs a kernel GNSS char device, scope an upstream design separately. | O1 confirms v7.3-rc6 driver inventory; do not claim `/dev/gnss0` |
 | Userspace | First test stock Arch ModemManager location. Only if unsupported, package an opt-in LOC→NMEA PTY bridge and gpsd integration, under GeoClue/on-demand permissions. | O2/O3 and R1-R4; don't copy public script |
