@@ -85,6 +85,7 @@ cmd_brief() {
   done
   for ref in $(recent_branches); do
     added_on "$ref" "$ACTIVE" | while read -r f; do
+      [ "$(basename "$f")" = README.md ] && continue
       printf '  %s: %s  [pushed, not merged: %s]\n' "$(basename "$f" .md)" \
         "$(git show "$ref:$f" | grep -m1 -vE '^(<!--|#|$)')" "${ref#origin/}"
     done
