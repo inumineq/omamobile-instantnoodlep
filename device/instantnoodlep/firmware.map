@@ -28,7 +28,6 @@ modem:/image/venus.mdt|qcom/sm8250/OnePlus/instantnoodlep/venus.mbn
 
 # SDX55 modem over MHI (M5). pci_generic hardcodes qcom/sdx55m/sbl1.mbn.
 modem:/image/sdx55m/sbl1.mbn|qcom/sdx55m/sbl1.mbn
-modem:/image/sdx55m/edl.mbn|qcom/sdx55m/edl.mbn
 modem:/image/sdx55m/acdb.mbn|qcom/sdx55m/acdb.mbn
 modem:/image/sdx55m/aop.mbn|qcom/sdx55m/aop.mbn
 modem:/image/sdx55m/apdp.mbn|qcom/sdx55m/apdp.mbn
