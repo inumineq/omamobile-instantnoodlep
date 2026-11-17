@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: MIT
+# Proposal against derekross/omarchy-mobile c4623572be1c141d602cf99a83ae0bf9e3eea09c.
+# The new device config needs an installer when the device package is added.
+
+diff --git a/packages/omamobile-shell/plugins/omamobile.back/Back.qml b/packages/omamobile-shell/plugins/omamobile.back/Back.qml
+--- a/packages/omamobile-shell/plugins/omamobile.back/Back.qml
++++ b/packages/omamobile-shell/plugins/omamobile.back/Back.qml
+@@ -67,14 +67,24 @@
+
+   // `shell call omamobile.back state ''`
+   function state() {
+-    return JSON.stringify({ fullscreen: fullscreenOnScreen, strips: !fullscreenOnScreen, edge: edge, threshold: BackModel.THRESHOLD,
++    return JSON.stringify({ fullscreen: fullscreenOnScreen, strips: !fullscreenOnScreen, edge: edge, inset: edgeInset, threshold: BackModel.THRESHOLD,
+                             asks: BackLink.names() })
+   }
+
+   // The touchable strip at each edge, and the width its window draws in.
+-  readonly property int edge: 14
++  function configuredPixels(name, fallback, minimum, maximum) {
++    var raw = Quickshell.env(name)
++    if (raw === undefined || raw === null || String(raw).trim() === "") return fallback
++    var value = Number(raw)
++    if (!isFinite(value)) return fallback
++    return Math.max(minimum, Math.min(maximum, Math.round(value)))
++  }
++
++  // Device overrides are compositor logical pixels; retain existing defaults.
++  readonly property int edge: configuredPixels("OMAMOBILE_BACK_EDGE_WIDTH", 14, 1, 128)
++  readonly property int edgeInset: configuredPixels("OMAMOBILE_BACK_EDGE_INSET", 0, 0, 256)
+   readonly property int arrowSize: Math.max(40, Style.space(40))
+-  readonly property int reach: arrowSize + 24
++  readonly property int reach: edgeInset + Math.max(edge, arrowSize + 24)
+
+   // A real fullscreen window (mode bit 2; a maximized one reports 1) on the
+   // focused workspace, debounced as the home pill does it
+@@ -156,7 +166,7 @@
+         id: strip
+         anchors.top: parent.top
+         anchors.bottom: parent.bottom
+-        x: win.rightEdge ? parent.width - width : 0
++        x: win.rightEdge ? parent.width - root.edgeInset - width : root.edgeInset
+         width: root.edge
+
+         // The touch stays with this surface once it lands on the strip,
+@@ -198,7 +208,7 @@
+         width: root.arrowSize
+         height: root.arrowSize
+         radius: width / 2
+-        x: win.rightEdge ? parent.width - shown * (width + 12) : -width + shown * (width + 12)
++        x: win.rightEdge ? parent.width - root.edgeInset - shown * (width + 12) : root.edgeInset - width + shown * (width + 12)
+         y: Math.max(0, Math.min(parent.height - height, swipe.atY - height / 2))
+         opacity: 0.4 + 0.55 * shown
+         color: swipe.armed ? Commons.Color.accent : Commons.Color.bar.background
+diff --git a/packages/omamobile-device-instantnoodlep/vendor/environment.d/50-omamobile-back.conf b/packages/omamobile-device-instantnoodlep/vendor/environment.d/50-omamobile-back.conf
+new file mode 100644
+--- /dev/null
++++ b/packages/omamobile-device-instantnoodlep/vendor/environment.d/50-omamobile-back.conf
+@@ -0,0 +1,6 @@
++# SPDX-License-Identifier: MIT
++# Provisional: corner taps in NOTES do not establish the touch boundary.
++# At scale 3, try a symmetric 48 logical px inset and 32 logical px strip.
++# Verify both edges before enabling in a released device package.
++OMAMOBILE_BACK_EDGE_INSET=48
++OMAMOBILE_BACK_EDGE_WIDTH=32

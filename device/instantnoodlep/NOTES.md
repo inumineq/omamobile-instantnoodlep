@@ -4,6 +4,20 @@
 Newest first. Findings that matter beyond one subsystem go here; subsystem
 detail lives in the *-PLAN.md files.
 
+## 2026-11-17: shell UI source research (no phone run)
+
+- [V] Upstream shell at `c4623572be1c141d602cf99a83ae0bf9e3eea09c`
+  has a fixed 14-logical-pixel input strip (`Back.qml:74-77,149-160` in
+  `packages/omamobile-shell/plugins/omamobile.back/`). The Wi-Fi picker
+  handles Escape but has no BackLink registration (`omamobile.quicksettings/
+  WifiPanel.qml:449-455`, full-file registration search). Native Settings
+  0.1.2 has only Display/About in its root catalog (`packages/omamobile-settings/
+  app/catalog.json:2-21`); the separate `omamobile-set-pin` helper remains.
+- [I] The recorded corner taps do not establish a minimum reachable x.
+  Device geometry 48/32 is provisional. Source alone does not prove why
+  the owner's Wi-Fi exit failed. Drafts and host checks: `docs/upstream/`;
+  gated device verification: `SHELL-UX-PLAN.md`. No phone changes performed.
+
 ## 2026-11-17 (afternoon): Wi-Fi associated and BT scanning on k3-wifi2
 
 - [V] k3-wifi2 (`-gf9a20697e2ae`) RAM-booted: with the `serial1 = &uart6`
