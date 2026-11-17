@@ -4,6 +4,31 @@
 Newest first. Findings that matter beyond one subsystem go here; subsystem
 detail lives in the *-PLAN.md files.
 
+## 2026-11-17 (night): daily K3 on boot_b, B5 set
+
+- [V] Part R (RAM boot of `boot-daily.img`) passed: `running`, panel
+  connected, Hyprland on `msm`, Wi-Fi connected (37 BSS in a scan), hci0
+  on `hci_uart_qca`; with a random locally administered public address set
+  on the phone (not recorded) a 20 s `btmgmt find` returned 610 events;
+  gauge 95 %, 4.256 V, 28.4 °C, Not charging; touch 13101 event lines
+  while the owner tapped.
+- [V] F2 `fastboot flash boot_b boot-daily.img` (sha256 `710a61b5…`):
+  afterwards `successful:b no`, `retry-count:b 7`. The laptop's
+  `/tmp/claude-1000` quota ran out during the command, so its output was
+  lost; the vars and the later boot confirm the write.
+- [V] The first boot from flash dropped off USB for a while; the owner saw
+  it come back at the Linux console. Hours later (the laptop's network and
+  Orca restarted) the slot's retry count had fallen to 1
+  (attributes 0x000f…). Watch-out: count boots after any `boot_b` flash and
+  do B5 straight after the first good boot.
+- [V] F5 B5 from fresh reads (`~/android/build/b5-20261117-2209-daily/`):
+  attributes 0x000f… -> 0x004f…, exactly LBAs 1, 3, 655356, 655359
+  (8/1/1/8 bytes changed), read-backs equal, `ro` 1 again.
+- [V] F6: `current-slot b`, `slot-successful:b yes`, `unbootable:b no`;
+  slot A unchanged. Daily boots from flash to Hyprland on `msm`, Wi-Fi
+  connected, hci0 present. Rollback kernel: combo
+  `~/android/build/k3-combo-ram/boot-r3-gpu.img` (then B5 again).
+
 ## 2026-11-17 (afternoon, omabook): daily K3 built (offline)
 
 - [V] Kernel branch `instantnoodlep-k3-daily` (`~/src/l-k3-daily` @
@@ -17,6 +42,80 @@ detail lives in the *-PLAN.md files.
 - [V] A `-j12` kernel build was killed (make error 137) while other builds
   ran on the laptop; `-j6` finished it. Use `-j6` when another kernel build
   is running.
+## 2026-11-17 (evening): modem kernel candidate built offline
+
+- [V] Branch `instantnoodlep-k3-modem` on `aa996bae0` builds
+  `7.3.0-rc6-instantnoodlep-k3-modem-ge9ff58528f8b` (LLVM=1, arm64, Docker
+  volume): PCIe2 + GIC MBI route + `pci17cb,306` with `qcom,flashless`, and a
+  bounded image-only Sahara loader. Artefacts and sha256: MODEM-M5-DELTA
+  §6.1. Nothing ran on the phone.
+- [V] `dtbs_check` is clean and really applies the new binding: an invalid
+  property on `modem@0,0` is rejected by `qcom,sdx55-mhi.yaml`. The endpoint
+  `reg` first cell `0x10000` resolves to devfn 0 through
+  `of_pci_get_devfn()`, so the node attaches to the device at bus 1.
+- [I] The candidate inverts the inherited WAKE# polarity (SoC DTS says
+  `GPIO_ACTIVE_HIGH`, the board DTS says `GPIO_ACTIVE_LOW`). Gate A of
+  MODEM-M5-DELTA §6 must confirm it against the stock DTBO.
+- [V] `CONFIG_ARM_GIC_V3_MBI` does not exist; the earlier fragment listed it
+  and Kconfig dropped it silently. `WWAN` is `depends on GNSS || GNSS = n`,
+  so the fragment must unset `GNSS` to keep the transport built in.
+
+## 2026-11-17: shell UI source research (no phone run)
+
+- [V] Upstream shell at `c4623572be1c141d602cf99a83ae0bf9e3eea09c`
+  has a fixed 14-logical-pixel input strip (`Back.qml:74-77,149-160` in
+  `packages/omamobile-shell/plugins/omamobile.back/`). The Wi-Fi picker
+  handles Escape but has no BackLink registration (`omamobile.quicksettings/
+  WifiPanel.qml:449-455`, full-file registration search). Native Settings
+  0.1.2 has only Display/About in its root catalog (`packages/omamobile-settings/
+  app/catalog.json:2-21`); the separate `omamobile-set-pin` helper remains.
+- [I] The recorded corner taps do not establish a minimum reachable x.
+  Device geometry 48/32 is provisional. Source alone does not prove why
+  the owner's Wi-Fi exit failed. Drafts and host checks: `docs/upstream/`;
+  gated device verification: `SHELL-UX-PLAN.md`. No phone changes performed.
+
+## 2026-11-17 (afternoon): Wi-Fi associated and BT scanning on k3-wifi2
+
+- [V] k3-wifi2 (`-gf9a20697e2ae`) RAM-booted: with the `serial1 = &uart6`
+  alias the GENI UART probes and hci0 appears, but comes up unconfigured
+  (no public address). After `btmgmt public-addr` with a locally
+  administered address (not persistent; value not recorded here) the
+  controller powers on and a scan lists dozens of devices. Persistent
+  address handling: design in progress (daily kernel worker).
+- [V] The owner joined their Wi-Fi network from the phone UI; NTP synced
+  the clock. SSH is not reachable over Wi-Fi (UFW blocks 22 on `wlp1s0`).
+- [V] UI: the owner could not leave the Wi-Fi panel with gestures (no
+  Android buttons; the edge back-swipe does not register on the curved
+  edges). Drafts for upstream in progress (worker `shell-ux`).
+
+## 2026-11-17 (evening): Wi-Fi up on a RAM boot; BT needs a serial alias
+
+- [V] k3-wifi (`-g422090919028`) RAM-booted with the linux-firmware
+  QCA6390 files on the rootfs: `PCIe Gen.2 x1 link up`, ath11k
+  `chip_id 0x0 chip_family 0xb board_id 0xff`, firmware 0x10121492, no
+  board-data error, netdev `wlp1s0`, regdomain DK, 30 APs on 2.4 and
+  5 GHz. PM8009 s2f for the PMU's vddpmu works. Details: WIFI-BT-M5-PLAN §7.3.
+- [V] Bluetooth failed: `qcom_geni_serial 998000.serial: Invalid line -19`.
+  With no `serial*` alias in the DTB the GENI UART driver cannot allocate a
+  line (code path in the plan's §3). Fixed by `serial1 = &uart6` in the
+  k3-wifi2 build (`-gf9a20697e2ae`, `~/orca/build-out/k3-wifi2/` on
+  macbookpro); not booted yet.
+- [V] `vdda`/`vddpe-3v3` dummy-regulator notes on pcie0 are expected: no
+  SM8250 board describes those supplies.
+
+## 2026-11-17 (afternoon): Wi-Fi/BT kernel built on the Mac (offline only)
+
+- [V] Branch `instantnoodlep-k3-wifi` = combo K3 + two DTS commits (PM8009
+  s2f; QCA6390 PMU, PCIe0 + `wifi@0`, UART6 + `bluetooth`). Built on
+  macbookpro in a Linux arm64 container, LLVM 23.1.6, combo `.config`:
+  release `7.3.0-rc6-instantnoodlep-k3-g422090919028`. Artefacts and
+  SHA256SUMS in `~/orca/build-out/k3-wifi/` (not in git).
+- [V] `CHECK_DTBS` on the board DTB is clean. It caught `memory-region` on
+  `wifi@0`, which would put ath11k in fixed-memory mode; dropped (learning
+  `l-8b77763d`).
+- [V] combo's `.config` already carries every Wi-Fi/BT driver as a module;
+  no config change was needed.
+- Nothing ran on the phone. RAM-boot runbook: WIFI-BT-M5-PLAN §7.
 
 ## 2026-11-17 (midday): K3 on boot_b
 

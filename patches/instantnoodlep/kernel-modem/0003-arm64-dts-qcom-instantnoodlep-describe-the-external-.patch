@@ -1,0 +1,77 @@
+From e06fd542fe7365222e414cb556c4672a6b21939f Mon Sep 17 00:00:00 2001
+From: Mikkel Inumineq <hello@mikkeljorgensen.dk>
+Date: Tue, 17 Nov 2026 13:55:28 +0100
+Subject: [PATCH 3/4] arm64: dts: qcom: instantnoodlep: describe the external
+ flashless SDX55
+
+Enable PCIe2 and its existing PM8150 L5A/L9A rails, route MSI through the
+GICv3 MBI range the endpoint writes to, and describe the modem endpoint
+with qcom,flashless.
+
+PERST# and WAKE# move to the root port as reset-gpios and wake-gpios,
+which is where the PCI bus schema expects them; the host node copies are
+deprecated. CLKREQ, stream IDs, resets and the apps_smmu configuration
+stay as inherited from sm8250.dtsi.
+
+The AP2MDM status and error-fatal GPIO hogs of the reference are debug
+additions with an unverified assertion order, so they stay out. Stock
+wiring and the private-state policy remain owner gates before any RAM
+boot of this candidate.
+
+Assisted-by: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../qcom/sm8250-oneplus-instantnoodlep.dts    | 31 +++++++++++++++++++
+ 1 file changed, 31 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8250-oneplus-instantnoodlep.dts b/arch/arm64/boot/dts/qcom/sm8250-oneplus-instantnoodlep.dts
+index 0d14a19ff..30d908934 100644
+--- a/arch/arm64/boot/dts/qcom/sm8250-oneplus-instantnoodlep.dts
++++ b/arch/arm64/boot/dts/qcom/sm8250-oneplus-instantnoodlep.dts
+@@ -384,6 +384,13 @@ touchscreen@48 {
+ 	};
+ };
+ 
++/* Public instantnoodlep reference: darknagel, patches 18 and 19. */
++&intc {
++	msi-controller;
++	mbi-ranges = <832 32>;
++	mbi-alias = <0x0 0x17a10000>;
++};
++
+ &mdss {
+ 	status = "okay";
+ };
+@@ -424,6 +431,30 @@ &mdss_dsi0_phy {
+ 	status = "okay";
+ };
+ 
++&pcie2 {
++	/delete-property/ perst-gpios;
++	/delete-property/ wake-gpios;
++	msi-parent = <&intc>;
++	status = "okay";
++
++	pcie@0 {
++		reset-gpios = <&tlmm 85 GPIO_ACTIVE_LOW>;
++		wake-gpios = <&tlmm 87 GPIO_ACTIVE_LOW>;
++
++		modem@0,0 {
++			compatible = "pci17cb,306";
++			reg = <0x10000 0x0 0x0 0x0 0x0>;
++			qcom,flashless;
++		};
++	};
++};
++
++&pcie2_phy {
++	vdda-phy-supply = <&vreg_l5a_0p88>;
++	vdda-pll-supply = <&vreg_l9a_1p2>;
++	status = "okay";
++};
++
+ &pm8150_gpios {
+ 	vol_up_n: vol-up-n-state {
+ 		pins = "gpio6";
+-- 
+2.55.0
+

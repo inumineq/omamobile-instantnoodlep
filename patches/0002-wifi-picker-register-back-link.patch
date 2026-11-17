@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: MIT
+# Proposal against derekross/omarchy-mobile c4623572be1c141d602cf99a83ae0bf9e3eea09c.
+# Preserve Escape fallback and the existing lock-layer policy.
+
+diff --git a/packages/omamobile-shell/plugins/omamobile.quicksettings/WifiPanel.qml b/packages/omamobile-shell/plugins/omamobile.quicksettings/WifiPanel.qml
+--- a/packages/omamobile-shell/plugins/omamobile.quicksettings/WifiPanel.qml
++++ b/packages/omamobile-shell/plugins/omamobile.quicksettings/WifiPanel.qml
+@@ -42,6 +42,20 @@
+   readonly property int touchSize: Math.max(44, Style.space(48))
+   readonly property int pad: Style.spacing.panelPadding
+
++  // Route Back directly even when keyboard focus belongs to another surface.
++  // The standard surface tier leaves the on-screen keyboard first.
++  Loader {
++    source: Qt.resolvedUrl("../omamobile.back/BackLinkClient.qml")
++    onLoaded: {
++      item.name = "wifi picker"
++      item.handler = function() {
++        if (root.sheet) root.cancelSheet()
++        else root.backRequested()
++      }
++      item.active = Qt.binding(function() { return root.opened })
++    }
++  }
++
+   // ---------------------------------------------------------------- lifecycle
+
+   function open() {

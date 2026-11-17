@@ -1,0 +1,481 @@
+From d1a51b5862cef7f37a243e54df3524135e94a2ad Mon Sep 17 00:00:00 2001
+From: Mikkel Inumineq <hello@mikkeljorgensen.dk>
+Date: Tue, 17 Nov 2026 13:55:27 +0100
+Subject: [PATCH 2/4] bus: mhi: host: add a bounded image-only Sahara loader
+ for flashless SDX55
+
+A flashless SDX55 boots from images the host serves over the SBL SAHARA
+channels, so the host needs a Sahara server before MHI can come up. Add
+one that serves only this board's non-private firmware, with bounded
+commands, image size, served bytes and synchronous TX batch waits.
+
+Requests for EFS, per-unit DDR training state, memory dumps and runtime
+sync are refused and end the session. The loader never resets the
+endpoint to retry, never reads modem memory and never persists state, and
+it exposes no Firehose channel or EDL loader.
+
+Image IDs, channel layout and batching follow the public instantnoodlep
+reference (Timo/darknagel, 65b22ce9f236, patches 16, 20-22 and 31); the
+Sahara packet semantics are documented by the GPL-2.0-only qaic driver.
+
+Assisted-by: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/bus/mhi/host/Kconfig       |   9 +
+ drivers/bus/mhi/host/Makefile      |   3 +
+ drivers/bus/mhi/host/pci_generic.c |  46 ++++
+ drivers/bus/mhi/host/sahara.c      | 341 +++++++++++++++++++++++++++++
+ 4 files changed, 399 insertions(+)
+ create mode 100644 drivers/bus/mhi/host/sahara.c
+
+diff --git a/drivers/bus/mhi/host/Kconfig b/drivers/bus/mhi/host/Kconfig
+index da5cd0c9f..7d124f163 100644
+--- a/drivers/bus/mhi/host/Kconfig
++++ b/drivers/bus/mhi/host/Kconfig
+@@ -21,6 +21,15 @@ config MHI_BUS_DEBUG
+ 	  reading and/or modifying some values within the MHI controller
+ 	  for debug and test purposes.
+ 
++config MHI_BUS_SAHARA
++	tristate "Bounded Sahara image loader for flashless SDX55"
++	depends on MHI_BUS
++	help
++	  Serve allowlisted firmware images over the SBL SAHARA channel of a
++	  flashless SDX55. Private EFS/DDR state, memory dumps and state sync
++	  are deliberately unsupported. A request for these stops the loader.
++	  No modem partition access or persistent state storage is provided.
++
+ config MHI_BUS_PCI_GENERIC
+ 	tristate "MHI PCI controller driver"
+ 	depends on MHI_BUS
+diff --git a/drivers/bus/mhi/host/Makefile b/drivers/bus/mhi/host/Makefile
+index 859c2f384..d28740984 100644
+--- a/drivers/bus/mhi/host/Makefile
++++ b/drivers/bus/mhi/host/Makefile
+@@ -4,3 +4,6 @@ mhi-$(CONFIG_MHI_BUS_DEBUG) += debugfs.o
+ 
+ obj-$(CONFIG_MHI_BUS_PCI_GENERIC) += mhi_pci_generic.o
+ mhi_pci_generic-y += pci_generic.o
++
++obj-$(CONFIG_MHI_BUS_SAHARA) += mhi_sahara.o
++mhi_sahara-y := sahara.o
+diff --git a/drivers/bus/mhi/host/pci_generic.c b/drivers/bus/mhi/host/pci_generic.c
+index b636e2c23..14d924c56 100644
+--- a/drivers/bus/mhi/host/pci_generic.c
++++ b/drivers/bus/mhi/host/pci_generic.c
+@@ -12,6 +12,7 @@
+ #include <linux/device.h>
+ #include <linux/mhi.h>
+ #include <linux/module.h>
++#include <linux/property.h>
+ #include <linux/pci.h>
+ #include <linux/pm_runtime.h>
+ #include <linux/timer.h>
+@@ -415,6 +416,46 @@ static const struct mhi_pci_dev_info mhi_qcom_sdx55_info = {
+ 	.sideband_wake = false,
+ };
+ 
++/*
++ * Flashless SDX55 wiring and channel numbers: Timo (darknagel), public
++ * instantnoodlep reference, commit 65b22ce9f236, patches 17, 20 and 31.
++ * Keep the no-burst IP_HW0 quirk local to this profile. No Firehose or EDL.
++ */
++static const struct mhi_channel_config mhi_sdx55_flashless_channels[] = {
++	MHI_CHANNEL_CONFIG_UL_SBL(2, "SAHARA", 128, 0),
++	MHI_CHANNEL_CONFIG_DL_SBL(3, "SAHARA", 32, 0),
++	MHI_CHANNEL_CONFIG_UL(4, "DIAG", 16, 1),
++	MHI_CHANNEL_CONFIG_DL(5, "DIAG", 16, 1),
++	MHI_CHANNEL_CONFIG_UL(12, "MBIM", 4, 0),
++	MHI_CHANNEL_CONFIG_DL(13, "MBIM", 4, 0),
++	MHI_CHANNEL_CONFIG_UL(14, "QMI", 4, 0),
++	MHI_CHANNEL_CONFIG_DL(15, "QMI", 4, 0),
++	MHI_CHANNEL_CONFIG_UL(20, "IPCR", 8, 0),
++	MHI_CHANNEL_CONFIG_DL(21, "IPCR", 8, 0),
++	MHI_CHANNEL_CONFIG_UL(46, "IP_SW0", 64, 2),
++	MHI_CHANNEL_CONFIG_DL(47, "IP_SW0", 64, 3),
++	MHI_CHANNEL_CONFIG_UL(100, "IP_HW0", 128, 4),
++	MHI_CHANNEL_CONFIG_DL(101, "IP_HW0", 128, 5),
++};
++
++static const struct mhi_controller_config mhi_sdx55_flashless_config = {
++	.max_channels = 128,
++	.timeout_ms = 20000,
++	.num_channels = ARRAY_SIZE(mhi_sdx55_flashless_channels),
++	.ch_cfg = mhi_sdx55_flashless_channels,
++	.num_events = ARRAY_SIZE(modem_qcom_v1_mhi_events),
++	.event_cfg = modem_qcom_v1_mhi_events,
++};
++
++static const struct mhi_pci_dev_info mhi_sdx55_flashless_info = {
++	.name = "qcom-sdx55m-flashless",
++	.fw = "qcom/sdx55m/sbl1.mbn",
++	.config = &mhi_sdx55_flashless_config,
++	.bar_num = MHI_PCI_DEFAULT_BAR_NUM,
++	.dma_data_width = 32,
++	.mru_default = 32768,
++};
++
+ static const struct mhi_pci_dev_info mhi_qcom_sdx35_info = {
+ 	.name = "qcom-sdx35m",
+ 	.config = &modem_qcom_v2_mhiv_config,
+@@ -1371,6 +1412,11 @@ static int mhi_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
+ 	unsigned int dma_data_width;
+ 	int err;
+ 
++	/* The soldered flashless part shares a subsystem ID with Foxconn. */
++	if (pdev->vendor == PCI_VENDOR_ID_QCOM && pdev->device == 0x0306 &&
++	    device_property_read_bool(&pdev->dev, "qcom,flashless"))
++		info = &mhi_sdx55_flashless_info;
++
+ 	dev_info(&pdev->dev, "MHI PCI device found: %s\n", info->name);
+ 
+ 	/* mhi_pdev.mhi_cntrl must be zero-initialized */
+diff --git a/drivers/bus/mhi/host/sahara.c b/drivers/bus/mhi/host/sahara.c
+new file mode 100644
+index 000000000..9d7369679
+--- /dev/null
++++ b/drivers/bus/mhi/host/sahara.c
+@@ -0,0 +1,341 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Bounded, image-only Sahara server for flashless SDX55.
++ * Protocol reference: Qualcomm's GPL-2.0-only drivers/accel/qaic/sahara.c.
++ * SDX55 image IDs and batching behavior: Timo (darknagel), public
++ * oneplus-instantnoodlep-nura-unofficial, 65b22ce9f236, patches 16, 20-22.
++ *
++ * This implementation never reads modem memory or accepts private state.
++ * Unknown images, EFS/DDR requests, debug modes and sync commands terminate
++ * the session without a reset/retry loop. Firmware comes from the owner.
++ */
++#include <linux/completion.h>
++#include <linux/firmware.h>
++#include <linux/jiffies.h>
++#include <linux/mhi.h>
++#include <linux/module.h>
++#include <linux/pci.h>
++#include <linux/property.h>
++#include <linux/sizes.h>
++#include <linux/slab.h>
++#include <linux/spinlock.h>
++#include <linux/workqueue.h>
++
++#define SAHARA_HELLO		1
++#define SAHARA_HELLO_RESP	2
++#define SAHARA_READ_DATA		3
++#define SAHARA_END_IMAGE	4
++#define SAHARA_DONE		5
++#define SAHARA_DONE_RESP		6
++#define SAHARA_VERSION		2
++#define SAHARA_MTU		0xffff
++#define SAHARA_BATCH		16
++#define SAHARA_MAX_IMAGE	SZ_64M
++#define SAHARA_MAX_SERVED	(SZ_1M * 512ULL)
++#define SAHARA_MAX_COMMANDS	8192
++#define SAHARA_TIMEOUT_MS	10000
++#define SAHARA_NO_IMAGE		U32_MAX
++
++enum sahara_state {
++	SAHARA_WAIT_HELLO,
++	SAHARA_READY,
++	SAHARA_WAIT_DONE,
++};
++
++struct sahara {
++	struct mhi_device *mhi;
++	struct work_struct work;
++	spinlock_t lock; /* Serializes stopping and callback work scheduling. */
++	bool stopping;
++	struct completion tx_done;
++	atomic_t tx_pending;
++	atomic_t tx_error;
++	void *tx[SAHARA_BATCH];
++	__le32 *rx;
++	size_t rx_len;
++	int rx_error;
++	const struct firmware *fw;
++	u32 image;
++	u64 served;
++	unsigned int commands;
++	enum sahara_state state;
++};
++
++/* No entries for EFS (16/17/20) or per-unit DDR training (34). */
++static const char * const sahara_images[] = {
++	[6] = "qcom/sdx55m/apps.mbn",
++	[8] = "qcom/sdx55m/qdsp6sw.mbn",
++	[21] = "qcom/sdx55m/sbl1.mbn",
++	[23] = "qcom/sdx55m/aop.mbn",
++	[25] = "qcom/sdx55m/tz.mbn",
++	[29] = "qcom/sdx55m/acdb.mbn",
++	[33] = "qcom/sdx55m/hyp.mbn",
++	[36] = "qcom/sdx55m/multi_image_qti.mbn",
++	[37] = "qcom/sdx55m/multi_image.mbn",
++	[38] = "qcom/sdx55m/xbl_cfg.elf",
++	[40] = "qcom/sdx55m/apdp.mbn",
++	[41] = "qcom/sdx55m/devcfg.mbn",
++	[42] = "qcom/sdx55m/sec.elf",
++};
++
++static void sahara_release_image(struct sahara *s)
++{
++	release_firmware(s->fw);
++	s->fw = NULL;
++	s->image = SAHARA_NO_IMAGE;
++}
++
++/* Called only by the worker; buffers remain owned until all TX callbacks. */
++static int sahara_send(struct sahara *s, const void *data, size_t len)
++{
++	const u8 *cursor = data;
++	unsigned int n, i;
++	size_t count;
++	int ret;
++
++	while (len) {
++		if (READ_ONCE(s->stopping))
++			return -ESHUTDOWN;
++		n = min_t(unsigned int, SAHARA_BATCH,
++			  mhi_get_free_desc_count(s->mhi, DMA_TO_DEVICE));
++		n = min_t(unsigned int, n, DIV_ROUND_UP(len, SAHARA_MTU));
++		if (!n)
++			return -ENOSPC;
++
++		reinit_completion(&s->tx_done);
++		atomic_set(&s->tx_error, 0);
++		atomic_set(&s->tx_pending, n);
++		for (i = 0; i < n; i++) {
++			count = min_t(size_t, len, SAHARA_MTU);
++			memcpy(s->tx[i], cursor, count);
++			ret = mhi_queue_buf(s->mhi, DMA_TO_DEVICE, s->tx[i],
++					    count, i == n - 1 ? MHI_EOT : MHI_CHAIN);
++			if (ret)
++				return ret;
++			cursor += count;
++			len -= count;
++		}
++		if (!wait_for_completion_timeout(&s->tx_done,
++						 msecs_to_jiffies(SAHARA_TIMEOUT_MS)))
++			return -ETIMEDOUT;
++		if (READ_ONCE(s->stopping))
++			return -ESHUTDOWN;
++		ret = atomic_read(&s->tx_error);
++		if (ret)
++			return ret;
++	}
++	return 0;
++}
++
++static int sahara_read_image(struct sahara *s)
++{
++	u32 image = le32_to_cpu(s->rx[2]);
++	u32 offset = le32_to_cpu(s->rx[3]);
++	u32 len = le32_to_cpu(s->rx[4]);
++	int ret;
++
++	if (image >= ARRAY_SIZE(sahara_images) || !sahara_images[image])
++		return -EACCES;
++	if (s->image != SAHARA_NO_IMAGE && s->image != image)
++		return -EPROTO;
++	if (!s->fw) {
++		/* Direct lookup only: never invoke a userspace firmware fallback. */
++		ret = request_firmware_direct(&s->fw, sahara_images[image], &s->mhi->dev);
++		if (ret)
++			return ret;
++		s->image = image;
++		if (s->fw->size > SAHARA_MAX_IMAGE)
++			return -EFBIG;
++	}
++	if (!len || offset >= s->fw->size || len > s->fw->size - offset)
++		return -EINVAL;
++	if (len > SAHARA_MAX_SERVED - s->served)
++		return -EFBIG;
++	s->served += len;
++	return sahara_send(s, s->fw->data + offset, len);
++}
++
++static int sahara_command(struct sahara *s)
++{
++	__le32 response[12] = {};
++	u32 cmd, len, status;
++	int ret;
++
++	if (s->rx_error)
++		return s->rx_error;
++	if (s->rx_len < 8 || s->rx_len > 48)
++		return -EPROTO;
++	cmd = le32_to_cpu(s->rx[0]);
++	len = le32_to_cpu(s->rx[1]);
++	if (len != s->rx_len || ++s->commands > SAHARA_MAX_COMMANDS)
++		return -EPROTO;
++
++	switch (cmd) {
++	case SAHARA_HELLO:
++		if (len != 48 || s->state != SAHARA_WAIT_HELLO ||
++		    le32_to_cpu(s->rx[2]) < SAHARA_VERSION ||
++		    le32_to_cpu(s->rx[3]) > SAHARA_VERSION ||
++		    le32_to_cpu(s->rx[4]) < sizeof(response) ||
++		    le32_to_cpu(s->rx[5]) > 1)
++			return -EPROTO;
++		response[0] = cpu_to_le32(SAHARA_HELLO_RESP);
++		response[1] = cpu_to_le32(sizeof(response));
++		response[2] = cpu_to_le32(SAHARA_VERSION);
++		response[3] = cpu_to_le32(SAHARA_VERSION);
++		response[5] = s->rx[5];
++		ret = sahara_send(s, response, sizeof(response));
++		if (!ret)
++			s->state = SAHARA_READY;
++		return ret;
++	case SAHARA_READ_DATA:
++		if (len != 20 || s->state != SAHARA_READY)
++			return -EPROTO;
++		return sahara_read_image(s);
++	case SAHARA_END_IMAGE:
++		if (len != 16 || s->state != SAHARA_READY ||
++		    s->image == SAHARA_NO_IMAGE || le32_to_cpu(s->rx[2]) != s->image)
++			return -EPROTO;
++		if (le32_to_cpu(s->rx[3]))
++			return -EIO;
++		sahara_release_image(s);
++		response[0] = cpu_to_le32(SAHARA_DONE);
++		response[1] = cpu_to_le32(8);
++		ret = sahara_send(s, response, 8);
++		if (!ret)
++			s->state = SAHARA_WAIT_DONE;
++		return ret;
++	case SAHARA_DONE_RESP:
++		if (len != 12 || s->state != SAHARA_WAIT_DONE)
++			return -EPROTO;
++		status = le32_to_cpu(s->rx[2]);
++		if (status > 1)
++			return -EPROTO;
++		s->state = SAHARA_WAIT_HELLO;
++		/* Complete means no further Sahara RX, including runtime sync. */
++		return status ? 1 : 0;
++	default:
++		/* Includes all memory-debug, execute, read64 and write/sync opcodes. */
++		return -EOPNOTSUPP;
++	}
++}
++
++static void sahara_work(struct work_struct *work)
++{
++	struct sahara *s = container_of(work, struct sahara, work);
++	unsigned long flags;
++	int ret;
++
++	if (READ_ONCE(s->stopping))
++		return;
++	ret = sahara_command(s);
++	if (!ret && !READ_ONCE(s->stopping))
++		ret = mhi_queue_buf(s->mhi, DMA_FROM_DEVICE, s->rx, SAHARA_MTU, MHI_EOT);
++	if (!ret)
++		return;
++
++	spin_lock_irqsave(&s->lock, flags);
++	s->stopping = true;
++	spin_unlock_irqrestore(&s->lock, flags);
++	sahara_release_image(s);
++	if (ret < 0)
++		dev_err(&s->mhi->dev, "Image-only session stopped (%d); no reset or dump\n", ret);
++}
++
++static void sahara_ul(struct mhi_device *mhi, struct mhi_result *result)
++{
++	struct sahara *s = dev_get_drvdata(&mhi->dev);
++
++	if (result->transaction_status)
++		atomic_set(&s->tx_error, result->transaction_status);
++	if (atomic_dec_and_test(&s->tx_pending))
++		complete(&s->tx_done);
++}
++
++static void sahara_dl(struct mhi_device *mhi, struct mhi_result *result)
++{
++	struct sahara *s = dev_get_drvdata(&mhi->dev);
++	unsigned long flags;
++
++	spin_lock_irqsave(&s->lock, flags);
++	if (!s->stopping) {
++		s->rx_len = result->bytes_xferd;
++		s->rx_error = result->transaction_status;
++		schedule_work(&s->work);
++	}
++	spin_unlock_irqrestore(&s->lock, flags);
++}
++
++static int sahara_probe(struct mhi_device *mhi, const struct mhi_device_id *id)
++{
++	struct device *parent = mhi->mhi_cntrl->cntrl_dev;
++	struct sahara *s;
++	struct pci_dev *pdev;
++	int i, ret;
++
++	/* Do not bind another controller that happens to name a channel SAHARA. */
++	if (!dev_is_pci(parent))
++		return -ENODEV;
++	pdev = to_pci_dev(parent);
++	if (pdev->vendor != PCI_VENDOR_ID_QCOM || pdev->device != 0x0306 ||
++	    !device_property_read_bool(parent, "qcom,flashless"))
++		return -ENODEV;
++
++	s = devm_kzalloc(&mhi->dev, sizeof(*s), GFP_KERNEL);
++	if (!s)
++		return -ENOMEM;
++	s->mhi = mhi;
++	s->image = SAHARA_NO_IMAGE;
++	spin_lock_init(&s->lock);
++	init_completion(&s->tx_done);
++	INIT_WORK(&s->work, sahara_work);
++	s->rx = devm_kmalloc(&mhi->dev, SAHARA_MTU, GFP_KERNEL);
++	if (!s->rx)
++		return -ENOMEM;
++	for (i = 0; i < SAHARA_BATCH; i++) {
++		s->tx[i] = devm_kmalloc(&mhi->dev, SAHARA_MTU, GFP_KERNEL);
++		if (!s->tx[i])
++			return -ENOMEM;
++	}
++	dev_set_drvdata(&mhi->dev, s);
++	ret = mhi_prepare_for_transfer(mhi);
++	if (ret)
++		return ret;
++	ret = mhi_queue_buf(mhi, DMA_FROM_DEVICE, s->rx, SAHARA_MTU, MHI_EOT);
++	if (ret)
++		mhi_unprepare_from_transfer(mhi);
++	return ret;
++}
++
++static void sahara_remove(struct mhi_device *mhi)
++{
++	struct sahara *s = dev_get_drvdata(&mhi->dev);
++	unsigned long flags;
++
++	/* Prevent new work before draining it; leave DMA buffers alive until unprepare. */
++	spin_lock_irqsave(&s->lock, flags);
++	s->stopping = true;
++	spin_unlock_irqrestore(&s->lock, flags);
++	complete_all(&s->tx_done);
++	cancel_work_sync(&s->work);
++	mhi_unprepare_from_transfer(mhi);
++	sahara_release_image(s);
++}
++
++static const struct mhi_device_id sahara_ids[] = {
++	{ .chan = "SAHARA" },
++	{}
++};
++MODULE_DEVICE_TABLE(mhi, sahara_ids);
++
++static struct mhi_driver sahara_driver = {
++	.id_table = sahara_ids,
++	.probe = sahara_probe,
++	.remove = sahara_remove,
++	.ul_xfer_cb = sahara_ul,
++	.dl_xfer_cb = sahara_dl,
++	.driver.name = "mhi-sahara",
++};
++module_mhi_driver(sahara_driver);
++
++MODULE_DESCRIPTION("Bounded image-only Sahara loader for flashless SDX55");
++MODULE_LICENSE("GPL");
+-- 
+2.55.0
+
