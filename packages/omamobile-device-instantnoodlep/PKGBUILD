@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# shellcheck shell=bash
+# shellcheck disable=SC2034,SC2154 # makepkg consumes metadata and supplies pkgdir.
+pkgname=omamobile-device-instantnoodlep
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Omarchy Mobile support for the OnePlus 8 Pro (instantnoodlep)"
+arch=(aarch64)
+url="https://github.com/inumineq/omamobile-instantnoodlep"
+license=(MIT)
+depends=(bash systemd bluez-utils omamobile-keyring)
+optdepends=('vulkan-freedreno: Vulkan support for Adreno 650')
+checkdepends=(ripgrep shellcheck)
+provides=(omamobile-device)
+conflicts=(omamobile-device)
+backup=(etc/pacman.d/omamobile-mirrorlist)
+install=omamobile-device-instantnoodlep.install
+check() { "$startdir/test/all"; }
+
+build() { :; }
+package() { "$startdir/install" "$pkgdir"; }

@@ -1,0 +1,23 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Stage device policy only. This does not mark a boot slot successful, write
+# boot partitions, activate radio services or install firmware blobs.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+destination=${1:?Usage: ./install DESTDIR}
+[[ $destination == /* && $destination != / ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
+
+install -Dm644 device.conf "$destination/usr/share/omamobile/device.conf"
+install -Dm644 firmware.map "$destination/usr/share/omamobile/firmware.map"
+install -Dm644 version "$destination/usr/share/omamobile/device-instantnoodlep/version"
+install -Dm644 LICENSE "$destination/usr/share/licenses/omamobile-device-instantnoodlep/LICENSE"
+install -Dm644 etc/omamobile-mirrorlist "$destination/etc/pacman.d/omamobile-mirrorlist"
+install -Dm644 20-usb-gadget.network "$destination/usr/lib/systemd/network/20-usb-gadget.network"
+install -d "$destination/etc/systemd/system"
+ln -sfn /dev/null "$destination/etc/systemd/system/systemd-firstboot.service"
+ln -sfn /dev/null "$destination/etc/systemd/system/systemd-vconsole-setup.service"
+install -Dm644 uwsm/env.d/90-omamobile-instantnoodlep-graphics "$destination/usr/share/uwsm/env.d/90-omamobile-instantnoodlep-graphics"
+install -Dm644 environment.d/50-omamobile-back.conf "$destination/usr/lib/environment.d/50-omamobile-back.conf"
+install -Dm755 bin/omamobile-bt-public-addr "$destination/usr/bin/omamobile-bt-public-addr"
+install -Dm644 udev/80-omamobile-bt-public-addr.rules "$destination/usr/lib/udev/rules.d/80-omamobile-bt-public-addr.rules"
+install -Dm644 systemd/omamobile-bt-public-addr@.service "$destination/usr/lib/systemd/system/omamobile-bt-public-addr@.service"
