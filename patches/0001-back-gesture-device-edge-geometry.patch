@@ -6,14 +6,14 @@ diff --git a/packages/omamobile-shell/plugins/omamobile.back/Back.qml b/packages
 --- a/packages/omamobile-shell/plugins/omamobile.back/Back.qml
 +++ b/packages/omamobile-shell/plugins/omamobile.back/Back.qml
 @@ -67,14 +67,24 @@
- 
+
    // `shell call omamobile.back state ''`
    function state() {
 -    return JSON.stringify({ fullscreen: fullscreenOnScreen, strips: !fullscreenOnScreen, edge: edge, threshold: BackModel.THRESHOLD,
 +    return JSON.stringify({ fullscreen: fullscreenOnScreen, strips: !fullscreenOnScreen, edge: edge, inset: edgeInset, threshold: BackModel.THRESHOLD,
                              asks: BackLink.names() })
    }
- 
+
    // The touchable strip at each edge, and the width its window draws in.
 -  readonly property int edge: 14
 +  function configuredPixels(name, fallback, minimum, maximum) {
@@ -30,7 +30,7 @@ diff --git a/packages/omamobile-shell/plugins/omamobile.back/Back.qml b/packages
    readonly property int arrowSize: Math.max(40, Style.space(40))
 -  readonly property int reach: arrowSize + 24
 +  readonly property int reach: edgeInset + Math.max(edge, arrowSize + 24)
- 
+
    // A real fullscreen window (mode bit 2; a maximized one reports 1) on the
    // focused workspace, debounced as the home pill does it
 @@ -156,7 +166,7 @@
@@ -40,7 +40,7 @@ diff --git a/packages/omamobile-shell/plugins/omamobile.back/Back.qml b/packages
 -        x: win.rightEdge ? parent.width - width : 0
 +        x: win.rightEdge ? parent.width - root.edgeInset - width : root.edgeInset
          width: root.edge
- 
+
          // The touch stays with this surface once it lands on the strip,
 @@ -198,7 +208,7 @@
          width: root.arrowSize
