@@ -4,6 +4,24 @@
 Newest first. Findings that matter beyond one subsystem go here; subsystem
 detail lives in the *-PLAN.md files.
 
+## 2026-11-17 (evening): modem kernel candidate built offline
+
+- [V] Branch `instantnoodlep-k3-modem` on `aa996bae0` builds
+  `7.3.0-rc6-instantnoodlep-k3-modem-ge9ff58528f8b` (LLVM=1, arm64, Docker
+  volume): PCIe2 + GIC MBI route + `pci17cb,306` with `qcom,flashless`, and a
+  bounded image-only Sahara loader. Artefacts and sha256: MODEM-M5-DELTA
+  §6.1. Nothing ran on the phone.
+- [V] `dtbs_check` is clean and really applies the new binding: an invalid
+  property on `modem@0,0` is rejected by `qcom,sdx55-mhi.yaml`. The endpoint
+  `reg` first cell `0x10000` resolves to devfn 0 through
+  `of_pci_get_devfn()`, so the node attaches to the device at bus 1.
+- [I] The candidate inverts the inherited WAKE# polarity (SoC DTS says
+  `GPIO_ACTIVE_HIGH`, the board DTS says `GPIO_ACTIVE_LOW`). Gate A of
+  MODEM-M5-DELTA §6 must confirm it against the stock DTBO.
+- [V] `CONFIG_ARM_GIC_V3_MBI` does not exist; the earlier fragment listed it
+  and Kconfig dropped it silently. `WWAN` is `depends on GNSS || GNSS = n`,
+  so the fragment must unset `GNSS` to keep the transport built in.
+
 ## 2026-11-17: shell UI source research (no phone run)
 
 - [V] Upstream shell at `c4623572be1c141d602cf99a83ae0bf9e3eea09c`

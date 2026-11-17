@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # State: where the port stands now
 
-Last updated: 2026-11-17 (afternoon: Wi-Fi/BT verified, P2 charger hang, new workers), claude on omabook.
+Last updated: 2026-11-17 (evening: modem kernel candidate built offline), claude on macbookpro.
 
 The one page an agent reads first. Keep it short and current: it is
 overwritten, not appended to. History goes to `device/instantnoodlep/NOTES.md`
@@ -24,7 +24,7 @@ of it from `origin/main` plus the pushed branches.
 | M3 display stack on the device (hardware GL) | Hardware GL works under combo K3 with the freedreno Mesa (rootfs, not upstream yet) [V: NOTES 2026-11-17 day; learning `l-405b6773`] |
 | M5 (Wi-Fi/BT, modem, GNSS, audio, sensors, power, camera, misc) | All plans written; the five original M5 plans cross-reviewed [V: `device/instantnoodlep/*-M5-PLAN.md`, `GNSS-M5-PLAN.md`, `CAMERA-PLAN.md`, `MISC-HW-PLAN.md`, `M5-REVIEW.md`] |
 | M5 Wi-Fi/BT | Works on a RAM boot of k3-wifi2: Wi-Fi associated (owner's network, NTP synced), BT scan finds devices after `btmgmt public-addr` [V: NOTES 2026-11-17 afternoon]; not on `boot_b` yet (daily kernel) |
-| M5 modem/GNSS | Source-cited DTS/config/userspace delta prepared; flashless Sahara profile and private EFS/DDR policy block first boot [V: `device/instantnoodlep/MODEM-M5-DELTA.md` §1-6]. No kernel built or handset test. |
+| M5 modem/GNSS | Kernel candidate built offline: PCIe2/MHI endpoint, GIC MBI route, bounded image-only Sahara loader, fragment merged; series in `patches/instantnoodlep/kernel-modem/` [V: MODEM-M5-DELTA §6]. No handset test; private EFS/DDR policy still blocks first boot. |
 | M5 power | P1 gauge works on a RAM boot; P2 charger image hangs early at boot (P2b in progress); no charging under any of our kernels [V: POWER-M5-PLAN §7.3-7.4] |
 
 ## The phone right now
@@ -56,7 +56,7 @@ See `docs/agents/active/` (power P2b, daily, kona on omabook; audio on macbookpr
    take (DTBO-PLAN §6).
 4. Daily kernel = combo + Wi-Fi/BT + P1 gauge as the `boot_b` candidate (worker `daily`).
 5. Power P2b (charger as a module), then P3 Type-C.
-6. Audio phase 1 (worker on macbookpro), kona upstream series (worker `kona`), UI issue drafts (worker on obsidian); modem/GNSS implementation gates in MODEM-M5-DELTA.
+6. Audio phase 1 (worker on macbookpro), kona upstream series (worker `kona`), UI issue drafts (worker on obsidian); modem/GNSS kernel side is built, gates A-C of MODEM-M5-DELTA §6 (stock wiring, packages, private-state policy) are the coordinator's.
 7. Backlog: disk encryption + boot passphrase / lock-screen PIN (issue #70).
 
 ## Offline UI proposals
