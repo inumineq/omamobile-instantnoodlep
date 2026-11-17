@@ -1,0 +1,126 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Give the QCA6390 Bluetooth controller a public address, once per boot.
+#
+# btqca reads the BD address tag from qca/htnv20.bin and, when the controller
+# reports that same address, sets HCI_QUIRK_USE_BDADDR_PROPERTY; with no
+# local-bd-address in the device tree the controller then comes up
+# HCI_UNCONFIGURED: no public address, and it cannot be powered. The kernel
+# keeps no address across a reboot, so this runs at every boot, started by
+# 80-omamobile-bt-addr.rules through omamobile-bt-addr@.service.
+#
+#   omamobile-bt-addr hciN
+#
+# The address is the phone's own: /var/lib/omamobile/bt-public-addr, either
+# written by hand from stock Android or generated once here (first octet 0x02:
+# locally administered, unicast) under umask 077. It never leaves the phone and
+# is never printed: the journal gets facts, not the address.
+#
+# Design and the install/rollback commands: device/instantnoodlep/DAILY-K3-PLAN.md
+# §5.3-5.5.
+set -euo pipefail
+
+ADDR_FILE=${OMAMOBILE_BT_ADDR_FILE:-/var/lib/omamobile/bt-public-addr}
+# Seconds to wait for mgmt to answer for the index; hci_qca downloads
+# htbtfw20.tlv/htnv20.bin first. Both variables are test hooks for
+# tests/omamobile-bt-addr; the unit sets neither.
+WAIT=${OMAMOBILE_BT_ADDR_WAIT:-30}
+
+log() { echo "omamobile-bt-addr: $*"; }
+die() { echo "omamobile-bt-addr: $*" >&2; exit 1; }
+
+hci=${1:?Usage: omamobile-bt-addr hciN}
+index=${hci#hci}
+[[ $index =~ ^[0-9]+$ ]] || die "not a controller: $hci"
+
+# btmgmt exits non-zero while the index is still absent; that is the wait.
+btmgmt_() { btmgmt --index "$index" "$@" 2> /dev/null || true; }
+
+# A unicast address only: the owner's real one is globally administered, the
+# generated one locally administered, and both are unicast.
+valid_unicast() {
+  [[ $1 =~ ^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$ ]] || return 1
+  (( (16#${1:0:2} & 1) == 0 ))
+}
+
+# udev starts us the moment hci0 registers, before the firmware download has
+# finished. Wait until mgmt either reports the index configured (nothing to do)
+# or reports a missing public address (ours to set).
+state=
+i=0
+while (( i < WAIT * 2 )); do
+  info=$(btmgmt_ info)
+  if [[ $info == *"current settings:"* ]]; then
+    state=configured
+    break
+  fi
+  config=$(btmgmt_ config)
+  if [[ $config == *"missing options:"*"public-address"* ]]; then
+    state=needs-address
+    break
+  fi
+  sleep 0.5
+  i=$((i + 1))
+done
+
+case $state in
+  configured)
+    log "$hci already has a public address"
+    exit 0
+    ;;
+  needs-address) ;;
+  *) die "$hci did not answer within ${WAIT}s" ;;
+esac
+
+addr=
+if [[ -s $ADDR_FILE ]]; then
+  stored=$(tr -d '[:space:]' < "$ADDR_FILE" | tr 'a-f' 'A-F')
+  if valid_unicast "$stored"; then
+    addr=$stored
+  else
+    log "$ADDR_FILE does not hold a unicast address; replacing it"
+  fi
+fi
+
+if [[ -z $addr ]]; then
+  install -d -m 700 "${ADDR_FILE%/*}"
+  (
+    umask 077
+    od -An -N5 -tx1 /dev/urandom |
+      awk '{ printf "02:%s:%s:%s:%s:%s\n", $1, $2, $3, $4, $5 }' |
+      tr 'a-f' 'A-F' > "$ADDR_FILE"
+  )
+  addr=$(tr -d '[:space:]' < "$ADDR_FILE")
+  valid_unicast "$addr" || die "the generated address is not a unicast address"
+  log "generated a new public address in $ADDR_FILE"
+fi
+chmod 600 "$ADDR_FILE"
+
+# Set Public Address needs the controller powered off, and an unconfigured
+# controller cannot be powered at all, so it is set here before anything
+# powers it on.
+btmgmt --index "$index" public-addr "$addr" > /dev/null 2>&1 ||
+  die "setting the public address on $hci failed"
+
+# Set Public Address acknowledges before the kernel has finished reconfiguring
+# the controller, and btmgmt can exit zero for an invalid index, so wait for a
+# real Read Info reply and check the address it reports.
+info=
+i=0
+while (( i < WAIT * 10 )); do
+  info=$(btmgmt_ info)
+  if [[ $info == *"current settings:"* ]]; then
+    break
+  fi
+  sleep 0.1
+  i=$((i + 1))
+done
+[[ $info == *"current settings:"* ]] ||
+  die "$hci did not return after the address change"
+
+printf '%s\n' "$info" |
+  grep -qiE "^[[:space:]]*addr[[:space:]]+${addr}([[:space:]]|$)" ||
+  die "$hci does not report the stored address"
+
+log "$hci now has the stored public address"
+exit 0

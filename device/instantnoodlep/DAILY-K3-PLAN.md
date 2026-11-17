@@ -79,7 +79,7 @@ and P1: top-level dir is the release). RAM image with
 `--ufdt-apply`), fresh `--out ~/android/build/k3-daily-ram/boot-daily.img`.
 Results, hashes and the release string: §6.
 
-## 5. Bluetooth public address (design; nothing built yet)
+## 5. Bluetooth public address (unit written, not yet on the phone)
 
 ### 5.1 Problem [V]
 
@@ -161,8 +161,8 @@ address source.
      the Pixels' BCM case.
 4. Packaging: `packages/omamobile-device-instantnoodlep` when the device
    package exists (upstream rule: per-device files there); until then the
-   three files are installed by hand on the phone from this plan, with a
-   rollback that deletes them.
+   three files are installed by hand on the phone from this plan (§5.5),
+   with a rollback that deletes them.
 
 Why not a fixed address derived from a serial number (postmarketOS
 `bootmac` style): it needs a stable per-unit ID our boot path exposes, and
@@ -173,13 +173,111 @@ Revisit if the owner wants pairings to survive reinstalls.
 
 Wi-Fi MAC is separate (WIFI-BT-M5-PLAN §5, I-M5-13).
 
-Open [I]s for the design, answered on the phone (runbook D6):
+Open [I]s for the design, answered on the phone (runbook R6):
 
 | [I] | Check |
 | --- | --- |
 | hci0's driver is `hci_uart_qca` in udev | `udevadm info -a /sys/class/bluetooth/hci0 \| grep DRIVERS` |
-| `btmgmt config` shows `public-address` as missing | D6 |
-| The index returns configured after `public-addr` without a power cycle | D6 |
+| `btmgmt config` shows `public-address` as missing | R6 |
+| The index returns configured after `public-addr` without a power cycle | R6 |
+
+### 5.4 Implementation (this repo)
+
+The three files live under `device/instantnoodlep/rootfs/`, mirroring their
+paths on the phone, until the device package exists:
+
+| File in the repo | On the phone | Mode |
+| --- | --- | --- |
+| `device/instantnoodlep/rootfs/usr/bin/omamobile-bt-addr` | `/usr/bin/omamobile-bt-addr` | 0755 |
+| `device/instantnoodlep/rootfs/usr/lib/udev/rules.d/80-omamobile-bt-addr.rules` | same path | 0644 |
+| `device/instantnoodlep/rootfs/usr/lib/systemd/system/omamobile-bt-addr@.service` | same path | 0644 |
+
+- The rule is the Pixels' with `DRIVERS=="hci_uart_qca"`; the service is
+  theirs unchanged (`Type=oneshot`, `Before=bluetooth.service`).
+- The script follows §5.3.3: it waits up to 30 s for mgmt to report the
+  index configured (exit 0, nothing to do) or `missing options:
+  public-address`; reads `/var/lib/omamobile/bt-public-addr` when it holds
+  a unicast address, otherwise generates `02:xx:xx:xx:xx:xx` from
+  `/dev/urandom` under `umask 077` and stores it mode 600; sets it with
+  `btmgmt --index N public-addr`; then waits for the index to return and
+  checks the address it reports. It never powers the controller on (an
+  unconfigured one cannot be), and it never prints the address: the journal
+  gets "generated a new public address in <file>" or "hci0 now has the
+  stored public address", nothing more.
+- Idempotent: a second run on a configured controller exits 0 without
+  touching the file or calling `public-addr`.
+- Two environment variables exist only for the host test
+  (`tests/omamobile-bt-addr`, a fake `btmgmt` in `PATH`):
+  `OMAMOBILE_BT_ADDR_FILE` and `OMAMOBILE_BT_ADDR_WAIT`. The unit sets
+  neither. The test covers generation and mode 600, the no-op second run, a
+  hand-written address, a non-unicast or malformed stored value, a
+  controller that never answers, an index that does not return after the
+  change, and bad arguments. `shellcheck` 0.11.0 clean.
+
+### 5.5 Install and rollback on the phone (coordinator)
+
+Writes no partition: three files under `/usr` and, on the first run, one
+file under `/var/lib/omamobile`. The phone is on daily K3 with `hci0`
+present (runbook R6). No reboot is needed; the rule fires again on the next
+boot.
+
+Install, from the laptop in the repo root (the phone is `root@172.16.42.1`
+over USB SSH):
+
+```sh
+scp device/instantnoodlep/rootfs/usr/bin/omamobile-bt-addr \
+    device/instantnoodlep/rootfs/usr/lib/udev/rules.d/80-omamobile-bt-addr.rules \
+    device/instantnoodlep/rootfs/usr/lib/systemd/system/omamobile-bt-addr@.service \
+    root@172.16.42.1:/tmp/
+```
+
+On the phone:
+
+```sh
+install -Dm755 /tmp/omamobile-bt-addr /usr/bin/omamobile-bt-addr
+install -Dm644 /tmp/80-omamobile-bt-addr.rules /usr/lib/udev/rules.d/80-omamobile-bt-addr.rules
+install -Dm644 /tmp/omamobile-bt-addr@.service /usr/lib/systemd/system/omamobile-bt-addr@.service
+systemctl daemon-reload
+udevadm control --reload
+udevadm trigger --subsystem-match=bluetooth --action=add
+```
+
+Expect: every command returns 0 and the trigger starts
+`omamobile-bt-addr@hci0.service`. Then verify:
+
+```sh
+systemctl status 'omamobile-bt-addr@hci0.service' --no-pager
+journalctl -u 'omamobile-bt-addr@hci0.service' -b --no-pager
+stat -c '%a %n' /var/lib/omamobile/bt-public-addr
+bluetoothctl power on
+btmgmt --index 0 info | grep -E 'current settings|addr'
+test "$(btmgmt --index 0 info | awk '/addr /{print $2; exit}')" = \
+     "$(cat /var/lib/omamobile/bt-public-addr)" && echo address-matches
+```
+
+Expect: the unit is `inactive (dead)` with `status=0/SUCCESS`; the journal
+holds one of the two lines above and no address; the file is mode `600`;
+`current settings:` lists `powered`; the last command prints
+`address-matches`. Mask the `addr` line before pasting anything anywhere
+(rule 4).
+
+Stop: the unit failed, the journal shows the address, or the last command
+prints nothing. Roll back, then record the journal in NOTES.
+
+Rollback (removes the unit; the controller goes back to unconfigured until
+a manual `btmgmt public-addr`, runbook R6):
+
+```sh
+rm -f /usr/lib/udev/rules.d/80-omamobile-bt-addr.rules \
+      /usr/lib/systemd/system/omamobile-bt-addr@.service \
+      /usr/bin/omamobile-bt-addr
+systemctl daemon-reload
+udevadm control --reload
+```
+
+The stored address stays in `/var/lib/omamobile/bt-public-addr`: harmless,
+and a reinstall reuses it, so pairings survive. `rm` it only if the owner
+wants a new address.
 
 ## 6. Build results (omabook, 2026-11-17) [V]
 
@@ -208,5 +306,7 @@ userdata --debug-shell`.
 
 1. Coordinator: runbook R-steps (RAM boot, checks).
 2. Owner go: runbook F-steps (`flash boot_b` + B5).
-3. Implement §5.3 as a device-package change behind its own plan update.
+3. Coordinator: install the BT address unit (§5.5) and record the result in
+   NOTES; move the three files into
+   `packages/omamobile-device-instantnoodlep` when the device package exists.
 4. P2 charger joins daily only after its own RAM boot passes.

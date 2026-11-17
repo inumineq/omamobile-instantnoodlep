@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Host test for device/instantnoodlep/rootfs/usr/bin/omamobile-bt-addr, run
+# against a fake btmgmt in PATH. No phone, no Bluetooth, no /var/lib write.
+set -eu
+SRC=$(cd "$(dirname "$0")/.." && pwd)/device/instantnoodlep/rootfs/usr/bin/omamobile-bt-addr
+T=$(mktemp -d)
+trap 'rm -rf "$T"' EXIT
+fail() { echo "not ok - $*" >&2; exit 1; }
+ok() { echo "ok - $*"; }
+
+# Fixture addresses are built at run time so no literal one sits in git
+# (AGENTS.md rule 4).
+gen() { printf '%s:%02X:%02X:%02X:%02X:%02X' "$1" 1 2 3 4 5; }
+OWNER=$(gen A0)     # globally administered, unicast: the owner's real one
+MULTICAST=$(gen 01) # first octet odd: not unicast
+
+mkdir -p "$T/bin" "$T/state"
+cat > "$T/bin/btmgmt" <<'FAKE'
+#!/bin/bash
+# Fake btmgmt: the controller's state lives in $FAKE_STATE.
+set -u
+printf '%s\n' "$*" >> "$FAKE_STATE/calls"
+index=0
+while [ $# -gt 0 ]; do
+  case $1 in
+    --index | -i) index=$2; shift 2 ;;
+    *) break ;;
+  esac
+done
+cmd=${1:-}
+# No ready marker: mgmt does not answer for the index yet.
+[ -e "$FAKE_STATE/ready" ] || exit 1
+case $cmd in
+  info)
+    echo "hci$index:	Primary controller"
+    if [ -s "$FAKE_STATE/addr" ] && [ ! -e "$FAKE_STATE/stuck" ]; then
+      echo "	current settings: powered bondable ssp br/edr le secure-conn"
+      echo "	addr $(cat "$FAKE_STATE/addr") version 9 manufacturer 29 class 0x000000"
+    fi
+    ;;
+  config)
+    if [ -s "$FAKE_STATE/addr" ] && [ ! -e "$FAKE_STATE/stuck" ]; then
+      echo "supported settings: powered connectable bondable ssp br/edr le secure-conn"
+    else
+      echo "missing options: public-address"
+    fi
+    ;;
+  public-addr)
+    printf '%s\n' "${2:-}" > "$FAKE_STATE/addr"
+    ;;
+  *)
+    exit 1
+    ;;
+esac
+FAKE
+chmod +x "$T/bin/btmgmt"
+
+export PATH="$T/bin:$PATH"
+export FAKE_STATE="$T/state"
+export OMAMOBILE_BT_ADDR_FILE="$T/var/lib/omamobile/bt-public-addr"
+export OMAMOBILE_BT_ADDR_WAIT=2
+ADDR_FILE=$OMAMOBILE_BT_ADDR_FILE
+
+run() { "$SRC" hci0 > "$T/out" 2>&1; }
+mode_of() { stat -c %a "$1" 2> /dev/null || stat -f %Lp "$1"; }
+public_addr_calls() { grep -c 'public-addr ' "$T/state/calls" 2> /dev/null || true; }
+reset() {
+  rm -f "$T/state/addr" "$T/state/stuck" "$T/state/calls" "$ADDR_FILE"
+  : > "$T/state/ready"
+}
+
+# 1. First run on an unconfigured controller: generate, store, set.
+reset
+run || fail "first run exited non-zero: $(cat "$T/out")"
+[ -f "$ADDR_FILE" ] || fail "no address file after the first run"
+[ "$(mode_of "$ADDR_FILE")" = 600 ] || fail "address file mode $(mode_of "$ADDR_FILE"), want 600"
+addr=$(cat "$ADDR_FILE")
+printf '%s' "$addr" | grep -qE '^02(:[0-9A-F]{2}){5}$' ||
+  fail "generated address is not 02: locally administered: $addr"
+grep -qx -- "--index 0 public-addr $addr" "$T/state/calls" || fail "public-addr not called with the stored address"
+if grep -qF "$addr" "$T/out"; then fail "the address was printed: $(cat "$T/out")"; fi
+ok "first run generates a 02: address, stores it 600 and sets it"
+
+# 2. Second run on the same controller: nothing to do.
+before=$(public_addr_calls)
+run || fail "second run exited non-zero: $(cat "$T/out")"
+[ "$(public_addr_calls)" = "$before" ] || fail "second run set the address again"
+[ "$(cat "$ADDR_FILE")" = "$addr" ] || fail "second run changed the stored address"
+ok "second run is a no-op"
+
+# 3. The owner's own address in the file is used as it is.
+reset
+printf '%s\n' "$OWNER" > "$ADDR_FILE"
+run || fail "owner address run exited non-zero: $(cat "$T/out")"
+[ "$(cat "$ADDR_FILE")" = "$OWNER" ] || fail "the owner's address was replaced"
+grep -qx -- "--index 0 public-addr $OWNER" "$T/state/calls" || fail "public-addr not called with the owner's address"
+[ "$(mode_of "$ADDR_FILE")" = 600 ] || fail "owner address file left at mode $(mode_of "$ADDR_FILE")"
+ok "a hand-written address is kept and set"
+
+# 4. A stored value that is not a unicast address is replaced.
+for bad in "$MULTICAST" "not-an-address"; do
+  reset
+  printf '%s\n' "$bad" > "$ADDR_FILE"
+  run || fail "run with a bad stored value exited non-zero: $(cat "$T/out")"
+  new=$(cat "$ADDR_FILE")
+  [ "$new" != "$bad" ] || fail "the bad stored value was kept: $bad"
+  printf '%s' "$new" | grep -qE '^02(:[0-9A-F]{2}){5}$' ||
+    fail "replacement for '$bad' is not 02: locally administered: $new"
+done
+ok "a non-unicast or malformed stored value is replaced"
+
+# 5. A controller that never answers: fail, and write no address.
+reset
+rm -f "$T/state/ready"
+if run; then fail "a controller that never answers exited zero"; fi
+if [ -e "$ADDR_FILE" ]; then fail "an address was written for a controller that never answered"; fi
+ok "a controller that never answers fails without writing an address"
+
+# 6. The index does not come back after the change: fail, do not claim success.
+reset
+: > "$T/state/stuck"
+if run; then fail "an index that never returns exited zero"; fi
+grep -q 'did not return' "$T/out" || fail "no diagnostic for an index that never returns: $(cat "$T/out")"
+ok "an index that does not return after the change fails"
+
+# 7. Bad arguments.
+if "$SRC" > /dev/null 2>&1; then fail "no argument exited zero"; fi
+if "$SRC" hciX > /dev/null 2>&1; then fail "a non-controller name exited zero"; fi
+ok "bad arguments are refused"
+
+echo "all omamobile-bt-addr tests passed"

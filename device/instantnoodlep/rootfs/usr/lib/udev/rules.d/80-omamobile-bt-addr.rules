@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Omarchy Mobile: give the QCA6390 Bluetooth controller a public address
+# (omamobile-bt-addr@.service). hci_uart_qca is the serdev driver name of
+# hci_qca; the modules autoload from the device tree, so nothing modprobes
+# here. Same rule as the Pixels', with the QCA driver.
+ACTION=="add", SUBSYSTEM=="bluetooth", KERNEL=="hci[0-9]*", DRIVERS=="hci_uart_qca", TAG+="systemd", ENV{SYSTEMD_WANTS}+="omamobile-bt-addr@%k.service"

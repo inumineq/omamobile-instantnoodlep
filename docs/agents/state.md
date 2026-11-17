@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # State: where the port stands now
 
-Last updated: 2026-11-17 (night: daily K3 on boot_b, B5 set), claude on omabook.
+Last updated: 2026-11-17 (night: daily K3 on boot_b, B5 set; BT address unit written), claude on omabook.
 
 The one page an agent reads first. Keep it short and current: it is
 overwritten, not appended to. History goes to `device/instantnoodlep/NOTES.md`
@@ -24,7 +24,7 @@ of it from `origin/main` plus the pushed branches.
 | Neutral `dtbo_b` (DTBO-PLAN) | Parked: ABL rejected v1 (table) and v2 (raw FDT); stock dtbo back [V: DTBO-PLAN §6; learning `l-48e0c482`] |
 | M3 display stack on the device (hardware GL) | Hardware GL works under combo K3 with the freedreno Mesa (rootfs, not upstream yet) [V: NOTES 2026-11-17 day; learning `l-405b6773`] |
 | M5 (Wi-Fi/BT, modem, GNSS, audio, sensors, power, camera, misc) | All plans written; the five original M5 plans cross-reviewed [V: `device/instantnoodlep/*-M5-PLAN.md`, `GNSS-M5-PLAN.md`, `CAMERA-PLAN.md`, `MISC-HW-PLAN.md`, `M5-REVIEW.md`] |
-| M5 Wi-Fi/BT | Daily on `boot_b`: Wi-Fi connects; BT works after `btmgmt public-addr` (persistent address unit still to implement, DAILY-K3-PLAN §5) [V: NOTES 2026-11-17 night] |
+| M5 Wi-Fi/BT | Daily on `boot_b`: Wi-Fi connects; BT works after `btmgmt public-addr`. The persistent address unit is written and host-tested (`device/instantnoodlep/rootfs/`, DAILY-K3-PLAN §5.4), not yet installed on the phone [V: NOTES 2026-11-17 night; `tests/omamobile-bt-addr`] |
 | M5 modem/GNSS | Kernel candidate built offline: PCIe2/MHI endpoint, GIC MBI route, bounded image-only Sahara loader, fragment merged; series in `patches/instantnoodlep/kernel-modem/` [V: MODEM-M5-DELTA §6]. No handset test; private EFS/DDR policy still blocks first boot. |
 | M5 power | P1 gauge works on a RAM boot; P2 charger image hangs early at boot (P2b in progress); no charging under any of our kernels [V: POWER-M5-PLAN §7.3-7.4] |
 | M5 camera (M-CAM1 front IMX471) | Kernel series built and offline-verified: release `7.3.0-rc6-instantnoodlep-k3-camera-g70d0761d1`, clean checkpatch/dt_binding_check/dtbs_check, one IMX471 on CCI1 master 1 to CSIPHY3 in the DTB [V: CAMERA-PLAN §9.4]. No RAM boot or frame yet; coordinator gates C0-C5 pending. |
@@ -51,7 +51,7 @@ See `docs/agents/active/`. Vibe workers on omabook: power P2b, kona, misc-hw, au
 
 ## Next
 
-0. Daily K3 is on `boot_b`: implement the BT address unit (DAILY-K3-PLAN §5.3); fold further features into daily as they pass RAM tests.
+0. Daily K3 is on `boot_b`: coordinator installs the BT address unit (DAILY-K3-PLAN §5.5); fold further features into daily as they pass RAM tests.
 1. Owner: upstream proposal for freedreno in the omamobile Mesa (PR of
    `inumineq/gpu-mesa-freedreno`; draft in `~/claude/instantnoodlep/`).
 2. Power: battery gauge and charger (POWER-M5-PLAN), the daily-use blocker.
