@@ -150,7 +150,7 @@ export B=/home/inumineq/android/reference/instantnoodlep/images/boot-dtbs/dtb.3
 | O3 Build + schema | `make -C "$L" O="$OUT" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- qcom/sm8250-oneplus-instantnoodlep.dtb` and `dtbs_check` after commit 1 | dtc exit 0; no new warning for this board | any error | delete output; fix current commit only |
 | O4 Node checks | `fdtget` block below against `"$DTB"` and live DT | pcie2/pcie2_phy `okay`; perst cell 85; pcie0/pcie1 `disabled`; built/live root is `oneplus,instantnoodlep`, `qcom,sm8250` | any extra enable, wrong live compatible, or changed identity | discard output; fix defining commit / return to neutral-DTBO gate |
 | O5 Config check | `grep` the built `.config` for the §6 commit-2 symbols | all `=y` | any missing | fix kernel.config fragment |
-| O6 Firmware map | `FW/` contains the edl.mbn row; `git check-ignore` on `*.mbn *.img`; grep map for serial/IMEI/MAC patterns; member names of `qcom/sdx55m/*` confirmed present in the modem image by name only (F2/F3 pattern) | names only; all rows present | identity data or a blob pattern | delete draft rows |
+| O6 Firmware map | `FW/` has no edl.mbn row (not in the OTA); `git check-ignore` on `*.mbn *.img`; grep map for serial/IMEI/MAC patterns; member names of `qcom/sdx55m/*` confirmed present in the modem image by name only (F2/F3 pattern) | names only; all rows present | identity data or a blob pattern | delete draft rows |
 | O7 Release | review commits 1-2, O1-O6 logs, hashes, open [I]s with coordinator/owner; verify the exact ModemManager QMI + raw-IP `mhi_hwip0` integration. Any channel rename to `IP_HW0_MBIM` is a separate change only after a source/runtime proof [I-M5-6]. | written approval for one RAM boot | any failed gate | keep M2/M3 state; do not boot |
 
 O4 `fdtget` checks:
@@ -189,7 +189,7 @@ still in it. Captures to `captures/<date>/m5/` (gitignored).
 | --- | --- | --- |
 | I-M5-1 | The SDX55 sits on **pcie2** of this unit (mainline generic encodes pcie2=modem [V: sm8250.dtsi:2439,:2486]; community enables pcie1+pcie2 [V: DTS-PORT-PLAN §2.3 C:708-726]; E/ is silent [V: §2]); perst 85 / clkreq 86 / wake 87 [V: :2466-2467, :5877-5896] are right for this board | O2 (decompile `B/dtb.3`, compare); R1 (`lspci`, dmesg) |
 | I-M5-2 | pcie2 PHY supply rail names/values from C:718-726 [V: existence via DTS-PORT-PLAN §2.3] | O2/O3; live-DT compare like DTS-PORT-PLAN I6 pattern |
-| I-M5-3 | edl.mbn member exists in the modem image; whether the host loads more of `qcom/sdx55m/*` than sbl1/edl (FIRMWARE-PLAN §7 item 3) | FIRMWARE-PLAN F2/F3 (names only) + O6; compare Nura packaging |
+| I-M5-3 | a source for edl.mbn (absent from the OTA modem image); whether the host loads more of `qcom/sdx55m/*` than sbl1/edl (FIRMWARE-PLAN §7 item 3) | FIRMWARE-PLAN F2/F3 (names only) + O6; compare Nura packaging |
 | I-M5-4 | SIM is modem-side (no host DT) and registers via QMI | R2 (`mmcli -m 0`) |
 | I-M5-5 | Arch package names (`modemmanager`/`libqmi`/`libmbim`) and ModemManager version support for wwan QMI ports + SMS | packaging gate (O6/O7); R2/R3 |
 | I-M5-6 | Whether the installed ModemManager/NetworkManager versions can drive QMI control plus this modem's `mhi_hwip0` raw-IP data path; the in-tree MBIM data driver requires a different channel name [V: mhi_net.c:389-393; mhi_wwan_mbim.c binds only `IP_HW0_MBIM`] | O7 package/source audit + R4; do not rename the MHI channel unless this is proven necessary |
