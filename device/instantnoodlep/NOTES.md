@@ -4,7 +4,34 @@
 Newest first. Findings that matter beyond one subsystem go here; subsystem
 detail lives in the *-PLAN.md files.
 
-## 2026-11-17 (night, latest): network, time, device package 0.0.3, screen
+## 2026-11-17 (night, latest): K3 RAM boots: touch and panel bind, dtbo root rewrite
+
+- [V] K3 = K2 + touch (s6sy761 @0x48 on i2c13) + AMS678UW01 panel
+  driver and DSI/MDSS enablement, kernel `7.3.0-rc6-instantnoodlep-k3`,
+  RAM-booted only (`fastboot boot`, after `systemctl reboot
+  --reboot-argument=bootloader`; no flash write). Every display/touch
+  driver is built in because the K2 rootfs modules do not match K3.
+- [V] Touch: `input: s6sy761 as .../i2c-13/13-0048/input/input0`; first
+  input device on this phone. Taps not yet tested (needs a finger).
+  The stock overlay lists both `s6sy791_19811@48` and `synaptics_20828@4B`;
+  the 8 Pro part is the Samsung one (1440x3168, project 19811).
+- [V] Panel: `panel-samsung-ams678uw01 ae94000.dsi.0: using mode
+  1440x3168@120`, msm 1.13.0 bound, `card1-DSI-1` connected 1440x3168,
+  backlight `ae94000.dsi.0` max 2047, Hyprland runs on DSI-1 (scale 3) with
+  no "pp done" timeouts. Whether the picture is correct needs eyes on it.
+- [V] Needed built in beyond the plan: `REGULATOR_QCOM_REFGEN` (DSI waits
+  for the `refgen` supply) and `INTERCONNECT_QCOM_OSM_L3` (qcom-cpufreq-hw
+  waits for icc paths; with it cpufreq runs).
+- [V] The stock dtbo rewrites the DTB root: under `fastboot boot` the live
+  root compatible is `qcom,kona-mtp qcom,kona qcom,mtp`, so tables keyed
+  on `qcom,sm8250` miss (UBWC: msm-mdss -EINVAL; also pd-mapper, cpufreq-dt
+  blocklist). K3 carries a test-only `qcom,kona` patch; the fix is a
+  neutral `dtbo_b`, see DTBO-PLAN.md (needs an owner go).
+- [V] Phone `dtbo_b` is byte-identical to the OTA `dtbo.img` (full
+  partition), so the rollback image is on disk.
+- Screen kept off (DPMS) between tests to spare the AMOLED.
+
+## 2026-11-17 (night, earlier): network, time, device package 0.0.3, screen
 
 - [V] Network without sudo on the laptop: NetworkManager "shared" mode
   needs `dnsmasq` (not installed) and ufw drops forwarding, so instead a
