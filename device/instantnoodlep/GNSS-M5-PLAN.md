@@ -73,24 +73,23 @@ neutral DTBO as a GNSS prerequisite.
 
 ## 3. Userspace design
 
-Preferred integration is to expose GNSS on demand through the modem's
-ModemManager `Modem.Location` interface, then let GeoClue consume the
-ModemManager source for desktop/app location. ModemManager documents raw
-GPS/NMEA and parsed GPS location sources, while GeoClue has a ModemManager
-provider [V: ModemManager `Modem.Location` API; GeoClue `gclue-modem-manager.c`].
-Whether this Arch ModemManager package can open SDX55's QRTR LOC service,
-especially before SIM registration, remains [I-GNSS-1]. Do not assume it
-from generic QMI support.
+Preferred stack: Arch Linux ARM ModemManager + libqmi + GeoClue, with
+tracking requested only on user action. ModemManager 1.24.2's shared QMI
+implementation creates a QMI LOC client and advertises GPS NMEA/raw sources;
+libqmi has QRTR device support and LOC commands (`qmicli --device=qrtr://0
+--loc-start`, `--loc-follow-nmea`); GeoClue's modem provider consumes
+ModemManager GPS NMEA [V: ModemManager 1.24.2 `src/mm-shared-qmi.c` and
+`src/mm-broadband-modem-qmi.c`; libqmi 1.38.0 LOC/QRTR APIs; GeoClue
+`gclue-modem-manager.c`]. Arch Linux ARM publishes `modemmanager` 1.24.2-1,
+`libqmi` 1.38.0-1, `libqrtr-glib`, and `geoclue` 2.8.2-1 for aarch64 [V:
+package pages in `gnss-userspace/README.md`]. These establish API capability,
+not that the installed build discovers the SDX55 LOC service or works before
+SIM registration [I-GNSS-1].
 
-If the installed ModemManager cannot provide the LOC source, the fallback
-is a small, opt-in instantnoodlep GNSS service that owns QRTR LOC, converts
-NMEA indications to a local PTY, and offers an explicit NMEA endpoint for
-gpsd clients. This follows the public device's demonstrated architecture
-without copying its code. Do not run a direct LOC helper and ModemManager's
-LOC client simultaneously: only one process may own a service/session.
-Mainline has no direct SDX55 GNSS char-device driver; any future kernel
-WWAN-to-GNSS bridge would be a separate upstreamable kernel proposal, not
-an implicit part of this package.
+Implementation notes and the opt-in GeoClue configuration are in
+[`gnss-userspace/`](gnss-userspace/). No bridge is justified by source
+review. If runtime checks fail, stop and reopen this decision before adding a
+second LOC client. Mainline has no direct SDX55 GNSS char-device driver.
 
 | Component | Planned role | Evidence / status |
 | --- | --- | --- |
@@ -150,10 +149,10 @@ must not be added to notes, commits or issues.
 | --- | --- | --- | --- | --- |
 | O0 State | M1b/B5 and M3 status current; K3 combo test-only patch documented; stock DTBO remains; MODEM-M5 gates are available | no neutral-DTBO prerequisite; phone test image provenance recorded | missing M1b state or image uses an unreviewed DTBO | no changes; return to owning plan |
 | O1 Mainline audit | Check L `drivers/gnss/Kconfig`, `Makefile`, `drivers/net/wwan/Kconfig`, SDX55 channel table, `qrtr/mhi.c`; compare D GNSS script/docs without copying code | no SDX55 GNSS driver/NMEA MHI channel in mainline; QRTR LOC path is the evidenced device route | source shows a changed channel/driver status | revise plan before implementation |
-| O2 Userspace capability | On build host, inspect exact ModemManager/libqmi/GeoClue versions, available MM location source flags, QRTR plugin and SIM-unlock behavior; run `mmcli --help-all` and package tests offline | commands/API verified; choose MM-first or one helper fallback | uncertain LOC transport or duplicate service owner | no GNSS package change |
-| O3 Interface design | Document data path for MM/GeoClue and optional gpsd NMEA endpoint; test any bridge only against recorded synthetic NMEA and mock QRTR packets | on-demand lifecycle, endpoint permissions, shutdown, and one-owner lock are explicit | always-on location or multiple LOC clients | discard prototype |
+| O2 Userspace capability | Inspect Arch ARM package metadata and source versions; run `qmicli --help-all` and `mmcli --help-all` | MM/libqmi LOC+QRTR API and GeoClue provider present; runtime QRTR discovery remains for R2 | source/version mismatch or duplicate service owner | no phone GNSS step |
+| O3 Interface design | Document MM-to-GeoClue source path and one-owner LOC lifecycle | on-demand lifecycle and clean shutdown are explicit | always-on location or multiple LOC clients | no GNSS package change |
 | O4 Firmware/RFS | Run FIRMWARE-PLAN name-only check for SDX55 member names. Review RFS backing and data privacy with MODEM-M5 O5 | no firmware bytes/identity in git; no protected partition access; rollback covers persistent staging | RFS requires protected-partition access or no safe private source | stop and ask owner; no phone step |
-| O5 Package checks | `tools/pr-check origin/main`; package `test/all` if package is later written; verify GeoClue/gpsd optional dependencies and no default-on location service | passes; opt-in remains default | test failure or GNSS service auto-starts | revert package draft |
+| O5 Package checks | Inspect `gnss-userspace/README.md` and config; `scripts/trail-lite lint` | no autostart, no network/assisted source enabled, privacy notes present | config enables tracking or network location | revert config draft |
 | O6 Release | Review O0-O5, modem plan gates, exact command syntax, privacy and open [I]s with owner | written approval for one RAM boot | any gate missing | do not boot |
 
 ### 6.2 Owner gates (phone; RAM boot first)
@@ -168,18 +167,35 @@ kernel/package version.
 | R1 | `fastboot -s {{SERIAL}} boot {{M5_GNSS_IMG}}`; SSH read `uname -r`, live compatible, `lspci -nn`, QRTR/MHI service status and filtered dmesg | K3 combo test image boots; SDX55 is visible on expected PCIe port; QRTR transport is available; no firmware error | wrong root, missing SDX55, RFS/privacy violation, transport error | wait for watchdog; refused boot => cold-reboot bootloader before any retry |
 | R2 | With reviewed ModemManager path: `mmcli -L`, `mmcli -m any`, `mmcli -m any --location-status`; do not yet enable tracking | modem reports Location interface and GPS NMEA/raw capability; record whether SIM is required | no location interface/capability, MM crashes, or SIM state ambiguous | stop MM test; `reboot -f`; don't start direct QRTR helper in same boot |
 | R3 | If R2 supports it, run `mmcli -m any --location-enable-gps-nmea`; query `mmcli -m any --location-get` at 5 s intervals outdoors with sky view; never save/print coordinates to repo logs | NMEA GPS source appears and reaches a fix; no network assistance requested; record only pass/fail and a coarse time-to-fix bucket | no capability, error, or only cell-id location | `mmcli -m any --location-disable-gps-nmea`; stop tracking |
-| R4 | If R2 fails but O2/O3 approved fallback, stop ModemManager's LOC client; start the single QRTR LOC bridge; check its owned PTY and `timeout 60 gpspipe -r -n 10 {{NMEA_TTY}}` | NMEA sentences arrive; no competing LOC client; service exits/stops cleanly | MM still owns LOC, no NMEA, service loops, or unexpected location disclosure | stop bridge and gpsd; remove temporary runtime PTY; reboot if modem is wedged |
+| R4 | If R2 fails, stop. Do not start a bridge until its design and ownership are separately approved. | no second client competes with ModemManager | any unreviewed fallback is started | stop GNSS and reboot only if modem is wedged |
 | R5 | If GeoClue is part of approved package: request location from the approved test client and confirm user/session permission prompt; stop client, then check MM GNSS is disabled | GeoClue returns the same GNSS source; service ceases when no clients remain | location available without request/permission or keeps running after client exits | revoke/stop GeoClue test; disable GNSS; reboot if needed |
 | R6 | Boot installed slot-B system (boot only); repeat the selected R2/R3 or R4 path; compare fastboot slot flags to G1 | same behavior and clean shutdown; slot flags unchanged | regression or flag change | stop; leave `boot_b` as-is and follow M1b recovery instructions |
+### 6.3 GNSS operation after MODEM-M5 RAM test
+
+These steps require a separate owner go after MODEM-M5 R1-R2 and private RFS
+review pass. The initial modem RAM test must stop before GNSS tracking. Use
+transient ModemManager controls and keep all location output private.
+
+| # | Command block / step | Expect | Stop | Rollback |
+| --- | --- | --- | --- | --- |
+| G2 | Cold start the modem using the approved owner procedure; RAM boot the reviewed image; `mmcli -L`; `mmcli -m any --location-status` | Modem appears and lists GPS NMEA/raw; assistance is off | QRTR absent, no GPS capability, or unresolved RFS state | stop; return to installed system; preserve only redacted diagnostics |
+| G3 | Outdoors with clear sky, `mmcli -m any --location-enable-gps-nmea`; poll `mmcli -m any --location-get` every 5 s; view NMEA only in a private terminal | NMEA arrives and fix acquired without network assistance | no fix after 5 min, malformed output, or SUPL/XTRA request | `mmcli -m any --location-disable-gps-nmea`; stop test |
+| G4 | Privately note first-fix elapsed time and reported horizontal accuracy; report only TTFF bucket (<1 min, 1–5 min, >5 min) and accuracy bucket (<10 m, 10–50 m, >50 m, unavailable) | report contains no coordinates, NMEA, satellite IDs, or exact fix time | sensitive output reaches shared log | disable GNSS and delete unneeded local capture |
+| G5 | `mmcli -m any --location-disable-gps-nmea`; verify disabled status; reboot normally | GNSS stops and modem returns idle | tracking remains active or modem wakes/resets continuously | `reboot -f`; do not retry before lifecycle review |
+
+Standalone libqmi diagnostics may be used only with ModemManager stopped and
+only after confirming the QRTR node: `qmicli --device=qrtr://0 --loc-start
+--loc-follow-nmea`. Stop that client and send `--loc-stop` if needed. Never
+run it beside ModemManager.
 
 ## 7. Open [I]s
 
 | ID | Open inference | Resolution |
 | --- | --- | --- |
-| I-GNSS-1 | Whether current Arch ModemManager exposes SDX55 LOC over QRTR and remains healthy across SIM unlock | O2, then R2/R3 |
-| I-GNSS-2 | GeoClue package/config and current project `omamobile-gnss` can use the MM location backend without Google's vendor GNSS chroot | O2/O5 and R5 |
+| I-GNSS-1 | Whether target Arch ModemManager runtime opens SDX55 QRTR LOC and reports GPS sources, including before registration | O2, R2/R3 |
+| I-GNSS-2 | GeoClue assisted-source behavior for target package; keep provider disabled until confirmed | O2/O5 |
 | I-GNSS-3 | gpsd package and local NMEA PTY permissions/endpoint | O2, R4 |
-| I-GNSS-4 | Whether `qmicli` diagnostics can use LOC over QRTR on this stack without conflicting with MM; exclusive ownership required | O2; isolated R4 fallback only |
+| I-GNSS-4 | Runtime QRTR node and exclusive LOC ownership | O2/R2 |
 | I-GNSS-5 | Exact SDX55 firmware/RFS members required for GNSS; whether normal modem boot firmware alone suffices | MODEM-M5 O5, firmware name audit only |
 | I-GNSS-6 | Safe private RFS backing source and runtime write behavior | MODEM-M5 I-M5-4; no test until approved |
 | I-GNSS-7 | Standalone GNSS works without SIM on this IN2023 and its antenna has usable sky visibility | R2-R4; public reference is precedent only |
