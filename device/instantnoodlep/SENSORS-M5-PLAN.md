@@ -259,6 +259,10 @@ on combo `aa996bae0695`. The two portable patches are in
 `device/instantnoodlep/patches/sensors/`; apply only to that base with
 `git am`. Commit 1 enables `&slpi` with the exact firmware.map destination;
 commit 2 records `kernel/configs/instantnoodlep-sensors.config`.
+[V] Kernel commits: `a46ead2b0b823d9b79ef64fdbb66145a3fd3ac3a`
+(SLPI) and `314f6714e5f2d4a3360d1ff0dbc35ba0c86d9f8d`
+(config); both patches pass `scripts/checkpatch.pl --no-tree` with zero
+errors/warnings (private `checkpatch.log` under the output root).
 The existing SM8250 SLPI GLINK/FastRPC nodes and context banks need no new
 DTS definitions (`arch/arm64/boot/dts/qcom/sm8250.dtsi:3129-3155`).
 [V] The device-node name is **lowercase** `/dev/fastrpc-sdsp`: the driver
@@ -324,6 +328,29 @@ availability, run `printf start > "$SLPI/state"` once. Expect running and
 `/dev/fastrpc-sdsp`; stop on crash, authentication/SMMU error, or failure to
 reach running; rollback via S8. Never guess the remoteproc number or start
 another DSP. This is a volatile sysfs action, not a partition write.
+
+S5a exact command block (in the coordinator's root shell on the phone;
+run only after the early-missing-firmware condition above is reviewed):
+
+```sh
+set -eu
+SLPI=
+for candidate in /sys/class/remoteproc/remoteproc*; do
+    [ "$(cat "$candidate/firmware")" = qcom/sm8250/OnePlus/instantnoodlep/slpi.mbn ] || continue
+    [ -z "$SLPI" ] || { echo 'STOP: multiple SLPI matches'; exit 1; }
+    SLPI=$candidate
+done
+[ -n "$SLPI" ] || { echo 'STOP: no matching SLPI'; exit 1; }
+test -r /lib/firmware/qcom/sm8250/OnePlus/instantnoodlep/slpi.mbn
+[ "$(cat "$SLPI/state")" = offline ] || { echo 'STOP: state is not offline'; exit 1; }
+printf start > "$SLPI/state"
+cat "$SLPI/state"
+ls -l /dev/fastrpc-sdsp
+```
+
+[I] Expect running and a non-secure misc node; discovery can be asynchronous.
+Stop on failed start or missing node after the reviewed timeout; never retry
+in a loop. Rollback is S8, with owner buttons if SSH is lost.
 
 ### 10.3 Build result
 
