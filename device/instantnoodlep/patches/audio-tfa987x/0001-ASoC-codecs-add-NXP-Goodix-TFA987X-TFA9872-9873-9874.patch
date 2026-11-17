@@ -1,0 +1,723 @@
+From bf29d8b4755fb83fd9da2393cdeb5ee3091acdc5 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Mikkel=20Inumineq=20J=C3=B8rgensen?=
+ <6770514+inumineq@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 00:50:52 +0100
+Subject: [PATCH] ASoC: codecs: add NXP/Goodix TFA987X (TFA9872/9873/9874)
+ amplifier driver
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Add an ASoC codec driver for the TFA9872/9873/9874 smart amplifiers used
+as speaker amps on boards such as the OnePlus 8 Pro (two TFA9874 on
+i2c15, binding nxp,tfa987x from the previous commit).
+
+The driver programs the amplifier directly over I2C via regmap with
+readable/writeable/volatile register ranges. It acquires the VDDD supply
+and the active-high reset GPIO, validates the chip revision against the
+compatible, and writes every managed register as a full 16-bit value to
+a safe default after the I2C soft reset: powered down, amplifier off,
+boost converter off at reset defaults, 16-bit single-slot TDM input on
+the slot selected by sound-channel.
+
+The amplifier starts muted with minimum gain. Hardware enable requires
+all three of DAPM power, the user "Playback Switch" and an unmuted
+playback stream; the transitions are serialized under a mutex and a
+control-bus error is latched off with the amplifier held in reset,
+requiring rebind. A raw "Playback Volume" gain control is exposed
+without any unverified dB conversion. Component suspend powers the
+amplifier down and resume restores the register defaults while keeping
+the user gain; unbind silences the amplifier before reset and VDDD are
+removed.
+
+Register field definitions follow the public GPL-2.0-only community
+driver tfa987x.c (gitlab.nura.eco soc/qualcomm-sm8250/linux @
+3c5440e9dd3c), which credits the NXP tfa98xx register definitions
+(Copyright 2014-2020 NXP Semiconductors). No vendor firmware,
+calibration data or decompiled code is used.
+
+Signed-off-by: Mikkel Inumineq Jørgensen <6770514+inumineq@users.noreply.github.com>
+---
+ MAINTAINERS                |   7 +
+ sound/soc/codecs/Kconfig   |  12 +
+ sound/soc/codecs/Makefile  |   2 +
+ sound/soc/codecs/tfa987x.c | 606 +++++++++++++++++++++++++++++++++++++
+ 4 files changed, 627 insertions(+)
+ create mode 100644 sound/soc/codecs/tfa987x.c
+
+diff --git a/MAINTAINERS b/MAINTAINERS
+index a44d4a1fb..8beb98280 100644
+--- a/MAINTAINERS
++++ b/MAINTAINERS
+@@ -19899,6 +19899,13 @@ S:	Maintained
+ F:	Documentation/devicetree/bindings/sound/nxp,tfa989x.yaml
+ F:	sound/soc/codecs/tfa989x.c
+ 
++NXP/Goodix TFA987X (TFA2) DRIVER
++M:	Mikkel Inumineq Jørgensen <6770514+inumineq@users.noreply.github.com>
++L:	linux-sound@vger.kernel.org
++S:	Maintained
++F:	Documentation/devicetree/bindings/sound/nxp,tfa987x.yaml
++F:	sound/soc/codecs/tfa987x.c
++
+ NZXT-KRAKEN2 HARDWARE MONITORING DRIVER
+ M:	Jonas Malaco <jonas@protocubo.io>
+ L:	linux-hwmon@vger.kernel.org
+diff --git a/sound/soc/codecs/Kconfig b/sound/soc/codecs/Kconfig
+index 8e251e1d8..9c783f757 100644
+--- a/sound/soc/codecs/Kconfig
++++ b/sound/soc/codecs/Kconfig
+@@ -2307,6 +2307,18 @@ config SND_SOC_TFA989X
+ 	  Note that the driver currently bypasses the built-in "CoolFlux DSP"
+ 	  and does not support (hardware) volume control.
+ 
++config SND_SOC_TFA987X
++	tristate "NXP/Goodix TFA987X (TFA2) amplifiers"
++	depends on I2C
++	select REGMAP_I2C
++	help
++	  Enable support for NXP (now Goodix) TFA9872, TFA9873 and TFA9874
++	  smart speaker amplifiers, which are programmed directly over I2C.
++
++	  The amplifier starts powered down and muted with minimum gain and
++	  a raw gain volume control; the boost converter stays disabled at
++	  its reset defaults.
++
+ config SND_SOC_TLV320ADC3XXX
+ 	tristate "Texas Instruments TLV320ADC3001/3101 audio ADC"
+ 	depends on I2C
+diff --git a/sound/soc/codecs/Makefile b/sound/soc/codecs/Makefile
+index 3d122ace7..bec298369 100644
+--- a/sound/soc/codecs/Makefile
++++ b/sound/soc/codecs/Makefile
+@@ -332,6 +332,7 @@ snd-soc-tas2781-fmwlib-y := tas2781-fmwlib.o
+ snd-soc-tas2781-i2c-y := tas2781-i2c.o
+ snd-soc-tas2783-sdw-y := tas2783-sdw.o
+ snd-soc-tfa9879-y := tfa9879.o
++snd-soc-tfa987x-y := tfa987x.o
+ snd-soc-tfa989x-y := tfa989x.o
+ snd-soc-tlv320adc3xxx-y := tlv320adc3xxx.o
+ snd-soc-tlv320aic23-y := tlv320aic23.o
+@@ -776,6 +777,7 @@ obj-$(CONFIG_SND_SOC_TAS675X)	+= snd-soc-tas675x.o
+ obj-$(CONFIG_SND_SOC_TDA7419)	+= snd-soc-tda7419.o
+ obj-$(CONFIG_SND_SOC_TAS2770) += snd-soc-tas2770.o
+ obj-$(CONFIG_SND_SOC_TFA9879)	+= snd-soc-tfa9879.o
++obj-$(CONFIG_SND_SOC_TFA987X)	+= snd-soc-tfa987x.o
+ obj-$(CONFIG_SND_SOC_TFA989X)	+= snd-soc-tfa989x.o
+ obj-$(CONFIG_SND_SOC_TLV320ADC3XXX)	+= snd-soc-tlv320adc3xxx.o
+ obj-$(CONFIG_SND_SOC_TLV320AIC23)	+= snd-soc-tlv320aic23.o
+diff --git a/sound/soc/codecs/tfa987x.c b/sound/soc/codecs/tfa987x.c
+new file mode 100644
+index 000000000..b79682ca4
+--- /dev/null
++++ b/sound/soc/codecs/tfa987x.c
+@@ -0,0 +1,606 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * NXP/Goodix TFA9872/TFA9873/TFA9874 smart amplifier ASoC codec driver
++ *
++ * Copyright (C) 2026 Mikkel Inumineq Jørgensen <6770514+inumineq@users.noreply.github.com>
++ *
++ * Register field definitions follow the public GPL-2.0-only community
++ * driver tfa987x.c (gitlab.nura.eco soc/qualcomm-sm8250/linux @
++ * 3c5440e9dd3c), which is based on tfa9895.c and credits the NXP tfa98xx
++ * register definitions, Copyright (C) 2014-2020 NXP Semiconductors.
++ * No vendor firmware container, calibration data or decompiled code is
++ * used: the amplifier is programmed directly over I2C.
++ */
++
++#include <linux/bitfield.h>
++#include <linux/delay.h>
++#include <linux/gpio/consumer.h>
++#include <linux/i2c.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/property.h>
++#include <linux/regmap.h>
++#include <linux/regulator/consumer.h>
++#include <sound/soc.h>
++
++/* System control */
++#define TFA987X_SYS_CTRL0			0x00
++#define TFA987X_SYS_CTRL0_PWDN			BIT(0)  /* 1 = power down */
++#define TFA987X_SYS_CTRL0_I2CR			BIT(1)  /* I2C reset, self-clearing */
++#define TFA987X_SYS_CTRL0_AMPE			BIT(3)  /* amplifier enable */
++#define TFA987X_SYS_CTRL0_DCDC			BIT(4)  /* boost converter enable */
++
++#define TFA987X_SYS_CTRL1			0x01
++#define TFA987X_SYS_CTRL1_MANSCONF		BIT(2)
++
++#define TFA987X_SYS_CTRL2			0x02
++
++#define TFA987X_REV				0x03	/* read-only revision */
++
++#define TFA987X_CLK_GATING_CTRL			0x05
++
++/* Key register is write-only */
++#define TFA987X_KEY1_PWM_CFG			0x58
++
++/* TDM interface configuration */
++#define TFA987X_TDM_CFG0			0x20
++#define TFA987X_TDM_CFG0_FSBCLKS_MSK		GENMASK(15, 12)
++#define TFA987X_TDM_CFG1			0x21
++#define TFA987X_TDM_CFG1_NSLOTS_MSK		GENMASK(3, 0)
++#define TFA987X_TDM_CFG1_SLOTBITS_MSK		GENMASK(8, 4)
++#define TFA987X_TDM_CFG2			0x22
++#define TFA987X_TDM_CFG2_SWIDTH_MSK		GENMASK(6, 2)
++#define TFA987X_TDM_CFG3			0x23
++#define TFA987X_TDM_CFG3_SPKE			BIT(0)
++#define TFA987X_TDM_CFG6			0x26
++#define TFA987X_TDM_CFG6_SPKS_MSK		GENMASK(3, 0)
++
++/* Audio and amplifier configuration */
++#define TFA987X_AUDIO_CTRL			0x51
++#define TFA987X_AMP_CFG				0x52
++#define TFA987X_AMP_CFG_GAIN_SHIFT		5
++#define TFA987X_AMP_CFG_GAIN_MAX		0xff
++#define TFA987X_AMP_CFG_GAIN_MSK		GENMASK(12, 5)
++
++#define TFA987X_MODE1_DET1			0x64
++#define TFA987X_MODE1_DET1_LPM1MODE_MSK		GENMASK(15, 14)
++
++/* Boost converter registers; kept at reset defaults with DCDC off */
++#define TFA987X_DCDC_CTRL0			0x70
++#define TFA987X_DCDC_CTRL4			0x74
++#define TFA987X_DCDC_CTRL5			0x75
++#define TFA987X_DCDC_CTRL6			0x76
++#define TFA987X_MAX_REGISTER			TFA987X_DCDC_CTRL6
++
++/* Die revisions (low byte of the revision register) per compatible */
++#define TFA9872_DIE_REV				0x72
++#define TFA9873_DIE_REV				0x73
++#define TFA9874_DIE_REV				0x74
++
++struct tfa987x {
++	struct device *dev;
++	struct regmap *regmap;
++	struct regulator *vddd;
++	struct gpio_desc *reset;
++	/* Serializes mute, switch and DAPM amp-state transitions */
++	struct mutex lock;
++	bool powered;	/* DAPM widget powered */
++	bool enabled;	/* user "Playback Switch" */
++	bool unmuted;	/* playback stream unmuted */
++	bool faulted;	/* control-bus error latched; rebind required */
++	u8 die;
++	u8 channel;	/* TDM slot, 0 = left, 1 = right */
++	u8 gain;	/* raw gain steps, preserved across suspend/resume */
++};
++
++static int tfa987x_bus_fault(struct tfa987x *tfa, const char *op, int ret)
++{
++	tfa->faulted = true;
++	/* Fail closed: hold the amplifier in reset until rebind. */
++	gpiod_set_value_cansleep(tfa->reset, 1);
++	dev_err(tfa->dev, "%s failed (%d), amplifier held in reset\n", op, ret);
++	return ret;
++}
++
++static int tfa987x_reg_write(struct tfa987x *tfa, unsigned int reg, u16 val,
++			     const char *op)
++{
++	int ret;
++
++	ret = regmap_write(tfa->regmap, reg, val);
++	if (ret)
++		return tfa987x_bus_fault(tfa, op, ret);
++	return 0;
++}
++
++/*
++ * The hardware amplifier is enabled only when DAPM power, the user
++ * "Playback Switch" and an unmuted playback stream all agree; otherwise
++ * it is powered down. Call with tfa->lock held.
++ */
++static int tfa987x_apply_amp_state(struct tfa987x *tfa)
++{
++	bool on = tfa->powered && tfa->enabled && tfa->unmuted;
++	int ret;
++
++	if (tfa->faulted)
++		return -EIO;
++
++	ret = regmap_update_bits(tfa->regmap, TFA987X_SYS_CTRL0,
++				 TFA987X_SYS_CTRL0_AMPE | TFA987X_SYS_CTRL0_PWDN,
++				 on ? TFA987X_SYS_CTRL0_AMPE : TFA987X_SYS_CTRL0_PWDN);
++	if (ret)
++		return tfa987x_bus_fault(tfa, "amplifier state update", ret);
++	return 0;
++}
++
++/*
++ * Write every managed register as a full 16-bit value so no field is left
++ * at an uninitialized state: powered down, amplifier off, boost converter
++ * off (reset defaults), 16-bit single-slot TDM input on the selected slot.
++ */
++static int tfa987x_init_registers(struct tfa987x *tfa)
++{
++	int ret;
++
++	/* Soft reset returns all registers to their hardware defaults. */
++	ret = tfa987x_reg_write(tfa, TFA987X_SYS_CTRL0, TFA987X_SYS_CTRL0_I2CR,
++				"soft reset");
++	if (ret)
++		return ret;
++	regcache_mark_dirty(tfa->regmap);
++	usleep_range(1000, 2000);
++
++	ret = tfa987x_reg_write(tfa, TFA987X_SYS_CTRL0, TFA987X_SYS_CTRL0_PWDN,
++				"power down");
++	if (ret)
++		return ret;
++	ret = tfa987x_reg_write(tfa, TFA987X_SYS_CTRL1, TFA987X_SYS_CTRL1_MANSCONF,
++				"manual configuration");
++	if (ret)
++		return ret;
++	ret = tfa987x_reg_write(tfa, TFA987X_SYS_CTRL2, 0, "audio sample rate");
++	if (ret)
++		return ret;
++	ret = tfa987x_reg_write(tfa, TFA987X_CLK_GATING_CTRL, 0, "clock gating");
++	if (ret)
++		return ret;
++
++	/* TDM: 64x fs, one 16-bit slot, speaker sense on the selected slot. */
++	ret = tfa987x_reg_write(tfa, TFA987X_TDM_CFG0, 0, "TDM clocks");
++	if (ret)
++		return ret;
++	ret = tfa987x_reg_write(tfa, TFA987X_TDM_CFG1,
++				FIELD_PREP(TFA987X_TDM_CFG1_NSLOTS_MSK, 1) |
++				FIELD_PREP(TFA987X_TDM_CFG1_SLOTBITS_MSK, 15),
++				"TDM slots");
++	if (ret)
++		return ret;
++	ret = tfa987x_reg_write(tfa, TFA987X_TDM_CFG2,
++				FIELD_PREP(TFA987X_TDM_CFG2_SWIDTH_MSK, 15),
++				"TDM slot width");
++	if (ret)
++		return ret;
++	ret = tfa987x_reg_write(tfa, TFA987X_TDM_CFG3, TFA987X_TDM_CFG3_SPKE,
++				"TDM speaker sense");
++	if (ret)
++		return ret;
++	ret = tfa987x_reg_write(tfa, TFA987X_TDM_CFG6,
++				FIELD_PREP(TFA987X_TDM_CFG6_SPKS_MSK, tfa->channel),
++				"TDM slot select");
++	if (ret)
++		return ret;
++
++	/* Dynamic protection off, amplifier gain at the caller's value. */
++	ret = tfa987x_reg_write(tfa, TFA987X_AUDIO_CTRL, 0, "audio control");
++	if (ret)
++		return ret;
++	ret = tfa987x_reg_write(tfa, TFA987X_AMP_CFG,
++				FIELD_PREP(TFA987X_AMP_CFG_GAIN_MSK, tfa->gain),
++				"amplifier gain");
++	if (ret)
++		return ret;
++
++	if (tfa->die == TFA9872_DIE_REV) {
++		ret = tfa987x_reg_write(tfa, TFA987X_MODE1_DET1,
++					FIELD_PREP(TFA987X_MODE1_DET1_LPM1MODE_MSK, 1),
++					"low-power mode");
++		if (ret)
++			return ret;
++	}
++
++	/* Boost converter stays disabled; registers at reset defaults. */
++	ret = tfa987x_reg_write(tfa, TFA987X_DCDC_CTRL0, 0, "boost control 0");
++	if (ret)
++		return ret;
++	ret = tfa987x_reg_write(tfa, TFA987X_DCDC_CTRL4, 0, "boost control 4");
++	if (ret)
++		return ret;
++	ret = tfa987x_reg_write(tfa, TFA987X_DCDC_CTRL5, 0, "boost control 5");
++	if (ret)
++		return ret;
++	ret = tfa987x_reg_write(tfa, TFA987X_DCDC_CTRL6, 0, "boost control 6");
++	if (ret)
++		return ret;
++
++	return 0;
++}
++
++static int tfa987x_switch_get(struct snd_kcontrol *kcontrol,
++			      struct snd_ctl_elem_value *ucontrol)
++{
++	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
++	struct tfa987x *tfa = snd_soc_component_get_drvdata(component);
++
++	mutex_lock(&tfa->lock);
++	ucontrol->value.integer.value[0] = tfa->enabled;
++	mutex_unlock(&tfa->lock);
++
++	return 0;
++}
++
++static int tfa987x_switch_put(struct snd_kcontrol *kcontrol,
++			      struct snd_ctl_elem_value *ucontrol)
++{
++	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
++	struct tfa987x *tfa = snd_soc_component_get_drvdata(component);
++	bool enabled = !!ucontrol->value.integer.value[0];
++	int ret = 0;
++
++	mutex_lock(&tfa->lock);
++	if (enabled != tfa->enabled) {
++		tfa->enabled = enabled;
++		ret = tfa987x_apply_amp_state(tfa);
++		if (ret)
++			tfa->enabled = !enabled;
++		else
++			ret = 1;
++	}
++	mutex_unlock(&tfa->lock);
++
++	return ret;
++}
++
++static int tfa987x_volume_get(struct snd_kcontrol *kcontrol,
++			      struct snd_ctl_elem_value *ucontrol)
++{
++	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
++	struct tfa987x *tfa = snd_soc_component_get_drvdata(component);
++	unsigned int val;
++	int ret;
++
++	mutex_lock(&tfa->lock);
++	if (tfa->faulted) {
++		ret = -EIO;
++		goto out;
++	}
++	ret = regmap_read(tfa->regmap, TFA987X_AMP_CFG, &val);
++	if (ret) {
++		ret = tfa987x_bus_fault(tfa, "gain read", ret);
++		goto out;
++	}
++	ucontrol->value.integer.value[0] = FIELD_GET(TFA987X_AMP_CFG_GAIN_MSK, val);
++out:
++	mutex_unlock(&tfa->lock);
++	return ret;
++}
++
++static int tfa987x_volume_put(struct snd_kcontrol *kcontrol,
++			      struct snd_ctl_elem_value *ucontrol)
++{
++	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
++	struct tfa987x *tfa = snd_soc_component_get_drvdata(component);
++	unsigned int gain = ucontrol->value.integer.value[0];
++	int ret;
++
++	mutex_lock(&tfa->lock);
++	if (tfa->faulted) {
++		ret = -EIO;
++		goto out;
++	}
++	if (gain == tfa->gain) {
++		ret = 0;
++		goto out;
++	}
++	ret = regmap_update_bits(tfa->regmap, TFA987X_AMP_CFG,
++				 TFA987X_AMP_CFG_GAIN_MSK,
++				 FIELD_PREP(TFA987X_AMP_CFG_GAIN_MSK, gain));
++	if (ret) {
++		ret = tfa987x_bus_fault(tfa, "gain write", ret);
++		goto out;
++	}
++	tfa->gain = gain;
++	ret = 1;
++out:
++	mutex_unlock(&tfa->lock);
++	return ret;
++}
++
++static const struct snd_kcontrol_new tfa987x_controls[] = {
++	SOC_SINGLE_BOOL_EXT("Playback Switch", 0,
++			    tfa987x_switch_get, tfa987x_switch_put),
++	/* Raw gain steps; no unverified conversion to dB is claimed. */
++	SOC_SINGLE_EXT("Playback Volume", TFA987X_AMP_CFG,
++		       TFA987X_AMP_CFG_GAIN_SHIFT, TFA987X_AMP_CFG_GAIN_MAX, 0,
++		       tfa987x_volume_get, tfa987x_volume_put),
++};
++
++static int tfa987x_amp_event(struct snd_soc_dapm_widget *w,
++			     struct snd_kcontrol *kcontrol, int event)
++{
++	struct snd_soc_component *component = snd_soc_dapm_to_component(w->dapm);
++	struct tfa987x *tfa = snd_soc_component_get_drvdata(component);
++	bool powered = !!SND_SOC_DAPM_EVENT_ON(event);
++	bool old;
++	int ret;
++
++	mutex_lock(&tfa->lock);
++	old = tfa->powered;
++	tfa->powered = powered;
++	ret = tfa987x_apply_amp_state(tfa);
++	if (ret)
++		tfa->powered = old;
++	mutex_unlock(&tfa->lock);
++
++	return ret;
++}
++
++static const struct snd_soc_dapm_widget tfa987x_dapm_widgets[] = {
++	SND_SOC_DAPM_AIF_IN("AIFIN", "HiFi Playback", 0, SND_SOC_NOPM, 0, 0),
++	SND_SOC_DAPM_OUT_DRV_E("AMPE", SND_SOC_NOPM, 0, 0, NULL, 0,
++			       tfa987x_amp_event,
++			       SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
++	SND_SOC_DAPM_OUTPUT("Speaker"),
++};
++
++static const struct snd_soc_dapm_route tfa987x_dapm_routes[] = {
++	{ "AMPE", NULL, "AIFIN" },
++	{ "Speaker", NULL, "AMPE" },
++};
++
++static int tfa987x_mute_stream(struct snd_soc_dai *dai, int mute, int stream)
++{
++	struct snd_soc_component *component = dai->component;
++	struct tfa987x *tfa = snd_soc_component_get_drvdata(component);
++	bool old;
++	int ret;
++
++	if (stream != SNDRV_PCM_STREAM_PLAYBACK)
++		return 0;
++
++	mutex_lock(&tfa->lock);
++	old = tfa->unmuted;
++	tfa->unmuted = !mute;
++	ret = tfa987x_apply_amp_state(tfa);
++	if (ret)
++		tfa->unmuted = old;
++	mutex_unlock(&tfa->lock);
++
++	return ret;
++}
++
++static int tfa987x_suspend(struct snd_soc_component *component)
++{
++	struct tfa987x *tfa = snd_soc_component_get_drvdata(component);
++	int ret = 0;
++
++	mutex_lock(&tfa->lock);
++	if (!tfa->faulted) {
++		/* Silence and power down; registers are restored on resume. */
++		ret = regmap_update_bits(tfa->regmap, TFA987X_SYS_CTRL0,
++					 TFA987X_SYS_CTRL0_AMPE |
++					 TFA987X_SYS_CTRL0_PWDN,
++					 TFA987X_SYS_CTRL0_PWDN);
++		if (ret)
++			tfa987x_bus_fault(tfa, "suspend", ret);
++	}
++	mutex_unlock(&tfa->lock);
++
++	return ret;
++}
++
++static int tfa987x_resume(struct snd_soc_component *component)
++{
++	struct tfa987x *tfa = snd_soc_component_get_drvdata(component);
++	int ret;
++
++	mutex_lock(&tfa->lock);
++	if (tfa->faulted) {
++		mutex_unlock(&tfa->lock);
++		return -EIO;
++	}
++	ret = tfa987x_init_registers(tfa);
++	if (!ret)
++		ret = tfa987x_apply_amp_state(tfa);
++	mutex_unlock(&tfa->lock);
++
++	return ret;
++}
++
++static const struct snd_soc_component_driver tfa987x_component_driver = {
++	.controls		= tfa987x_controls,
++	.num_controls		= ARRAY_SIZE(tfa987x_controls),
++	.dapm_widgets		= tfa987x_dapm_widgets,
++	.num_dapm_widgets	= ARRAY_SIZE(tfa987x_dapm_widgets),
++	.dapm_routes		= tfa987x_dapm_routes,
++	.num_dapm_routes	= ARRAY_SIZE(tfa987x_dapm_routes),
++	.suspend		= tfa987x_suspend,
++	.resume			= tfa987x_resume,
++	.endianness		= 1,
++};
++
++static const struct snd_soc_dai_ops tfa987x_dai_ops = {
++	.mute_stream	= tfa987x_mute_stream,
++};
++
++static struct snd_soc_dai_driver tfa987x_dai_driver = {
++	.name	= "tfa987x-hifi",
++	.playback = {
++		.stream_name	= "HiFi Playback",
++		.formats	= SNDRV_PCM_FMTBIT_S16_LE,
++		.rates		= SNDRV_PCM_RATE_48000,
++		.rate_min	= 48000,
++		.rate_max	= 48000,
++		.channels_min	= 2,
++		.channels_max	= 2,
++	},
++	.ops	= &tfa987x_dai_ops,
++};
++
++static bool tfa987x_readable_reg(struct device *dev, unsigned int reg)
++{
++	/* The key register is write-only; the rest of the documented
++	 * register space is readable.
++	 */
++	return reg <= TFA987X_MAX_REGISTER && reg != TFA987X_KEY1_PWM_CFG;
++}
++
++static bool tfa987x_writeable_reg(struct device *dev, unsigned int reg)
++{
++	/* The revision register is read-only. */
++	return tfa987x_readable_reg(dev, reg) && reg != TFA987X_REV;
++}
++
++static bool tfa987x_volatile_reg(struct device *dev, unsigned int reg)
++{
++	/* The revision register is a hardware status value. */
++	return reg == TFA987X_REV;
++}
++
++static const struct regmap_config tfa987x_regmap_config = {
++	.reg_bits	= 8,
++	.val_bits	= 16,
++	.max_register	= TFA987X_MAX_REGISTER,
++	.readable_reg	= tfa987x_readable_reg,
++	.writeable_reg	= tfa987x_writeable_reg,
++	.volatile_reg	= tfa987x_volatile_reg,
++	.cache_type	= REGCACHE_RBTREE,
++};
++
++static void tfa987x_power_off(void *data)
++{
++	struct tfa987x *tfa = data;
++
++	/* Best effort on unbind and probe error paths: silence the amplifier
++	 * first, then hold it in reset and drop VDDD.
++	 */
++	if (!tfa->faulted)
++		regmap_update_bits(tfa->regmap, TFA987X_SYS_CTRL0,
++				   TFA987X_SYS_CTRL0_AMPE |
++				   TFA987X_SYS_CTRL0_PWDN,
++				   TFA987X_SYS_CTRL0_PWDN);
++	gpiod_set_value_cansleep(tfa->reset, 1);
++	regulator_disable(tfa->vddd);
++}
++
++static int tfa987x_check_revision(struct device *dev, unsigned int revision)
++{
++	u8 die = revision & 0xff;
++
++	if (device_is_compatible(dev, "nxp,tfa9872"))
++		return die == TFA9872_DIE_REV ? 0 : -ENODEV;
++	if (device_is_compatible(dev, "nxp,tfa9873"))
++		return die == TFA9873_DIE_REV ? 0 : -ENODEV;
++	if (device_is_compatible(dev, "nxp,tfa9874"))
++		return die == TFA9874_DIE_REV ? 0 : -ENODEV;
++	return -ENODEV;
++}
++
++static int tfa987x_probe(struct i2c_client *client)
++{
++	struct device *dev = &client->dev;
++	struct tfa987x *tfa;
++	unsigned int revision;
++	u32 channel = 0;
++	int ret;
++
++	tfa = devm_kzalloc(dev, sizeof(*tfa), GFP_KERNEL);
++	if (!tfa)
++		return -ENOMEM;
++
++	tfa->dev = dev;
++	mutex_init(&tfa->lock);
++	i2c_set_clientdata(client, tfa);
++
++	tfa->vddd = devm_regulator_get(dev, "vddd");
++	if (IS_ERR(tfa->vddd))
++		return dev_err_probe(dev, PTR_ERR(tfa->vddd),
++				     "failed to get VDDD supply\n");
++
++	tfa->reset = devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_HIGH);
++	if (IS_ERR(tfa->reset))
++		return dev_err_probe(dev, PTR_ERR(tfa->reset),
++				     "failed to get reset GPIO\n");
++
++	tfa->regmap = devm_regmap_init_i2c(client, &tfa987x_regmap_config);
++	if (IS_ERR(tfa->regmap))
++		return PTR_ERR(tfa->regmap);
++
++	ret = device_property_read_u32(dev, "sound-channel", &channel);
++	if (ret)
++		channel = 0;
++	if (channel > 1)
++		return dev_err_probe(dev, -EINVAL,
++				     "sound-channel must be 0 (left) or 1 (right)\n");
++	tfa->channel = channel;
++
++	ret = regulator_enable(tfa->vddd);
++	if (ret)
++		return dev_err_probe(dev, ret, "failed to enable VDDD supply\n");
++	ret = devm_add_action_or_reset(dev, tfa987x_power_off, tfa);
++	if (ret)
++		return ret;
++
++	/* Let VDDD settle, then release the amplifier from reset. */
++	usleep_range(2000, 3000);
++	ret = gpiod_set_value_cansleep(tfa->reset, 0);
++	if (ret)
++		return dev_err_probe(dev, ret, "failed to release reset\n");
++	usleep_range(2000, 3000);
++
++	ret = regmap_read(tfa->regmap, TFA987X_REV, &revision);
++	if (ret)
++		return dev_err_probe(dev, ret, "failed to read revision\n");
++
++	ret = tfa987x_check_revision(dev, revision);
++	if (ret)
++		return dev_err_probe(dev, ret,
++				     "revision 0x%04x does not match compatible\n",
++				     revision);
++	tfa->die = revision & 0xff;
++	dev_info(dev, "TFA987x revision 0x%04x, TDM slot %u\n", revision,
++		 tfa->channel);
++
++	ret = tfa987x_init_registers(tfa);
++	if (ret)
++		return ret;
++
++	/* Starts muted: switch off, stream muted, powered down, gain 0. */
++	ret = tfa987x_apply_amp_state(tfa);
++	if (ret)
++		return ret;
++
++	return devm_snd_soc_register_component(dev, &tfa987x_component_driver,
++					       &tfa987x_dai_driver, 1);
++}
++
++static const struct of_device_id tfa987x_of_match[] = {
++	{ .compatible = "nxp,tfa9872" },
++	{ .compatible = "nxp,tfa9873" },
++	{ .compatible = "nxp,tfa9874" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, tfa987x_of_match);
++
++static struct i2c_driver tfa987x_driver = {
++	.driver = {
++		.name		= "tfa987x",
++		.of_match_table	= tfa987x_of_match,
++	},
++	.probe	= tfa987x_probe,
++};
++module_i2c_driver(tfa987x_driver);
++
++MODULE_DESCRIPTION("ASoC NXP/Goodix TFA9872/9873/9874 smart amplifier driver");
++MODULE_AUTHOR("Mikkel Inumineq Jørgensen <6770514+inumineq@users.noreply.github.com>");
++MODULE_LICENSE("GPL");
+-- 
+2.56.0
+
