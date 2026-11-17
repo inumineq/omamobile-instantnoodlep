@@ -1,0 +1,41 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Host-side package self-checks; no ARM package build or phone access.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+
+scripts=(
+  PKGBUILD
+  build
+  install
+  omamobile-device-instantnoodlep.install
+  bin/omamobile-bt-public-addr
+  test/all
+  test/bt-public-addr
+)
+bash -n "${scripts[@]}"
+shellcheck "${scripts[@]}"
+srcinfo=$(mktemp)
+trap 'rm -f "$srcinfo"' EXIT
+makepkg --printsrcinfo > "$srcinfo"
+grep -q "^pkgbase = omamobile-device-instantnoodlep$" "$srcinfo"
+./test/bt-public-addr
+
+stage=$(mktemp -d)
+trap 'rm -rf "$stage" "$srcinfo"' EXIT
+./install "$stage"
+test -f "$stage/usr/share/omamobile/device.conf"
+test -f "$stage/usr/share/omamobile/firmware.map"
+cmp -s firmware.map ../../device/instantnoodlep/firmware.map
+test -f "$stage/usr/share/uwsm/env.d/90-omamobile-instantnoodlep-graphics"
+test -f "$stage/usr/lib/environment.d/50-omamobile-back.conf"
+test -f "$stage/usr/lib/systemd/system/omamobile-bt-public-addr@.service"
+test -f "$stage/usr/lib/udev/rules.d/80-omamobile-bt-public-addr.rules"
+test -L "$stage/etc/systemd/system/systemd-firstboot.service"
+test "$(readlink "$stage/etc/systemd/system/systemd-firstboot.service")" = /dev/null
+test -L "$stage/etc/systemd/system/systemd-vconsole-setup.service"
+test "$(readlink "$stage/etc/systemd/system/systemd-vconsole-setup.service")" = /dev/null
+firmware_blob=$(find . -type f \( -name '*.mbn' -o -name '*.mdt' -o -name '*.bin' -o -name '*.tlv' \) -print -quit)
+test -z "$firmware_blob"
+
+printf '%s\n' 'all device package self-checks passed'
