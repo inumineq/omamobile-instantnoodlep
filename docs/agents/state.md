@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # State: where the port stands now
 
-Last updated: 2026-11-17 (afternoon: Wi-Fi/BT verified, P2 charger hang, new workers), claude on omabook.
+Last updated: 2026-11-17 (evening: misc phase 1 kernel series built offline), claude on omabook.
 
 The one page an agent reads first. Keep it short and current: it is
 overwritten, not appended to. History goes to `device/instantnoodlep/NOTES.md`
@@ -26,6 +26,7 @@ of it from `origin/main` plus the pushed branches.
 | M5 Wi-Fi/BT | Works on a RAM boot of k3-wifi2: Wi-Fi associated (owner's network, NTP synced), BT scan finds devices after `btmgmt public-addr` [V: NOTES 2026-11-17 afternoon]; not on `boot_b` yet (daily kernel) |
 | M5 modem/GNSS | Source-cited DTS/config/userspace delta prepared; flashless Sahara profile and private EFS/DDR policy block first boot [V: `device/instantnoodlep/MODEM-M5-DELTA.md` §1-6]. No kernel built or handset test. |
 | M5 power | P1 gauge works on a RAM boot; P2 charger image hangs early at boot (P2b in progress); no charging under any of our kernels [V: POWER-M5-PLAN §7.3-7.4] |
+| M5 misc (haptics, torch, alert slider) | Phase 1 kernel series on `instantnoodlep-k3-misc` (firmware-free AW8697 haptics, torch node, I2C1 controller for Hall chip-ID reads) built offline; two RAM candidates staged, nothing booted [V: MISC-HW-PLAN §8] |
 
 ## The phone right now
 

@@ -1,4 +1,4 @@
-From e2c4a607b53b977053ae26b7507d10f17b20389f Mon Sep 17 00:00:00 2001
+From 9313b33b9cf8e4fad865b0714c1144eb985086b9 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Mikkel=20Inumineq=20J=C3=B8rgensen?=
  <6770514+inumineq@users.noreply.github.com>
 Date: Tue, 17 Nov 2026 13:37:03 +0100
@@ -12,17 +12,17 @@ AW86927; no register compatibility is assumed.
 
 Assisted-by: Claude Opus 5.5 <noreply@anthropic.com>
 ---
- .../bindings/input/awinic,aw8697.yaml         | 108 ++++++++++++++++++
+ .../bindings/input/awinic,aw8697.yaml         | 107 ++++++++++++++++++
  MAINTAINERS                                   |   4 +
- 2 files changed, 112 insertions(+)
+ 2 files changed, 111 insertions(+)
  create mode 100644 Documentation/devicetree/bindings/input/awinic,aw8697.yaml
 
 diff --git a/Documentation/devicetree/bindings/input/awinic,aw8697.yaml b/Documentation/devicetree/bindings/input/awinic,aw8697.yaml
 new file mode 100644
-index 000000000..1ea55dd4c
+index 000000000..31d7abc8c
 --- /dev/null
 +++ b/Documentation/devicetree/bindings/input/awinic,aw8697.yaml
-@@ -0,0 +1,108 @@
+@@ -0,0 +1,107 @@
 +# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
 +%YAML 1.2
 +---
@@ -60,7 +60,6 @@ index 000000000..1ea55dd4c
 +    maximum: 1000
 +    description: Chip frequency conversion coefficient.
 +  awinic,f0-calibration-percent:
-+    $ref: /schemas/types.yaml#/definitions/uint32
 +    minimum: 0
 +    maximum: 10
 +    description: Allowed percentage deviation during resonance calibration.

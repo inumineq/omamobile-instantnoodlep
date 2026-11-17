@@ -302,3 +302,43 @@ rather than substituting an untested path.
 emits light; both are announced to the owner first. No step writes a
 partition, and no step runs `i2cdetect`, `-f` forced access, a strobe/flash
 command or a second `modprobe` in the same boot.
+
+### 8.4 Offline build result (2026-11-17)
+
+[V] Branch `instantnoodlep-k3-misc` = combo `aa996bae0` + three commits
+(`9313b33b9` binding, `f327a14ea` driver, `248bd15f3` board DTS). Built with
+`nice -n 19 make O=~/android/build/k3-misc ARCH=arm64 LLVM=1 -j6 Image.gz
+dtbs modules`; release `7.3.0-rc6-instantnoodlep-k3-misc-g248bd15f3ebb`;
+1803 modules (combo had 1802; the new one is `aw8695-haptics.ko`).
+
+| Check | Result |
+| --- | --- |
+| Kernel build | [V] exit 0, no `error:` in the log |
+| `W=1` on `drivers/input/misc/aw8695-haptics.o` | [V] no warnings |
+| `checkpatch --strict` on all three patches | [V] 0 errors, 0 warnings, 0 checks; the only note is the missing `Signed-off-by`, which is the owner's DCO line |
+| `dt_binding_check DT_SCHEMA_FILES=…/awinic,aw8697.yaml` | [V] CHKDT/LINT/STYLE clean |
+| `CHECK_DTBS=1` on the board DTB | [V] clean, no output |
+| `dtbs_check` findings fixed | [V] the pinctrl state must be named `*-state` and the qcom TLMM binding forbids `input-enable`; the state is now `haptics-irq-default-state` with `bias-pull-up` only |
+
+[V] `dtbs_check` needs `dtschema` on `PATH`; the laptop's `~/android/build/venv-dt`
+(2026.9) works for `dt_binding_check`, and `dt-validate` also needs a
+non-empty `processed-schema.json` (an interrupted run had left it at 0 bytes,
+which makes `dt-validate` die with `TypeError: argument of type 'NoneType'`).
+
+Artefacts (private, `~/android/build/k3-misc-ram/`, never in git):
+
+| File | sha256 |
+| --- | --- |
+| `misc-haptics.img` | `132045e43a17106d0d9f454e8377240049ec303151b6757be9ca884cab66e3ea` |
+| `misc-torch.img` | `7844ae76901186c1d6cdf483f560dc12417f52625bac5625b5b0ff9b92fb6ae4` |
+| `modules-7.3.0-rc6-instantnoodlep-k3-misc-g248bd15f3ebb.tar.gz` | `d62453b48a92f6f51c8bf16d6bf0f80a698f1df3bde8431e4025da1c4c43628e` |
+| `misc-haptics.dtb` (candidate A) | `6f23283ab4e0c61b30b03432672782d53846faf0b5392201e3c86fdb040e2931` |
+| `misc-torch.dtb` (candidate B) | `0cfefaf25d214df1382250e77eb7ba27ac1aee3c50515f1c1ef0c7a509fc264b` |
+
+[V] Both manifests report `boot: 2`, `root: userdata`, the stock overlay
+applied and checked (`156` labels) and `hardware_boot_tested: false`. The
+builder read every image back and wrote `*.SHA256SUMS` next to it.
+
+[I] Nothing here has run on the handset. The haptics probe performs a bounded
+resonance calibration, so the first boot of candidate A may produce one brief
+vibration before any test command is issued; the owner is told this in M3a-1.
