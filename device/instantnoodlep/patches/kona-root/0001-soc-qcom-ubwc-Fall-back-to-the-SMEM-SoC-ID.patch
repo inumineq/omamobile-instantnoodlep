@@ -1,0 +1,90 @@
+From e5230d6698a123c13069fa04eddcf6933fbac047 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Mikkel=20Inumineq=20J=C3=B8rgensen?=
+ <6770514+inumineq@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 12:59:14 +0100
+Subject: [PATCH 1/3] soc: qcom: ubwc: Fall back to the SMEM SoC ID
+
+The UBWC config is selected by matching the root compatible against a
+table of SoC compatibles. On the OnePlus 8 Pro (SM8250) the stock ABL
+applies a vendor overlay from the dtbo partition on every boot, which
+replaces the root compatible with "qcom,kona-mtp", "qcom,kona",
+"qcom,mtp". The lookup then fails and msm_mdss refuses to probe:
+
+  Couldn't find UBWC config data for this platform!
+
+The dtbo partition cannot simply be emptied on this device, since ABL
+refuses to boot without a dtbo it accepts.
+
+The UBWC parameters are a property of the SoC, and the SoC ID is
+available from SMEM, which this driver already requires for the HBB
+lookup. When the root compatible matches nothing, look the SoC ID up
+in a second table. Start it with SM8250; other SoCs can be added when
+a board needs it.
+
+Platforms whose root compatible matches keep their current behaviour.
+
+Assisted-by: Claude Opus 5.5
+---
+ drivers/soc/qcom/ubwc_config.c | 32 ++++++++++++++++++++++++++++++++
+ 1 file changed, 32 insertions(+)
+
+diff --git a/drivers/soc/qcom/ubwc_config.c b/drivers/soc/qcom/ubwc_config.c
+index 23901a4c5..10703df9a 100644
+--- a/drivers/soc/qcom/ubwc_config.c
++++ b/drivers/soc/qcom/ubwc_config.c
+@@ -13,6 +13,8 @@
+ #include <linux/soc/qcom/ubwc.h>
+ #include <linux/soc/qcom/smem.h>
+ 
++#include <dt-bindings/arm/qcom,ids.h>
++
+ static const struct qcom_ubwc_cfg_data no_ubwc_data = {
+ 	/* no UBWC, no HBB */
+ };
+@@ -169,6 +171,34 @@ static const struct of_device_id qcom_ubwc_configs[] __maybe_unused = {
+ 	{ }
+ };
+ 
++/*
++ * Some bootloaders rewrite the root compatible of the DT they pass on, so
++ * that the SoC compatible is missing from it. The OnePlus 8 Pro ABL, for
++ * one, applies a vendor overlay that replaces it with "qcom,kona".
++ * Fall back to the SoC ID that the boot chain stores in SMEM.
++ */
++static const struct {
++	u32 soc_id;
++	const struct qcom_ubwc_cfg_data *data;
++} qcom_ubwc_soc_ids[] = {
++	{ QCOM_ID_SM8250, &ubwc_4_0_hbb16 },
++};
++
++static const struct qcom_ubwc_cfg_data *qcom_ubwc_match_soc_id(void)
++{
++	u32 soc_id;
++	int i;
++
++	if (qcom_smem_get_soc_id(&soc_id))
++		return NULL;
++
++	for (i = 0; i < ARRAY_SIZE(qcom_ubwc_soc_ids); i++)
++		if (qcom_ubwc_soc_ids[i].soc_id == soc_id)
++			return qcom_ubwc_soc_ids[i].data;
++
++	return NULL;
++}
++
+ static struct qcom_ubwc_cfg_data *cfg;
+ static DEFINE_MUTEX(cfg_mutex);
+ /**
+@@ -190,6 +220,8 @@ const struct qcom_ubwc_cfg_data *qcom_ubwc_config_get_data(void)
+ 		return ERR_PTR(-EPROBE_DEFER);
+ 
+ 	data = of_machine_get_match_data(qcom_ubwc_configs);
++	if (!data)
++		data = qcom_ubwc_match_soc_id();
+ 	if (!data) {
+ 		pr_err("Couldn't find UBWC config data for this platform!\n");
+ 		return ERR_PTR(-EINVAL);
+-- 
+2.56.0
+

@@ -1,0 +1,83 @@
+From 8fb338f6ee97c8f673a9a2cea20b2e0d19b0b7e6 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Mikkel=20Inumineq=20J=C3=B8rgensen?=
+ <6770514+inumineq@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 13:00:18 +0100
+Subject: [PATCH 3/3] cpufreq: dt-platdev: Skip cpufreq-dt when a QCOM
+ cpufreq-hw node exists
+
+cpufreq-dt-platdev decides whether to create the cpufreq-dt device by
+matching the root compatible against a blocklist of SoCs that have their
+own cpufreq driver. On the OnePlus 8 Pro (SM8250) the stock ABL applies
+a vendor overlay from the dtbo partition on every boot, which replaces
+the root compatible with "qcom,kona-mtp", "qcom,kona", "qcom,mtp". The
+"qcom,sm8250" entry then misses, and since the CPU nodes carry an
+operating-points-v2 table, cpufreq-dt is registered next to
+qcom-cpufreq-hw, which drives these CPUs through the EPSS block.
+
+The presence of a cpufreq-hw or EPSS node describes the hardware
+directly. Also skip cpufreq-dt when such a node is available, in
+addition to the root compatible blocklist. The check runs at
+core_initcall time and only reads the unflattened DT, so it does not
+depend on any driver having probed.
+
+Of the in-tree DTs with such a node, all but shikra already hit the
+root blocklist or have no operating-points-v2 table on CPU0. On shikra,
+whose CPU nodes have both, cpufreq-dt is no longer registered next to
+qcom-cpufreq-hw.
+
+Assisted-by: Claude Opus 5.5
+---
+ drivers/cpufreq/cpufreq-dt-platdev.c | 30 +++++++++++++++++++++++++++-
+ 1 file changed, 29 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/cpufreq/cpufreq-dt-platdev.c b/drivers/cpufreq/cpufreq-dt-platdev.c
+index 371ca1fe9..09e545c8f 100644
+--- a/drivers/cpufreq/cpufreq-dt-platdev.c
++++ b/drivers/cpufreq/cpufreq-dt-platdev.c
+@@ -216,6 +216,33 @@ static const struct of_device_id blocklist[] __initconst = {
+ 	{ }
+ };
+ 
++/*
++ * Nodes of CPU frequency controllers with their own cpufreq driver. They
++ * identify the hardware without relying on the root compatible, which some
++ * bootloaders rewrite: the OnePlus 8 Pro ABL, for one, replaces
++ * "qcom,sm8250" with "qcom,kona".
++ */
++static const struct of_device_id blocklist_nodes[] __initconst = {
++	{ .compatible = "qcom,cpufreq-epss", },
++	{ .compatible = "qcom,cpufreq-hw", },
++	{ .compatible = "qcom,shikra-epss", },
++	{ }
++};
++
++static bool __init has_blocklisted_node(void)
++{
++	struct device_node *np;
++
++	for_each_matching_node(np, blocklist_nodes) {
++		if (of_device_is_available(np)) {
++			of_node_put(np);
++			return true;
++		}
++	}
++
++	return false;
++}
++
+ static bool __init cpu0_node_has_opp_v2_prop(void)
+ {
+ 	struct device_node *np __free(device_node) = of_cpu_device_node_get(0);
+@@ -236,7 +263,8 @@ static int __init cpufreq_dt_platdev_init(void)
+ 		goto create_pdev;
+ 	}
+ 
+-	if (cpu0_node_has_opp_v2_prop() && !of_machine_device_match(blocklist))
++	if (cpu0_node_has_opp_v2_prop() && !of_machine_device_match(blocklist) &&
++	    !has_blocklisted_node())
+ 		goto create_pdev;
+ 
+ 	return -ENODEV;
+-- 
+2.56.0
+
