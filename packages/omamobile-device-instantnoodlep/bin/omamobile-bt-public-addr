@@ -1,0 +1,40 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Assign a stable, phone-local Bluetooth public address after hci_qca setup.
+set -euo pipefail
+hci=${1:?Usage: omamobile-bt-public-addr hciN}
+index=${hci#hci}
+[[ $index =~ ^[0-9]+$ ]] || { echo "not a controller: $hci" >&2; exit 2; }
+
+state=/var/lib/omamobile/bt-public-addr
+install -d -m 0755 "${state%/*}"
+if [[ -s $state ]]; then
+  addr=$(tr 'a-f' 'A-F' < "$state" | tr -d '\n')
+else
+  umask 077
+  bytes=$(od -An -N5 -tx1 /dev/urandom | tr -d ' \n')
+  [[ $bytes =~ ^[0-9a-fA-F]{10}$ ]] || exit 1
+  addr=$(printf '02:%s:%s:%s:%s:%s' "${bytes:0:2}" "${bytes:2:2}" "${bytes:4:2}" "${bytes:6:2}" "${bytes:8:2}")
+  printf '%s\n' "$addr" > "$state"
+fi
+[[ $addr =~ ^[0-9A-F]{2}(:[0-9A-F]{2}){5}$ ]] || { echo "invalid Bluetooth address in $state" >&2; exit 1; }
+(( (16#${addr:0:2} & 3) == 2 )) || { echo "address must be unicast and locally administered" >&2; exit 1; }
+
+info=
+for _ in {1..60}; do
+  info=$(btmgmt --index "$index" info 2>/dev/null || true)
+  [[ $info == *"current settings:"* ]] && break
+  sleep 0.5
+done
+[[ $info == *"current settings:"* ]] || { echo "$hci did not become ready" >&2; exit 1; }
+if [[ $info == *"public address:"*"$addr"* ]]; then
+  exit 0
+fi
+btmgmt --index "$index" public-addr "$addr"
+for _ in {1..60}; do
+  info=$(btmgmt --index "$index" info 2>/dev/null || true)
+  [[ $info == *"current settings:"*"$addr"* ]] && exit 0
+  sleep 0.5
+done
+echo "$hci did not report the configured public address" >&2
+exit 1
