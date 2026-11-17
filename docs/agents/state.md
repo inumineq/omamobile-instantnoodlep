@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # State: where the port stands now
 
-Last updated: 2026-11-18 (slim K3 RAM-boots; clang 19 builds freeze), claude on omabook.
+Last updated: 2026-11-18 (encryption plan drafted; slim K3 RAM-boots; clang 19 builds freeze), claude on omabook.
 
 The one page an agent reads first. Keep it short and current: it is
 overwritten, not appended to. History goes to `device/instantnoodlep/NOTES.md`
@@ -60,7 +60,7 @@ See `docs/agents/active/`. Vibe workers on omabook: power P2b, kona, misc-hw, au
    take (DTBO-PLAN §6).
 5. Power P2b (charger as a module), then P3 Type-C.
 6. Audio phase 1 (worker on macbookpro), kona upstream series (worker `kona`), UI issue drafts (worker on obsidian); modem/GNSS kernel side is built, gates A-C of MODEM-M5-DELTA §6 (stock wiring, packages, private-state policy) are the coordinator's.
-7. Backlog: disk encryption + boot passphrase / lock-screen PIN (issue #70).
+7. Disk encryption + boot passphrase / lock-screen PIN (issue #70): design plan written in `device/instantnoodlep/ENCRYPTION-PLAN.md`; implementation and all phone steps remain gated/not started.
 
 ## Offline UI proposals
 
