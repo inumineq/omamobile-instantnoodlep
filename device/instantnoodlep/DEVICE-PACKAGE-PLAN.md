@@ -41,8 +41,9 @@ shader (`a650_zap.mdt`→`.mbn`), SM8250 ADSP/CDSP/SLPI/Venus, and SDX55 MHI
 members. Sources are vendor/owner OTA images at install time; ADSP/CDSP may
 also come from linux-firmware where names and device suitability match.
 SLPI, zap, and modem source membership/segments still need names-only
-verification against the owner's OTA. The map intentionally omits EFS,
-modem NV, identity, calibration and WLAN MAC data. [V: `FIRMWARE-PLAN.md`
+verification against the owner's OTA. The map intentionally omits per-unit
+DDR training state, EFS, modem NV, identity, calibration and WLAN MAC data.
+[V: `FIRMWARE-PLAN.md`
 §5-7 and `firmware.map`; source-member uncertainties are [I] per that plan.]
 
 The repo map's `image:` prefix represents the multiple OTA images used by
