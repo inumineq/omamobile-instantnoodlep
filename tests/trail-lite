@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Host test for scripts/trail-lite in a throwaway repo with a bare origin.
+set -eu
+SRC=$(cd "$(dirname "$0")/.." && pwd)/scripts/trail-lite
+T=$(mktemp -d)
+trap 'rm -rf "$T"' EXIT
+fail() { echo "not ok - $*" >&2; exit 1; }
+AT=@  # fixtures build addresses at run time so no literal one sits in git
+g() { git -c user.name=t -c user.email="t${AT}t.invalid" "$@"; }
+
+git init -q --bare "$T/origin.git"
+git init -q -b main "$T/w"
+cd "$T/w"
+mkdir -p scripts docs/agents/active .trail/learnings
+cp "$SRC" scripts/trail-lite
+printf '# State\n\nStateLine\n' > docs/agents/state.md
+g add -A && g commit -qm init
+git remote add origin "$T/origin.git"
+git push -q origin main
+
+# note: Trail-code's file name and id (sha1 of the file name, 8 hex)
+out=$(printf '## Decided\n- keep it\n' | scripts/trail-lite note --title "Keep retries at 4!" --author "claude on hostx" --touches "a.c, b.c")
+f=$(printf '%s\n' "$out" | head -n1)
+d=$(date +%Y-%m-%d)
+[ "$f" = ".trail/learnings/$d-keep-retries-at-4-claude.md" ] || fail "note file name: $f"
+want="l-$(printf '%s' "$(basename "$f")" | { sha1sum 2>/dev/null || shasum -a 1; } | cut -c1-8)"
+grep -qx "id: $want" "$f" || fail "note id"
+grep -qx '  - b.c' "$f" || fail "touches"
+printf '## Decided\n- x\n' | scripts/trail-lite note --title "Keep retries at 4!" --author "claude on hostx" >/dev/null
+[ -f ".trail/learnings/$d-keep-retries-at-4-claude-2.md" ] || fail "second note same day gets -2"
+
+# lint: private data and bad front matter are refused
+for bad in 'aa:bb:cc:dd:ee:ff' '356938035643809' "someone${AT}example.com" 'serialno: 1a2b3c4d'; do
+  printf '# x\n\n%s\n' "$bad" > docs/agents/state.md
+  if scripts/trail-lite lint docs/agents/state.md >/dev/null; then fail "lint missed: $bad"; fi
+done
+printf '# State\n\nStateLine sha256 2549b79d 12345\n' > docs/agents/state.md
+scripts/trail-lite lint docs/agents/state.md >/dev/null || fail "lint false positive"
+printf -- '---\ntitle: x\n---\nno sections\n' > .trail/learnings/2026-01-01-x-y.md
+if scripts/trail-lite lint .trail/learnings/2026-01-01-x-y.md >/dev/null; then fail "lint missed bad learning"; fi
+rm .trail/learnings/2026-01-01-x-y.md
+
+g add -A && g commit -qm learnings && git push -q origin main
+
+# brief: main's state and learnings, plus a pushed unmerged branch's worker and learning
+git checkout -qb worker
+printf '# w\n\nhostx · branch worker · goal\n' > docs/agents/active/w1.md
+printf '## Watch out\n- y\n' | scripts/trail-lite note --title "Branch learning" --author "bot on hostx" >/dev/null
+g add -A && g commit -qm worker && git push -q origin worker
+git checkout -q main
+b=$(scripts/trail-lite brief)
+printf '%s\n' "$b" | grep -q StateLine || fail "brief: state"
+printf '%s\n' "$b" | grep -q 'Keep retries at 4!' || fail "brief: main learning"
+printf '%s\n' "$b" | grep -q 'touches: a.c, b.c' || fail "brief: touches"
+printf '%s\n' "$b" | grep -q 'w1: hostx · branch worker · goal  \[pushed, not merged: worker\]' || fail "brief: branch worker"
+printf '%s\n' "$b" | grep -q 'Branch learning  \[pushed, not merged: worker\]' || fail "brief: branch learning"
+
+# once squash-merged, the branch's files show once, from main
+git checkout -q worker -- docs/agents/active/w1.md .trail/learnings
+g commit -qm squash && git push -q origin main
+n=$(scripts/trail-lite brief | grep -c 'w1:')
+[ "$n" = 1 ] || fail "brief after squash merge shows w1 $n times"
+echo "ok - trail-lite"

@@ -36,6 +36,26 @@ House rules for work in this repository:
 8. **No proprietary firmware in git.** Vendor firmware comes from the
    owner's own factory image at install time, per upstream rule.
 
+## Project memory (read before working)
+
+Agents work on this repo from three hosts (omabook, obsidian, macbookpro)
+and in several tools; git is the only shared memory. Every session:
+
+1. **Start**: `git fetch origin`, then `scripts/trail-lite brief`. It prints
+   `docs/agents/state.md` (where the port stands), `docs/agents/active/`
+   (who is working on what) and the learnings in `.trail/learnings/`, from
+   `origin/main` plus recently pushed branches. Read the learnings whose
+   `touches` cover the files you are about to change.
+2. **While working**: a running worker has its own file in
+   `docs/agents/active/` (see its README). Where things live:
+   `docs/agents/where.md`.
+3. **Before the PR**: update `docs/agents/state.md` if the state changed;
+   save a decision, a ruled-out path or a watch-out as a learning with
+   `scripts/trail-lite note` (format: [Trail-code](https://github.com/trailhq/Trail-Code));
+   run `scripts/trail-lite lint`. Findings still go to `NOTES.md`, open
+   questions and tickets to the wayfinder map. Do not duplicate tickets in
+   these files; point to them.
+
 ## Agent skills
 
 This repo is set up for the mattpocock/skills set (skills.sh registry,

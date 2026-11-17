@@ -1,0 +1,198 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+#
+# trail-lite: the shared project memory for this repo, without installing
+# anything. It reads and writes the same files as Trail-code
+# (https://github.com/trailhq/Trail-Code): learnings in .trail/learnings/,
+# plus this repo's live state in docs/agents/. Git is the only transport.
+#
+#   scripts/trail-lite brief [--offline]   what is going on, from origin/main
+#                                          and every recently pushed branch
+#   scripts/trail-lite note --title T [--touches a,b] [--kind K] [--author A]
+#                                          save a learning; body on stdin
+#   scripts/trail-lite lint [files...]     check memory files for private data
+#                                          and learning front matter
+#
+# Plain bash 3.2 + git + coreutils/BSD tools: runs on Linux and macOS.
+set -eu
+
+ROOT=$(git rev-parse --show-toplevel)
+cd "$ROOT"
+LEARN=.trail/learnings
+ACTIVE=docs/agents/active
+STATE=docs/agents/state.md
+BASE=${TRAIL_LITE_BASE:-origin/main}
+RECENT_DAYS=${TRAIL_LITE_DAYS:-14}
+
+die() { echo "trail-lite: $*" >&2; exit 2; }
+
+sha1() {
+  if command -v sha1sum >/dev/null 2>&1; then sha1sum | cut -c1-40
+  else shasum -a 1 | cut -c1-40; fi
+}
+
+# Trail-code's slug(): lowercase, non [a-z0-9] to spaces, first N words.
+slug() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' ' ' |
+    awk -v n="$2" '{ for (i = 1; i <= NF && i <= n; i++) printf "%s%s", (i > 1 ? "-" : ""), $i }'
+}
+
+# A front-matter value of a learning read from stdin.
+field() { awk -v k="$1" 'NR==1 && $0!="---" {exit} NR>1 && $0=="---" {exit}
+  index($0, k": ")==1 { v=substr($0, length(k)+3); gsub(/^"|"$/, "", v); print v; exit }'; }
+
+touches_of() { awk 'NR>1 && $0=="---" {exit} /^touches:/ {t=1; next}
+  t && /^  - / {sub(/^  - /, ""); printf "%s%s", (n++ ? ", " : ""), $0; next} t {t=0}'; }
+
+# Files a ref adds under a directory relative to the base, skipping ones the
+# base already has (a squash-merged branch).
+added_on() {
+  git diff --name-only --diff-filter=A "$BASE...$1" -- "$2" 2>/dev/null |
+    while read -r f; do git cat-file -e "$BASE:$f" 2>/dev/null || echo "$f"; done
+}
+
+recent_branches() {
+  now=$(date +%s)
+  git for-each-ref --format='%(refname:short) %(committerdate:unix)' refs/remotes/origin |
+    while read -r ref ts; do
+      case "$ref" in origin/HEAD|origin|"$BASE") continue ;; esac
+      [ $((now - ts)) -le $((RECENT_DAYS * 86400)) ] && echo "$ref"
+    done
+  return 0
+}
+
+cmd_brief() {
+  offline=0
+  [ "${1:-}" = "--offline" ] && offline=1
+  if [ "$offline" = 0 ]; then
+    git fetch --quiet --prune origin || echo "(fetch failed: showing the last fetched state)"
+  fi
+  git rev-parse --verify --quiet "$BASE" >/dev/null || die "$BASE not found; run git fetch"
+
+  branch=$(git rev-parse --abbrev-ref HEAD)
+  set -- $(git rev-list --left-right --count "$BASE...HEAD")
+  echo "== $branch: $2 ahead, $1 behind $BASE (state below is $BASE's)"
+  [ "$1" -gt 0 ] && echo "   your checkout is behind: git pull --rebase (or rebase your branch) before editing state"
+  echo
+
+  git show "$BASE:$STATE" 2>/dev/null || echo "($STATE missing on $BASE)"
+  echo
+
+  echo "== Active work ($ACTIVE/ on $BASE, then pushed branches of the last $RECENT_DAYS days)"
+  git ls-tree --name-only "$BASE" "$ACTIVE/" 2>/dev/null | while read -r f; do
+    [ "$(basename "$f")" = README.md ] && continue
+    printf '  %s: %s\n' "$(basename "$f" .md)" "$(git show "$BASE:$f" | grep -m1 -vE '^(<!--|#|$)')"
+  done
+  for ref in $(recent_branches); do
+    added_on "$ref" "$ACTIVE" | while read -r f; do
+      [ "$(basename "$f")" = README.md ] && continue
+      printf '  %s: %s  [pushed, not merged: %s]\n' "$(basename "$f" .md)" \
+        "$(git show "$ref:$f" | grep -m1 -vE '^(<!--|#|$)')" "${ref#origin/}"
+    done
+  done
+  echo
+
+  echo "== Learnings ($LEARN/ on $BASE, newest first)"
+  git ls-tree --name-only "$BASE" "$LEARN/" 2>/dev/null | sort -r | while read -r f; do
+    [ "${f##*.}" = md ] || continue
+    body=$(git show "$BASE:$f")
+    printf '  %s  %s\n' "$(printf '%s\n' "$body" | field date)" "$(printf '%s\n' "$body" | field title)"
+    t=$(printf '%s\n' "$body" | touches_of)
+    if [ -n "$t" ]; then printf '      touches: %s\n' "$t"; fi
+  done
+  for ref in $(recent_branches); do
+    added_on "$ref" "$LEARN" | while read -r f; do
+      printf '  %s  %s  [pushed, not merged: %s]\n' "$(git show "$ref:$f" | field date)" \
+        "$(git show "$ref:$f" | field title)" "${ref#origin/}"
+    done
+  done
+  echo
+  echo "Read a learning in full before touching what it touches: $LEARN/<file>."
+  echo "Open decisions and tickets: the wayfinder map issue (docs/agents/issue-tracker.md)."
+  echo "Where things live: docs/agents/where.md."
+}
+
+cmd_note() {
+  title="" touches="" kind="" author="${TRAIL_LITE_AUTHOR:-}"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --title) title=$2; shift 2 ;;
+      --touches) touches=$2; shift 2 ;;
+      --kind) kind=$2; shift 2 ;;
+      --author) author=$2; shift 2 ;;
+      *) die "note: unknown argument $1" ;;
+    esac
+  done
+  [ -n "$title" ] || die "note: --title is required"
+  [ -n "$author" ] || author="agent on $(hostname -s 2>/dev/null || hostname)"
+  case "$kind" in ""|preference|guardrail|decision|lesson) ;; *) die "note: --kind must be preference|guardrail|decision|lesson" ;; esac
+  body=$(cat)
+  [ -n "$body" ] || die "note: the body comes on stdin (## Decided / ## Tried and ruled out / ## Watch out)"
+
+  day=$(date +%Y-%m-%d)
+  base="$day-$(slug "$title" 6)-$(slug "$author" 1)"
+  name="$base.md"; i=2
+  while [ -e "$LEARN/$name" ]; do name="$base-$i.md"; i=$((i + 1)); done
+  id="l-$(printf '%s' "$name" | sha1 | cut -c1-8)"
+  mkdir -p "$LEARN"
+  {
+    echo "---"
+    printf 'title: "%s"\n' "$(printf '%s' "$title" | sed 's/"/'"'"'/g')"
+    echo "author: $author"
+    echo "date: $day"
+    echo "branch: $(git rev-parse --abbrev-ref HEAD)"
+    echo "id: $id"
+    [ -n "$kind" ] && echo "kind: $kind"
+    echo "scope: repo"
+    echo "status: active"
+    echo "src: agent"
+    if [ -n "$touches" ]; then
+      echo "touches:"
+      printf '%s\n' "$touches" | tr ',' '\n' | sed 's/^ *//; s/ *$//; /^$/d; s/^/  - /'
+    fi
+    echo "---"
+    echo
+    printf '%s\n' "$body"
+  } > "$LEARN/$name"
+  echo "$LEARN/$name"
+  cmd_lint "$LEARN/$name"
+}
+
+# Private data that must never be committed (AGENTS.md rule 4).
+PRIVATE_RE='([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}|(^|[^0-9A-Za-z])[0-9]{15}([^0-9A-Za-z]|$)|[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z][A-Za-z.]+|[Ss]erial(no| number)?[ :=]+[0-9A-Za-z]{6,}|[Ii][Mm][Ee][Ii][ :=]+[0-9]'
+
+cmd_lint() {
+  if [ $# -eq 0 ]; then
+    set -- $(ls "$STATE" docs/agents/where.md "$ACTIVE"/*.md "$LEARN"/*.md .trail/README.md 2>/dev/null)
+  fi
+  bad=0
+  for f in "$@"; do
+    [ -f "$f" ] || continue
+    if grep -nE "$PRIVATE_RE" "$f" | sed "s|^|$f:|; s|$|  <- looks private (serial/IMEI/MAC/email)|" | grep .; then
+      bad=1
+    fi
+    case "$f" in
+      "$LEARN"/*.md|*/"$LEARN"/*.md)
+        name=$(basename "$f")
+        [ "$(head -n1 "$f")" = "---" ] || { echo "$f: no front matter"; bad=1; continue; }
+        for k in title author date id; do
+          [ -n "$(field "$k" < "$f")" ] || { echo "$f: front matter lacks $k"; bad=1; }
+        done
+        id=$(field id < "$f")
+        printf '%s' "$id" | grep -qE '^l-[0-9a-f]{6,16}$' || { echo "$f: id '$id' is not l-<hex>"; bad=1; }
+        grep -qE '^## (Decided|Tried and ruled out|Watch out)' "$f" ||
+          { echo "$f: needs a ## Decided, ## Tried and ruled out or ## Watch out section"; bad=1; }
+        case "$name" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-*) ;; *) echo "$f: name must start with YYYY-MM-DD-"; bad=1 ;; esac
+        ;;
+    esac
+  done
+  [ "$bad" = 0 ] && echo "trail-lite lint: ok ($# files)"
+  return "$bad"
+}
+
+case "${1:-}" in
+  brief) shift; cmd_brief "$@" ;;
+  note) shift; cmd_note "$@" ;;
+  lint) shift; cmd_lint "$@" ;;
+  *) sed -n '4,15p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac
