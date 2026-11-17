@@ -231,3 +231,28 @@ captured from a RAM-booted image with no protected partition changes, the
 camera graph and kernel release are recorded in a dated NOTES entry, and all
 unresolved [I] items remain identified. This document alone does not claim a
 camera works on the owner's phone.
+
+## 9. M-CAM1 implementation split (2026-11-17)
+
+- [V] Coordinator approved the combo kernel's existing test-only Kona match
+  for this RAM candidate only; row 0 and R2 do not block this explicitly
+  authorized experiment. Stock DTBO remains untouched; no upstream release
+  may include that match patch (learning `l-f28ff139`).
+- [V] Audit of combo `aa996bae0`, `drivers/media/i2c/imx471.c`, found only
+  ACPI matching, one `vana` supply, no DT binding, and a single four-lane
+  1928x1088 mode advertising 200 MHz link frequency. The existing clock
+  check requires 19.2 MHz (`IMX471_EXT_CLK`), which agrees with the public
+  board's MCLK3 rate (N/kernel patch 0012). No mode/PLL change is planned.
+- [V] Coordinator authorized separate GPL kernel commits before the board:
+  (1) `sony,imx471` YAML with external clock, reset, three supplies and CSI
+  endpoint; (2) OF/I2C matching and three-supply bulk control, preserving
+  ACPI `vana`; (3) front-only board graph and config. Validate the binding,
+  run strict checkpatch, build and schema-check before release.
+- [I] Keep the upstream power sequence (rails, clock, release reset, wait
+  10–15 ms) for the DT path. Public N/kernel patch 0012 identifies the three
+  rail routes and a 2 ms AVDD regulator startup delay, but does not prove
+  this unit's complete electrical sequencing. Driver probe and one frame
+  remain coordinator-only gates; a chip-ID failure stops the experiment.
+- [V] Public community link frequencies (748.8/400 MHz) describe its modified
+  driver, not this pinned driver's 200 MHz mode. Use 200 MHz at both ends
+  and retain all existing mode register values; successful streaming is [I].
