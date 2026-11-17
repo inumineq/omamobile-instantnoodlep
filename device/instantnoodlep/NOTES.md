@@ -4,7 +4,30 @@
 Newest first. Findings that matter beyond one subsystem go here; subsystem
 detail lives in the *-PLAN.md files.
 
-## 2026-11-17 (night, latest): K3 RAM boots: touch and panel bind, dtbo root rewrite
+## 2026-11-17 (early morning, latest): keys, modules, GPU renders
+
+- [V] Clean K3 (no `qcom,kona` patch, branch `instantnoodlep-k3-clean`)
+  with its module set installed on the rootfs
+  (`/usr/lib/modules/7.3.0-rc6-instantnoodlep-k3-g0cbba142f50c`):
+  `systemctl is-system-running` = `running` (K2 under K3 was `degraded`),
+  56 modules loaded. UBWC still fails there until the neutral dtbo lands.
+- [V] Keys: `pm8941_pwrkey` and `gpio-keys` (volume up/down on PM8150
+  GPIO 6/7, as in the stock DT) register once `&pon_pwrkey` is enabled and
+  the gpio-keys node is added; mainline pm8150.dtsi ships both disabled.
+- [V] GPU: with `&gpu`/`&gmu` enabled, the zap pointed at
+  `qcom/sm8250/OnePlus/instantnoodlep/a650_zap.mbn` (owner OTA, installed
+  on the rootfs) and `linux-firmware-qcom` installed: `gpu-initialized: 1`,
+  revision 650, GMU firmware v2.1.8, no hangs. The first SQE request at
+  ~1 s fails with -2 (rootfs not mounted yet, built-in msm); msm retries on
+  first open and loads it. Hardware rendering checked with ALARM's stock
+  Mesa unpacked to /tmp (system untouched): `OpenGL renderer: FD650`,
+  OpenGL 4.6, OpenGL ES 3.2.
+- [V] The rootfs only carried `linux-firmware-other`; the omamobile Mesa
+  build has Gallium `panfrost,llvmpipe,softpipe,zink` only (upstream
+  `packages/mesa/PKGBUILD:168`), so Hyprland still renders in software.
+  Freedreno/Turnip in that build is an upstream decision.
+
+## 2026-11-17 (night, later still): K3 RAM boots: touch and panel bind, dtbo root rewrite
 
 - [V] K3 = K2 + touch (s6sy761 @0x48 on i2c13) + AMS678UW01 panel
   driver and DSI/MDSS enablement, kernel `7.3.0-rc6-instantnoodlep-k3`,
