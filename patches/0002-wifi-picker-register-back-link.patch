@@ -8,7 +8,7 @@ diff --git a/packages/omamobile-shell/plugins/omamobile.quicksettings/WifiPanel.
 @@ -42,6 +42,20 @@
    readonly property int touchSize: Math.max(44, Style.space(48))
    readonly property int pad: Style.spacing.panelPadding
- 
+
 +  // Route Back directly even when keyboard focus belongs to another surface.
 +  // The standard surface tier leaves the on-screen keyboard first.
 +  Loader {
@@ -24,5 +24,5 @@ diff --git a/packages/omamobile-shell/plugins/omamobile.quicksettings/WifiPanel.
 +  }
 +
    // ---------------------------------------------------------------- lifecycle
- 
+
    function open() {
