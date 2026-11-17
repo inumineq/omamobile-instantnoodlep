@@ -52,6 +52,21 @@ function `pci_e2`, and wake TLMM87 active low. PERST/wake belong to
 `pcie@0`, not the host node. [I] Their IN2023 wiring is still O2, not proven
 by a generic SoC DTS. Preserve the already working `apps_smmu` configuration.
 
+[V: L `sm8250.dtsi:2467-2468`] The SoC DTS declares `perst-gpios` TLMM85
+`GPIO_ACTIVE_LOW` and `wake-gpios` TLMM87 `GPIO_ACTIVE_HIGH` on the host node.
+The candidate deletes both and puts `reset-gpios` TLMM85 `GPIO_ACTIVE_LOW`
+and `wake-gpios` TLMM87 `GPIO_ACTIVE_LOW` on the root port, i.e. it also
+inverts the inherited WAKE# polarity. [I] That inversion is this delta's
+claim, not something the SoC DTS supports; gate A must confirm it against the
+stock DTBO. Wrong WAKE# polarity costs wake events, not enumeration.
+
+[V: L `drivers/pci/of.c:175-185,140-163`] The endpoint `reg` first cell
+`0x10000` is not a devfn: `of_pci_get_devfn()` masks it to `(reg[0] >> 8) & 0xff`,
+which is 0, so the node attaches to the device at bus 1, devfn 0 and
+`qcom,flashless` reaches the driver through `device_property_read_bool()`.
+Keep the value as the reference has it; a plain `0x0` would also match devfn 0
+but would lose the bus-1 encoding the reference uses.
+
 [V: D/K18:18-28; D/K19:18-34] The device reference adds the endpoint and GIC
 MBI route shown below. [I] `qcom,flashless` needs a reviewed binding plus
 profile driver support; otherwise it has no effect. MBI SPI range/alias
@@ -97,8 +112,9 @@ do not change every SDX55 device's channel table globally.
 
 ## 3. Kernel fragment and required driver work
 
-[I] Merge this proposed fragment after the current device fragment for a
-future candidate only; record the final merged `.config`, commit and release.
+[V] The fragment is now in `device/instantnoodlep/kernel.config` (last
+section) and was merged into the candidate build recorded in §6. Merge it
+after the Wi-Fi/BT section: it overrides those module defaults on purpose.
 [V: L `drivers/bus/mhi/host/Kconfig:7-28`, `drivers/net/wwan/Kconfig`,
 `drivers/net/Kconfig` (MHI_NET), `net/qrtr/Kconfig`,
 `drivers/phy/qualcomm/Kconfig` (QMP_PCIE), `drivers/irqchip/Kconfig`]
@@ -113,9 +129,9 @@ CONFIG_PHY_QCOM_QMP_PCIE=y
 CONFIG_ARM_SMMU=y
 CONFIG_ARM_SMMU_QCOM=y
 CONFIG_ARM_GIC_V3=y
-CONFIG_ARM_GIC_V3_MBI=y
 CONFIG_MHI_BUS=y
 CONFIG_MHI_BUS_PCI_GENERIC=y
+CONFIG_MHI_BUS_SAHARA=y
 CONFIG_WWAN=y
 CONFIG_MHI_WWAN_CTRL=y
 CONFIG_MHI_NET=y
@@ -124,12 +140,22 @@ CONFIG_QRTR_MHI=y
 # GNSS over LOC needs no CONFIG_GNSS driver, host IPA or Q6V5_MSS.
 ```
 
+[V: L `drivers/irqchip/Makefile:35`] There is no `CONFIG_ARM_GIC_V3_MBI`
+symbol: `ARM_GIC_V3` builds `irq-gic-v3-mbi.o` directly. The earlier draft of
+this fragment listed it, and Kconfig dropped it silently — exactly the failed
+gate this section warns about. Do not re-add it.
+
+[V: L `drivers/net/wwan/Kconfig:9`] `config WWAN` is `depends on GNSS || GNSS
+= n`, so a `GNSS=m` from the Wi-Fi/BT section would cap `WWAN` at `=m`. The
+fragment therefore sets `# CONFIG_GNSS is not set`; LOC arrives over QRTR, not
+through a GNSS tty.
+
 [V: D/K16:35-47; L host Kconfig:7-28] `CONFIG_MHI_BUS_SAHARA` exists only in
-the public WIP series, not mainline. [I] Add `CONFIG_MHI_BUS_SAHARA=y` **only
-after** a reviewed implementation defines it; an unknown fragment symbol
-silently omitted by Kconfig is a failed gate. Required work: bounded Sahara
-image loading, flashless profile selection, channel/event ring definitions,
-large-transfer fixes (D/K20-K22), and a privacy-reviewed sync lifecycle.
+the public WIP series, not mainline. [V] It now exists in this tree because
+`patches/instantnoodlep/kernel-modem/0002` defines it; without that patch the
+line is dropped silently, so a build that does not show `CONFIG_MHI_BUS_SAHARA=y`
+in the merged `.config` did not apply the series. Required work that is still
+open: large-transfer fixes (D/K20-K22) and a privacy-reviewed sync lifecycle.
 [V: D/K28-K30; D/modem/install.sh:90-93] Debug RAM/EFS dump paths are present
 in the reference. [I] Exclude unrestricted dump collection and EFS persistence
 from the first candidate; if the modem cannot run without them, stop.
@@ -189,34 +215,102 @@ private backup, if usable, stays outside git and outside the firmware map.
 
 ## 6. First RAM boot: coordinator only, no SIM or registration
 
-[I] This gate is currently **not released**: wiring, reviewed loader/profile,
-MM package capability and safe private backing must pass first. No image,
-sha256 or new kernel release exists from this doc-only task. Baseline supplied
-by coordinator: `aa996bae0`, `7.3.0-rc6-instantnoodlep-k3-gaa996bae0695` [I:
-verify locally before building]; do not mix in the hanging power P2 branch.
+[I] This gate is still **not released**: stock wiring, MM package capability
+and safe private backing must pass first. The kernel side now exists and is
+built offline; nothing has run on the phone.
+
+[V] Base `aa996bae0` (`instantnoodlep-k3-combo`, release
+`7.3.0-rc6-instantnoodlep-k3-gaa996bae0695`), series
+`patches/instantnoodlep/kernel-modem/0001-0004`, branch
+`instantnoodlep-k3-modem` at `e9ff58528f8b`. Do not mix in the hanging power
+P2 branch.
+
+### 6.1 Offline artefacts (macbookpro, LLVM=1, arm64)
+
+[V] Built in a case-sensitive Docker volume (`k3modem-work`, container
+`k3modem`) from the series applied on `aa996bae0`, with the combo `.config`
+as base. Release `7.3.0-rc6-instantnoodlep-k3-modem-ge9ff58528f8b`: the
+release string names the series tip, not the working tree, so it is set
+explicitly after the merge.
+
+```sh
+# $SRC = kernel tree with patches/instantnoodlep/kernel-modem/0001-0004 applied
+cd "$SRC"
+scripts/kconfig/merge_config.sh -m -O "$OUT" "$COMBO_CONFIG" "$FRAGMENT"
+# $FRAGMENT = this repo's device/instantnoodlep/kernel.config
+scripts/config --file "$OUT/.config" \
+  --set-str LOCALVERSION -instantnoodlep-k3-modem-ge9ff58528f8b \
+  --disable LOCALVERSION_AUTO
+make O="$OUT" ARCH=arm64 LLVM=1 olddefconfig
+nice -n 19 make O="$OUT" ARCH=arm64 LLVM=1 -j4 \
+  Image.gz qcom/sm8250-oneplus-instantnoodlep.dtb modules
+make O="$OUT" ARCH=arm64 LLVM=1 INSTALL_MOD_PATH="$STAGE" modules_install
+```
+
+[V] `dtbs_check` was run as `make O="$SCHEMA" ARCH=arm64 LLVM=1 CHECK_DTBS=y
+qcom/sm8250-oneplus-instantnoodlep.dtb`; it reports `DTC [C]` with no
+warnings. A deliberately invalid property on `modem@0,0` is rejected by
+`qcom,sdx55-mhi.yaml`, so the new binding is really applied to the node.
+
+| Artefact | Path (private, macbookpro) | sha256 |
+| --- | --- | --- |
+| kernel | `~/android/build/k3-modem/Image.gz` | `006ace3a75d81022abfa32f43e4b68f4c4b190cb6e43f1b9768482572a8f49e7` |
+| board dtb | `~/android/build/k3-modem/sm8250-oneplus-instantnoodlep.dtb` | `646c38c28e930c98fd4a8a679773bfb40ea9f233c68b60d5ca56acb604bcadbb` |
+| modules | `~/android/build/k3-modem/modules-7.3.0-rc6-instantnoodlep-k3-modem-ge9ff58528f8b.tar.gz` | `9a6317634e1bad3b8002ffff24e9b4743053403b1263ede53472b85f71634608` |
+| merged config | `~/android/build/k3-modem/config-7.3.0-rc6-instantnoodlep-k3-modem-ge9ff58528f8b` | `e244cc1c1f31980d44b022f2ad3681314776caedf425cbfc6e1113017ef53d82` |
+
+[V] The merged `.config` carries `CONFIG_MHI_BUS_SAHARA=y`,
+`CONFIG_MHI_BUS=y`, `CONFIG_MHI_BUS_PCI_GENERIC=y`, `CONFIG_MHI_NET=y`,
+`CONFIG_MHI_WWAN_CTRL=y`, `CONFIG_WWAN=y`, `CONFIG_QRTR=y`,
+`CONFIG_QRTR_MHI=y`, `CONFIG_PCIE_QCOM=y`, `CONFIG_PHY_QCOM_QMP_PCIE=y`,
+`CONFIG_ARM_SMMU_QCOM=y`, `CONFIG_ARM_GIC_V3=y` and `# CONFIG_GNSS is not
+set`. A build without `CONFIG_MHI_BUS_SAHARA=y` did not apply the series.
+
+[V] `dtbs_check` on the board DTS and `checkpatch --strict` on the series are
+clean except `Missing Signed-off-by` (the owner's DCO) and two
+"DT binding docs and includes should be a separate patch" warnings, which are
+false positives: the bindings are separate patches. `tests/modem-sahara/check
+<kernel tree>` passes against the real `sahara.c` with a synthetic MHI
+transport; it is a parser/bounds test, not DMA or lifecycle testing.
+
+[I] The coordinator builds the RAM image on omabook from the same series; the
+artefacts above are the reference build, not a transferable file. Rebuild
+there with the same fragment and check the release string before use.
 
 | Gate | Command / review | Expect | Stop | Rollback |
 | --- | --- | --- | --- | --- |
-| A offline | Review O2 stock-DTB privately against §2; review bindings, loader/profile, source licences and private-state policy; `make ... dtbs_check` and merged-config audit in future kernel task | [I] exact wiring confirmed; no unknown symbol/schema error, no dump/NV path; base and new commit recorded | mismatch, protected-state requirement, unknown firmware provenance | discard candidate, keep combo K3 |
+| A offline | Review O2 stock-DTB privately against §2; review bindings, loader/profile, source licences and private-state policy. `dtbs_check`, `checkpatch --strict` and the merged-config audit are done [V: §6.1] | [I] exact wiring confirmed; no unknown symbol/schema error, no dump/NV path; base and new commit recorded | mismatch, protected-state requirement, unknown firmware provenance | discard candidate, keep combo K3 |
 | B offline | Audit `pacman -Si modemmanager libqmi libqrtr-glib qrtr`; inspect package files/units and MM meson options on build host | [I] qcom-soc/QRTR enabled, mhi_net/LOC fixes present; only real MM owns bus; exact daemon units documented | unavailable package, competing MM bridge, auto SIM/GNSS service, partition access | restore rootfs staging snapshot |
 | C offline | Owner confirms physical SIM absent and no eSIM/subscription activation, no GSM auto-connect, MM initially stopped, bounded private RFS policy approved; stage packages/modules only with a separate userdata-write go | [I] no registration/SIM-helper action possible in first test | SIM present or unable to guarantee non-registration | no boot; owner removes SIM or requests new scope |
-| D image | Future builder uses fresh paths and command below; `sha256sum` and manifest/release review | [I] reviewed RAM-only candidate and matching rootfs/modules; stock DTBO retained | output exists, wrong release, incomplete A-C | discard output; no phone action |
+| D image | Builder uses fresh paths and the command below; `sha256sum` and manifest/release review against §6.1 | [I] reviewed RAM-only candidate and matching rootfs/modules; stock DTBO retained | output exists, wrong release, incomplete A-C | discard output; no phone action |
 | E baseline (owner local) | `fastboot -s "$SERIAL" getvar current-slot`; `getvar slot-successful:b`; `getvar slot-unbootable:b` | [I] B active, successful, bootable; identifiers kept private | state differs from M1b/B5 | reconcile M1b; no RAM boot |
 | F RAM boot (one owner go) | `fastboot -s "$SERIAL" boot "$M5_IMG"` | [I] boots once to USB SSH; hash/release match D | refusal, lost USB, hang | owner cold-reboots to bootloader after refusal; no repeated attempts, no slot writes; boot installed B only once state is checked |
 | G enumeration (owner SSH) | run read block below | [I] `17cb:0306`, reviewed flashless profile, AMSS/mission mode, IPCR/QRTR, HWIP netdev and WWAN control nodes | wrong profile, firmware failure, SBL stall, IOMMU/MSI errors, sync dump or modem reset loop | stop test; owner-approved reboot to installed B; private logs only |
 | H MM discovery (owner SSH, separate go) | start block below after approved RFS/QRTR and mhi_net ready | [I] `mmcli -L` lists one modem; `sim-missing` is acceptable without SIM | no modem, crash, protected backing request, attempted registration | stop MM and test RFS/QRTR units; owner-approved reboot to installed B |
 | I restore | stop block below; compare slot flags to E after owner-controlled return to bootloader | [I] services stopped, installed kernel unchanged, no slot flag change | device wedged or flags changed | M1b recovery owner only; never set-active/flash in this runbook |
 
-[I] Future build operator only, after A-C; this worker did not run it.
-All variables are private paths and must be filled and checked; fresh `M5_IMG`
+[I] Build operator only, after A-C; this worker did not run it. All
+variables are private paths and must be filled and checked; fresh `M5_IMG`
 means neither it nor its sidecars exists. The builder's `--root userdata`
 permits ordinary rootfs writes; it does not imply a read-only phone test
 [V: tools/build-instantnoodlep-probe:31-42,root allowlist constants].
 
+[V] `$ART` is the artefact directory of §6.1 (`~/android/build/k3-modem` on
+macbookpro, or the coordinator's own build on omabook). The modules tarball
+must be unpacked into the rootfs before the RAM boot, or the release will not
+match and udev will load nothing:
+
 ```sh
+ART="$HOME/android/build/k3-modem"
+REL=7.3.0-rc6-instantnoodlep-k3-modem-ge9ff58528f8b
+sha256sum "$ART/Image.gz" "$ART/sm8250-oneplus-instantnoodlep.dtb" \
+  "$ART/modules-$REL.tar.gz"
+# On the rootfs (userdata), as root, before the RAM boot:
+#   tar -xzf modules-$REL.tar.gz -C / && depmod -a "$REL"
+
 tools/build-instantnoodlep-probe \
-  --kernel "$KOUT/arch/arm64/boot/Image.gz" \
-  --dtb "$KOUT/arch/arm64/boot/dts/qcom/sm8250-oneplus-instantnoodlep.dtb" \
+  --kernel "$ART/Image.gz" \
+  --dtb "$ART/sm8250-oneplus-instantnoodlep.dtb" \
   --ssh-key "$SSH_PUBLIC_KEY" --mkbootimg "$MKBOOTIMG" \
   --omarchy-mobile "$OMARCHY_MOBILE" --initramfs-root "$INITRAMFS_ROOT" \
   --stock-overlay "$STOCK_ENTRY16" --ufdt-apply "$UFDT_APPLY" \
