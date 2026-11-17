@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: MIT
+# hci_qca is the OnePlus 8 Pro's Bluetooth UART controller driver.
+ACTION=="add", SUBSYSTEM=="bluetooth", KERNEL=="hci[0-9]*", DRIVERS=="hci_uart_qca", TAG+="systemd", ENV{SYSTEMD_WANTS}+="omamobile-bt-public-addr@%k.service"

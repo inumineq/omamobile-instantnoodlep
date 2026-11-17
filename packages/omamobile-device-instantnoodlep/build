@@ -1,0 +1,5 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# This package contains no compiled binaries.
+set -euo pipefail
+mkdir -p "${1:?Usage: ./build BUILDDIR}"

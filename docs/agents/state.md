@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # State: where the port stands now
 
-Last updated: 2026-11-18 (slim K3 RAM-boots; clang 19 builds freeze), claude on omabook.
+Last updated: 2026-11-18 (encryption plan drafted; slim K3 RAM-boots; clang 19 builds freeze), claude on omabook.
 
 The one page an agent reads first. Keep it short and current: it is
 overwritten, not appended to. History goes to `device/instantnoodlep/NOTES.md`
@@ -25,7 +25,7 @@ of it from `origin/main` plus the pushed branches.
 | Neutral `dtbo_b` (DTBO-PLAN) | Parked: ABL rejected v1 (table) and v2 (raw FDT); stock dtbo back [V: DTBO-PLAN §6; learning `l-48e0c482`] |
 | M3 display stack on the device (hardware GL) | Hardware GL works under combo K3 with the freedreno Mesa (rootfs, not upstream yet) [V: NOTES 2026-11-17 day; learning `l-405b6773`] |
 | M5 (Wi-Fi/BT, modem, GNSS, audio, sensors, power, camera, misc) | All plans written; the five original M5 plans cross-reviewed [V: `device/instantnoodlep/*-M5-PLAN.md`, `GNSS-M5-PLAN.md`, `CAMERA-PLAN.md`, `MISC-HW-PLAN.md`, `M5-REVIEW.md`]. Audio phase 2: TFA987x codec driver series compile-checked offline (clang 23.1.3, checkpatch/dt_binding_check clean), patches in `device/instantnoodlep/patches/audio-tfa987x/`, plan §10; first sound still phone-gated (PR #82 §9) [V: AUDIO-M5-PLAN §10] |
-| M5 Wi-Fi/BT | Daily on `boot_b`: Wi-Fi connects; BT works after `btmgmt public-addr` (persistent address unit still to implement, DAILY-K3-PLAN §5) [V: NOTES 2026-11-17 night] |
+| M5 Wi-Fi/BT | Daily on `boot_b`: Wi-Fi connects; BT works after `btmgmt public-addr` [V: NOTES 2026-11-17 night]. One persistent phone-local address helper and device package 0.0.4 are proposed in PR #92; phone qualification remains [I] in `DEVICE-PACKAGE-PLAN.md`. |
 | M5 modem/GNSS | Kernel candidate built offline: PCIe2/MHI endpoint, GIC MBI route, bounded image-only Sahara loader, fragment merged; series in `patches/instantnoodlep/kernel-modem/` [V: MODEM-M5-DELTA §6]. No handset test; private EFS/DDR policy still blocks first boot. |
 | M5 power | P1 gauge works on a RAM boot; P2 charger image hangs early at boot (P2b in progress); no charging under any of our kernels [V: POWER-M5-PLAN §7.3-7.4] |
 | M5 camera (M-CAM1 front IMX471) | Kernel series built and offline-verified: release `7.3.0-rc6-instantnoodlep-k3-camera-g70d0761d1`, clean checkpatch/dt_binding_check/dtbs_check, one IMX471 on CCI1 master 1 to CSIPHY3 in the DTB [V: CAMERA-PLAN §9.4]. No RAM boot or frame yet; coordinator gates C0-C5 pending. |
@@ -60,7 +60,7 @@ See `docs/agents/active/`. Vibe workers on omabook: power P2b, kona, misc-hw, au
    take (DTBO-PLAN §6).
 5. Power P2b (charger as a module), then P3 Type-C.
 6. Audio phase 1 (worker on macbookpro), kona upstream series (worker `kona`), UI issue drafts (worker on obsidian); modem/GNSS kernel side is built, gates A-C of MODEM-M5-DELTA §6 (stock wiring, packages, private-state policy) are the coordinator's.
-7. Backlog: disk encryption + boot passphrase / lock-screen PIN (issue #70).
+7. Disk encryption + boot passphrase / lock-screen PIN (issue #70): design plan written in `device/instantnoodlep/ENCRYPTION-PLAN.md`; implementation and all phone steps remain gated/not started.
 
 ## Offline UI proposals
 
@@ -68,3 +68,10 @@ See `docs/agents/active/`. Vibe workers on omabook: power P2b, kona, misc-hw, au
   issue drafts are in `patches/` and `docs/upstream/`; host applicability/model
   checks passed (details: `docs/upstream/README.md`). [I] Phone verification
   remains pending under `device/instantnoodlep/SHELL-UX-PLAN.md`.
+- [V] Device package 0.0.4 consolidates the BT address helper, descriptor,
+  names-only firmware map, uwsm GL selection, proposed shell edge geometry,
+  USB0 policy and boot-service masks. The x86 check script is in
+  `packages/omamobile-device-instantnoodlep/test/all`; [I] package install,
+  udev match, geometry and vconsole behavior remain unverified on the phone.
+  PR #92 supersedes #76 and #77; those PRs are closed. PR #79 remains open
+  for the shell's phone verification.

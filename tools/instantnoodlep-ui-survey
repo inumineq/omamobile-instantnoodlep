@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Capture a private, attended UI survey on the unlocked instantnoodlep.
+set -u
+
+if [[ ${USER:-$(id -un)} != inumineq ]]; then
+  echo "Run as user inumineq from the active graphical session." >&2
+  exit 2
+fi
+if [[ -z ${XDG_RUNTIME_DIR:-} || -z ${HYPRLAND_INSTANCE_SIGNATURE:-} ]]; then
+  echo "XDG_RUNTIME_DIR and HYPRLAND_INSTANCE_SIGNATURE must come from the running session." >&2
+  exit 2
+fi
+for cmd in gtk-launch grim hyprctl; do
+  command -v "$cmd" >/dev/null || { echo "Missing required command: $cmd" >&2; exit 2; }
+done
+
+out=/tmp/ui-survey
+mkdir -p -m 700 "$out"
+index=$out/index.tsv
+printf 'desktop_id\tname\tstatus\timage\tnote\n' >"$index"
+
+apps=(
+  '1password|1Password' 'aether|Aether' 'btop|btop++' 'chromium|Chromium'
+  'cliamp|cliamp' 'com.github.PintaProject.Pinta|Pinta'
+  'com.moonlight_stream.Moonlight|Moonlight' 'cups|Manage Printing'
+  'disktree|disktree' 'fcitx5-configtool|Fcitx 5 Configuration'
+  'foot-server|Foot Server' 'foot|Foot' 'footclient|Foot Client' 'gliff|Gliff'
+  'hype|Hype' 'libreoffice-base|LibreOffice Base' 'libreoffice-calc|LibreOffice Calc'
+  'libreoffice-draw|LibreOffice Draw' 'libreoffice-impress|LibreOffice Impress'
+  'libreoffice-math|LibreOffice Math' 'libreoffice-startcenter|LibreOffice'
+  'libreoffice-writer|LibreOffice Writer' 'localsend|LocalSend' 'monologue|Monologue'
+  'mpv|mpv Media Player' 'nvim|Neovim' 'obsidian|Obsidian' 'omacalc|Omacalc'
+  'omacam|Camera' 'omacut|Omacut' 'omamobile-agent|AI Agent'
+  'omamobile-update|Updates' 'omasnap|Omasnap' 'omawrite|Omawrite'
+  'org.gnome.DiskUtility|Disks' 'org.gnome.Evince|Document Viewer'
+  'org.gnome.Loupe|Image Viewer' 'org.gnome.Maps|Maps' 'org.gnome.Nautilus|Files'
+  'org.gnome.Papers|Document Viewer' 'org.omamobile.Contacts|Contacts'
+  'org.omamobile.Messages|Messages' 'org.omamobile.Phone|Phone'
+  'org.omamobile.Settings|Settings' 'qv4l2|Qt V4L2 test Utility'
+  'qvidcap|Qt V4L2 video capture utility' 'signed|Signed'
+  'system-config-printer|Print Settings' 'uuctl|uuctl' 'vim|Vim'
+  'voxtype-configure|Voxtype Configuration' 'Basecamp|Basecamp' 'Discord|Discord'
+  'HEY|HEY' 'WhatsApp|WhatsApp' 'X|X' 'YouTube|YouTube' 'Zoom|Zoom'
+)
+
+for entry in "${apps[@]}"; do
+  id=${entry%%|*}; name=${entry#*|}; image=$out/$id.png
+  # Avoid carrying a previous run's capture forward after a failed launch.
+  rm -f -- "$image"
+  before=$(hyprctl -j activewindow 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("address", ""))' 2>/dev/null || true)
+  if ! gtk-launch "$id" >/dev/null 2>&1; then
+    printf '%s\t%s\tlaunch-failed\t\tNo desktop launcher found\n' "$id" "$name" >>"$index"
+    continue
+  fi
+  sleep 4
+  if grim "$image" >/dev/null 2>&1; then
+    status=captured
+    note='Review manually; capture may contain private data.'
+  else
+    status=capture-failed
+    note='grim failed or output unavailable.'
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$name" "$status" "$image" "$note" >>"$index"
+  # Close only the currently active window. The owner should remain present;
+  # if an app displays a destructive prompt, intervene before it is closed.
+  after=$(hyprctl -j activewindow 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("address", ""))' 2>/dev/null || true)
+  if [[ -n $after && $after != "$before" ]]; then
+    hyprctl dispatch killactive >/dev/null 2>&1 || true
+  fi
+  sleep 1
+done
+
+chmod 600 "$index"
+echo "Survey index: $index"
+echo "Private screenshots are in $out; review and delete them when finished."
