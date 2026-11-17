@@ -17,6 +17,14 @@ with its gated runbook (AGENTS.md rule 6).
   firmware, the userspace that makes them usable (Mesa freedreno/turnip,
   Hyprland on msm DRM), and the gated runbook. All M3 work happens **after
   M2** (Arch root on `userdata`); RAM boot first wherever possible.
+- New M3 prerequisite: the neutral DTBO must already be installed on
+  `dtbo_b` under a separate owner-gated slot-B write plan. Stock entry 16
+  rewrites the live root compatible to `qcom,kona-mtp`, `qcom,kona`,
+  `qcom,mtp` [V: NOTES.md, 2026-11-17 entry]; that misses the SM8250
+  machine-match tables used by UBWC configuration. Public precedent: Nura's
+  `device/testing/device-oneplus-instantnoodlep/APKBUILD` builds and installs
+  its empty `dtbo.img` in `kernel_mainline()` [V]. Do not RAM-boot an M3
+  candidate with the stock overlay still selected.
 - Safety model unchanged: no write to `super`, any `_a` partition, `vbmeta`,
   `devinfo`, `persist`, `efs*`, `modem*` or bootloader/radio partitions.
   M3 phone steps are `fastboot boot` (RAM) first; the installed slot-B /
@@ -186,7 +194,7 @@ export K2DTB=/path/to/private/k2-build/arch/arm64/boot/dts/qcom/sm8250-oneplus-i
 
 | Gate | Command or review | Expect/pass | Stop | Rollback |
 | --- | --- | --- | --- | --- |
-| O0 Inputs | M1 (K2/R7) and M2 results recorded; DTS-PORT-PLAN D0-D9 passed; FIRMWARE-PLAN F0-F6 passed (zap mapped, names only); `L` pinned and recorded | all present | any input missing | no changes made; return to the owning ticket |
+| O0 Inputs | M1 (K2/R7) and M2 results recorded; neutral DTBO owner-gated install on `dtbo_b` is complete and verified; DTS-PORT-PLAN D0-D9 passed; FIRMWARE-PLAN F0-F6 passed (zap mapped, names only); `L` pinned and recorded | all present | any input missing or neutral DTBO absent | no changes made; return to the owning ticket |
 | O1 Binding baseline | `make -C "$L" O="$OUT" dt_binding_check` on the unchanged base; repeat after commit 1 with `DT_SCHEMA_FILES=.../samsung,ams678uw01.yaml` | baseline recorded; new binding passes with no new schema error | baseline missing or new errors | drop the binding edit |
 | O2 Build | `make -C "$L" O="$OUT" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- qcom/sm8250-oneplus-instantnoodlep.dtb` after every commit | dtc exit 0, DTB produced | any error or stale output | delete output; fix the current commit only |
 | O3 Schema | `make -C "$L" O="$OUT" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- dtbs_check` | no new warning/error for this board | panel/DSI/GPU schema failure | revert the uncommitted change |
@@ -213,8 +221,9 @@ fdtget -t s "$DTB" / compatible
 
 Expected: `okay`/`okay`/`okay` for mdss/dsi0/phy/dispcc/gpu/gmu; panel
 `compatible` is `samsung,ams678uw01`; zap `firmware-name` is the one string
-agreed with FIRMWARE-PLAN; root compatible unchanged
-(`oneplus,instantnoodlep`, `qcom,sm8250`).
+agreed with FIRMWARE-PLAN; built and live root compatible both remain
+`oneplus,instantnoodlep`, `qcom,sm8250` (only expected after the neutral
+DTBO prerequisite; `qcom,kona-mtp` at runtime is a stop condition).
 
 ### 7.2 Owner gates (phone; RAM boot first)
 
@@ -227,7 +236,7 @@ with a `{{...}}` still in it. Captures go to `captures/<date>/m3/`
 | # | Step (command block) | Expect | Stop | Rollback |
 | --- | --- | --- | --- | --- |
 | G1 | `fastboot -s {{SERIAL}} devices` (one line); `fastboot -s {{SERIAL}} getvar current-slot` and slot flags, recorded | one device; slot flags equal to the stage-0 capture | more than one device, or flags differ | `fastboot -s {{SERIAL}} reboot`; stock boots |
-| R1 | `fastboot -s {{SERIAL}} boot {{K3_IMG}}`; then `ssh root@172.16.42.1` and `dmesg` | `Booting OKAY`; panel/DSI/DPU probe lines; `ams678uw01` probe; `s6sy761` probe; a6xx probe with zap loaded (no firmware error); SSH works | `FAILED (remote: ...)`: paste it, stay in fastboot; no SSH after 2 min; any firmware-load error | hold Power+Volume Up 10-30 s (or `panic=10` does it); stock boots from the active slot |
+| R1 | `fastboot -s {{SERIAL}} boot {{K3_IMG}}`; then `ssh root@172.16.42.1`, read `/sys/firmware/devicetree/base/compatible`, and `dmesg` | `Booting OKAY`; live root is `oneplus,instantnoodlep` + `qcom,sm8250`; panel/DSI/DPU probe lines; `ams678uw01` probe; `s6sy761` probe; a6xx probe with zap loaded (no firmware error); SSH works | unexpected live root compatible; `FAILED (remote: ...)`: paste it, stay in fastboot; no SSH after 2 min; firmware-load error | hold Power+Volume Up 10-30 s (or `panic=10` does it); stock boots from the active slot; return to the neutral-DTBO gate before retry |
 | R2 | over SSH: `ls /sys/class/drm/`, `cat /sys/class/drm/card0-DSI-1/modes`, `cat /sys/class/drm/card0-DSI-1/status`, `ls /sys/class/backlight/`, then `echo 100 > /sys/class/backlight/*/brightness`, read back `cat .../brightness` and `.../max_brightness`, then `echo {{MAX}} > ...` | one mode `1440x3168` at 120 Hz; status `connected`; a backlight device exists; brightness writes read back; panel visibly dims/brightens | no DSI connector; mode list empty or 1080x2376 only; no backlight device; brightness write rejected | `reboot -f` over SSH; stock boots |
 | R3 | over SSH: find the touch event node (`ls /dev/input/`, `libinput list-devices` or `evtest`); tap the screen | S6SY761 events register; coordinates within 1440x3168 | no touch device, or no events | `reboot -f` |
 | R4 | over SSH: `ls /dev/dri/`, then `kmscube`/`glmark2-es2` with the freedreno driver and `vulkaninfo --summary` if turnip is packaged | `renderD128` present; GLES app renders (fps ~120 at 1440x3168); vulkaninfo lists `Turnip Adreno 650` Vulkan 1.3 [I until run] | GPU probe failed in R1, or only llvmpipe | `reboot -f` |
