@@ -7,6 +7,8 @@ Single-context layout. The domain vocabulary for this repo lives in:
   (house rules) at the root,
 - `docs/STAGE-0.md`, `docs/RESTORE-RUNBOOK.md` under `docs/`,
 - `device/instantnoodlep/NOTES.md` (findings log, newest first).
+- `docs/agents/state.md` (current state), `docs/agents/where.md` (paths on
+  every host) and `.trail/learnings/` (decisions and watch-outs).
 
 A `GLOSSARY.md` and `docs/adr/` will be created by `domain-modeling` when the
 first term or architecture decision needs recording. Until then this file is
