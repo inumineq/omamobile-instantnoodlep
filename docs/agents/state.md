@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # State: where the port stands now
 
-Last updated: 2026-11-17 (midday, K3 on boot_b), claude on omabook.
+Last updated: 2026-11-17 (afternoon, Wi-Fi/BT kernel built), claude on macbookpro.
 
 The one page an agent reads first. Keep it short and current: it is
 overwritten, not appended to. History goes to `device/instantnoodlep/NOTES.md`
@@ -23,6 +23,7 @@ of it from `origin/main` plus the pushed branches.
 | Neutral `dtbo_b` (DTBO-PLAN) | Parked: ABL rejected v1 (table) and v2 (raw FDT); stock dtbo back [V: DTBO-PLAN §6; learning `l-48e0c482`] |
 | M3 display stack on the device (hardware GL) | Hardware GL works under combo K3 with the freedreno Mesa (rootfs, not upstream yet) [V: NOTES 2026-11-17 day; learning `l-405b6773`] |
 | M5 (Wi-Fi/BT, modem, audio, sensors, power) | Plans written and cross-reviewed, nothing run [V: `device/instantnoodlep/*-M5-PLAN.md`, `M5-REVIEW.md`] |
+| M5 Wi-Fi/BT kernel | `instantnoodlep-k3-wifi` built on macbookpro, schema clean, not booted; RAM-boot runbook in WIFI-BT-M5-PLAN §7 [V: NOTES 2026-11-17 afternoon] |
 
 ## The phone right now
 
@@ -52,3 +53,5 @@ None (see `docs/agents/active/`).
 3. A kernel-side answer to the `qcom,kona` root rewrite that upstream can
    take (DTBO-PLAN §6).
 4. M5 runbooks, in the order M5-REVIEW gives.
+5. Wi-Fi/BT RAM boot: copy `~/orca/build-out/k3-wifi/` from macbookpro to
+   the laptop, build the boot image, run WIFI-BT-M5-PLAN §7 (P0 first).

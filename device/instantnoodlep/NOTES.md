@@ -4,6 +4,20 @@
 Newest first. Findings that matter beyond one subsystem go here; subsystem
 detail lives in the *-PLAN.md files.
 
+## 2026-11-17 (afternoon): Wi-Fi/BT kernel built on the Mac (offline only)
+
+- [V] Branch `instantnoodlep-k3-wifi` = combo K3 + two DTS commits (PM8009
+  s2f; QCA6390 PMU, PCIe0 + `wifi@0`, UART6 + `bluetooth`). Built on
+  macbookpro in a Linux arm64 container, LLVM 23.1.6, combo `.config`:
+  release `7.3.0-rc6-instantnoodlep-k3-g422090919028`. Artefacts and
+  SHA256SUMS in `~/orca/build-out/k3-wifi/` (not in git).
+- [V] `CHECK_DTBS` on the board DTB is clean. It caught `memory-region` on
+  `wifi@0`, which would put ath11k in fixed-memory mode; dropped (learning
+  `l-8b77763d`).
+- [V] combo's `.config` already carries every Wi-Fi/BT driver as a module;
+  no config change was needed.
+- Nothing ran on the phone. RAM-boot runbook: WIFI-BT-M5-PLAN §7.
+
 ## 2026-11-17 (midday): K3 on boot_b
 
 - [V] `boot_b` now holds the combo K3 image (`boot-r3-gpu.img`, sha256
