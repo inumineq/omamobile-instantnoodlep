@@ -324,13 +324,14 @@ the existing authenticated USB SSH connection (shown here as
 `root@172.16.42.1`) and the private archive recorded in §5.4:
 
 ```sh
-scp ~/android/build/k3-kona/modules-*.tar.zst root@172.16.42.1:/tmp/
+scp ~/android/build/k3-kona/modules-7.3.0-rc6-instantnoodlep-k3-kona-g8fb338f6ee97.tar.zst \
+    root@172.16.42.1:/tmp/
 # On phone, use the exact archive and release from §5.4, not a wildcard:
-tar --zstd -tf /tmp/MODULE_ARCHIVE
-# Expect only lib/modules/RELEASE/ (or usr/lib/modules/RELEASE/).
+tar --zstd -tf /tmp/modules-7.3.0-rc6-instantnoodlep-k3-kona-g8fb338f6ee97.tar.zst
+# Expect only lib/modules/7.3.0-rc6-instantnoodlep-k3-kona-g8fb338f6ee97/.
 # Stop if absolute paths, parent traversals, or any other release appears.
-tar --zstd -xf /tmp/MODULE_ARCHIVE -C /
-depmod -a RELEASE
+tar --zstd -xf /tmp/modules-7.3.0-rc6-instantnoodlep-k3-kona-g8fb338f6ee97.tar.zst -C /
+depmod -a 7.3.0-rc6-instantnoodlep-k3-kona-g8fb338f6ee97
 ```
 
 [I] Expect new module files for the exact release and no depmod errors.
@@ -346,7 +347,7 @@ buttons if needed; no automatic slot changes or flashing.
 ```sh
 fastboot getvar current-slot
 # Expect b; stop otherwise. Do not print or save device identifiers.
-fastboot boot "$HOME/android/build/k3-kona/ram/boot.img"
+fastboot boot "$HOME/android/build/k3-kona/ram/boot-kona-8fb338f6ee97.img"
 ```
 
 [I] Expect USB SSH within three minutes, the exact §5.4 kernel release,
@@ -400,13 +401,15 @@ meaningless. This is the only direct runtime evidence for the SMEM path
 that this candidate can produce; see the PD note below for why.
 
 [I] Hardware GL check, matching GPU-USERSPACE-PLAN §9: run `eglinfo -B`
-inside the existing graphical session if installed, and inspect Hyprland's
-`/proc/PID/fdinfo/*` for `drm-driver: msm` and increasing GPU time while the
-owner moves a window. Confirm Hyprland maps `libgallium` in
-`/proc/PID/maps`. Expect FD650/hardware rendering, panel at
-1440x3168@120, working owner taps/swipes, and no render faults. Do not
-restart or reconfigure the session to make a failing test pass. Stop on
-llvmpipe, input failure or GPU faults; rollback: installed B kernel.
+inside the existing graphical session if installed, confirm the freedreno
+switch still exports `LIBGL_ALWAYS_SOFTWARE=0` in that session's
+environment, and inspect Hyprland's `/proc/PID/fdinfo/*` for
+`drm-driver: msm` and increasing GPU time while the owner moves a window.
+Confirm Hyprland maps `libgallium` in `/proc/PID/maps`. Expect
+FD650/hardware rendering, panel at 1440x3168@120, working owner
+taps/swipes, and no render faults. Do not restart or reconfigure the
+session to make a failing test pass. Stop on llvmpipe, input failure or
+GPU faults; rollback: installed B kernel.
 
 [I] Panel and touch check, read-only first, then the owner's own taps:
 
@@ -479,8 +482,41 @@ post-revert base: all unchanged. The node compatible set was compared
 with qcom-cpufreq-hw's table: all three covered. All three patches pass
 reverse `git apply --check` against the resulting tree.
 
-[I] Full candidate build in progress; artifact hashes will be filled before
-handoff. No runtime tests have run in this worker session.
+[V] Full candidate build: `ARCH=arm64 LLVM=1 W=1` under `nice -n 19`
+with `-j4`/`-j6` (the laptop runs other kernel builds), output in the
+private directory `~/android/build/k3-kona/build`, targets
+`Image.gz dtbs modules`. Kernel
+release `7.3.0-rc6-instantnoodlep-k3-kona-g8fb338f6ee97`, i.e. combo
+`aa996bae0` plus the local revert and the three review patches. The
+changed drivers are built in: `CONFIG_QCOM_UBWC_CONFIG=y`,
+`CONFIG_QCOM_SMEM=y`, `CONFIG_CPUFREQ_DT_PLATDEV=y`, with
+`CONFIG_QCOM_PD_MAPPER=m` as in the combo config. No warning from the
+four touched files; the `W=1` output is the usual unrelated arm64 noise.
+A final `make` with the same arguments reports nothing to do and exits 0.
+Two earlier passes were killed by the OOM killer (`Error 137`) while
+other kernel builds shared the laptop; the resumed build is complete.
+
+[V] Private artifacts, all under `~/android/build/k3-kona/`. They are
+RAM-boot candidates only; a worker installed, flashed and booted none of
+them.
+
+| Artifact | Size | SHA-256 |
+|---|---|---|
+| `ram/boot-kona-8fb338f6ee97.img` | 24137728 | `fc3804bed014fc7fd5a19bc12e4efa8ba29a9e5f5bce5cd8f043eed5f15ee810` |
+| `modules-7.3.0-rc6-instantnoodlep-k3-kona-g8fb338f6ee97.tar.zst` | 2302 entries | `7b8839b61567b33a29707df3517328fc1d07d064957c858e938805eafee14d3f` |
+| `build/arch/arm64/boot/Image.gz` | 16122238 | `2a60e643e31a558381a652642525b1b8b08b3d74ea8793f1e00b5bb7d318576b` |
+| `build/arch/arm64/boot/dts/qcom/sm8250-oneplus-instantnoodlep.dtb` | 117793 | `efba30a13a09db07edf99613546c4f20e058ee5e509033a703b5ab57dea972bf` |
+
+[V] The image was built with `tools/build-instantnoodlep-probe --boot 2
+--root userdata --debug-shell` and a fresh `--out`; its manifest records
+`hardware_boot_tested: false` and 24 MiB against the 64 MiB cap. The
+archive holds exactly one release directory, no absolute paths and no
+parent traversals, and contains `qcom_pd_mapper.ko`. The probe builder
+log ends with the RAM-boot command template and no phone access.
+
+[I] No runtime tests have run in this worker session. The RAM image and
+the module archive above are candidates for the coordinator's gated run
+in §5.2–5.3; nothing was installed, flashed or booted by a worker.
 
 
 ### 5.5 Folding into the daily kernel (coordinator)

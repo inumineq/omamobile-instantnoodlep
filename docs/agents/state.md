@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # State: where the port stands now
 
-Last updated: 2026-11-17 (afternoon: Wi-Fi/BT verified, P2 charger hang, new workers), claude on omabook.
+Last updated: 2026-11-17 (evening: kona series built, Wi-Fi/BT verified, P2 charger hang), claude on omabook.
 
 The one page an agent reads first. Keep it short and current: it is
 overwritten, not appended to. History goes to `device/instantnoodlep/NOTES.md`
@@ -38,6 +38,10 @@ of it from `origin/main` plus the pushed branches.
 - [V] `boot_b` holds combo K3 (with the test-only kona patch, learning
   `l-48e0c482`), modules on the rootfs, B5 set: the phone boots straight
   into Hyprland on the GPU. Rollback: K2 `~/android/build/m1b/boot_b.img`.
+- [V] A RAM candidate that replaces that test-only patch with the
+  upstreamable SMEM/cpufreq-hw series is built and hashed, waiting for the
+  coordinator's gated run (KONA-ROOT-DESIGN §5). Nothing was installed or
+  booted by a worker.
 - [V] No power_supply devices under combo K3; the phone does not charge under our kernels (USB holds it at 0 mA) [V: POWER-M5-PLAN §7.3].
 - [V] Stays off only with the USB cable out (`off-mode-charge:1`;
   learning `l-838f7998`).
@@ -45,18 +49,20 @@ of it from `origin/main` plus the pushed branches.
 
 ## Running workers
 
-See `docs/agents/active/` (power P2b, daily, kona on omabook; audio on macbookpro; shell-ux, modem-impl on obsidian).
+See `docs/agents/active/` (power P2b, daily on omabook; audio on macbookpro; shell-ux, modem-impl on obsidian).
 
 ## Next
 
 1. Owner: upstream proposal for freedreno in the omamobile Mesa (PR of
    `inumineq/gpu-mesa-freedreno`; draft in `~/claude/instantnoodlep/`).
 2. Power: battery gauge and charger (POWER-M5-PLAN), the daily-use blocker.
-3. A kernel-side answer to the `qcom,kona` root rewrite that upstream can
-   take (DTBO-PLAN §6).
+3. The `qcom,kona` root rewrite: the upstreamable SMEM/cpufreq-hw series
+   is written, built and hashed (KONA-ROOT-DESIGN §5). It needs the
+   coordinator's gated RAM run, then the owner's review and DCO sign-off
+   before anything goes upstream.
 4. Daily kernel = combo + Wi-Fi/BT + P1 gauge as the `boot_b` candidate (worker `daily`).
 5. Power P2b (charger as a module), then P3 Type-C.
-6. Audio phase 1 (worker on macbookpro), kona upstream series (worker `kona`), UI issue drafts (worker on obsidian); modem/GNSS implementation gates in MODEM-M5-DELTA.
+6. Audio phase 1 (worker on macbookpro), UI issue drafts (worker on obsidian); modem/GNSS implementation gates in MODEM-M5-DELTA.
 7. Backlog: disk encryption + boot passphrase / lock-screen PIN (issue #70).
 
 ## Offline UI proposals
