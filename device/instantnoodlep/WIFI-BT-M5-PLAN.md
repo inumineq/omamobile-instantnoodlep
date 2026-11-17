@@ -6,10 +6,13 @@ Refreshed 2026-11-17 (afternoon) for K3 on `boot_b`; the first version
 (branch `m5-plans`, same day) predates K3, the parked neutral dtbo and any
 build.
 
-- State today: kernel commits written and built on the Mac, nothing run on
-  the phone. Kernel branch `instantnoodlep-k3-wifi` = combo K3 + two DTS
-  commits (§6). Artefacts in `~/orca/build-out/k3-wifi/` on macbookpro, not
-  in git (§6.3). Next step: the coordinator's RAM boot, §7.
+- State today (2026-11-17 evening): first RAM boot of the k3-wifi build
+  (`-g422090919028`) done by the coordinator, results in §7.3: Wi-Fi works
+  (PCIe link, ath11k, scan); Bluetooth failed because UART6 had no serial
+  alias. Fixed by commit 3 (§6.1) in the k3-wifi2 build
+  (`7.3.0-rc6-instantnoodlep-k3-gf9a20697e2ae`), artefacts in
+  `~/orca/build-out/k3-wifi2/` on macbookpro (not in git). Next: RAM boot of
+  k3-wifi2, R6 (Bluetooth) and the remaining R-steps.
 - Reading order: `AGENTS.md`, `docs/agents/state.md`, this file,
   `FIRMWARE-PLAN.md` + `firmware.map`, `M5-REVIEW.md` (Wi-Fi rows).
 - Scope: ath11k over PCIe0 (`pci17cb,1101`), the `qcom,qca6390-pmu` power
@@ -58,7 +61,7 @@ build.
 | PM8009 s2f | `#include "pm8009.dtsi"`, `regulators-0` `qcom,pm8009-1-rpmh-regulators` pmic-id `f`, smps2 900-952 mV, AUTO | [V: C:284-298]. C uses the `-1` variant, E the plain one; `-1` is taken from the board's own tree [I-M5-11] |
 | PCIe0 | `&pcie0` okay; `&pcie0_phy` okay, vdda-phy=l5a, vdda-pll=l9a; perst TLMM 79, wake TLMM 81 from the SoC dtsi | [V: C:681-689; E:809-817; K/sm8250.dtsi:2213-2214] |
 | `wifi@0` | under `&pcieport0`: `pci17cb,1101`, reg `0x10000 0 0 0 0`, nine PMU supplies, no `memory-region` | [V: C:692-706; E:819-835; binding qcom,ath11k-pci.yaml] |
-| UART6 + BT | `&qupv3_id_0` okay, `&uart6` okay (gpio16-19 qup6 from the dtsi), child `bluetooth` `qcom,qca6390-bt` with six PMU supplies; no `serial0` alias (DTS-PORT-PLAN I5 keeps `uart6` off `serial0`; the GENI driver allocates a free line without one [V: K/drivers/tty/serial/qcom_geni_serial.c:1897-1902, 292-295]) | [V: C:955-968; E:966-979; K/sm8250.dtsi:1708-1723] |
+| UART6 + BT | `&qupv3_id_0` okay, `&uart6` okay (gpio16-19 qup6 from the dtsi), child `bluetooth` `qcom,qca6390-bt` with six PMU supplies; alias `serial1 = &uart6` (commit 3; as qrb5165-rb5 does, serial0 stays free per DTS-PORT-PLAN I5). Without any `serial*` alias the GENI UART cannot get a line: `of_alias_get_highest_id("serial")` returns -ENODEV, `ida_alloc_range()` gets a negative minimum and refuses, probe fails with `Invalid line -19` [V: K/drivers/tty/serial/qcom_geni_serial.c:1897-1910, 289-292; K/lib/idr.c:390; phone dmesg 2026-11-17, §7.3] | [V: C:955-968; E:966-979; K/sm8250.dtsi:1708-1723] |
 | Power flow | pci-pwrctrl-pwrseq binds the `wifi@0` node, gets pwrseq target `wlan`, powers the chip, rescans the bus [V: pci-pwrctrl-pwrseq.c:37-52,112]; hci_qca for a DT QCA6390 takes power only from pwrseq target `bluetooth` and fails probe without it [V: hci_qca.c:2519-2525] | |
 | Reserved memory | `wlan_mem` 0x8e100000 1 MiB stays reserved (stock layout), unreferenced | [V: W/ dts reserved-memory] |
 | `__symbols__` | The built DTB has none, so stock dtbo fragments that target labels cannot resolve against it [V: `fdtget -p ... /__symbols__` fails on the built DTB]. What ABL does instead stays [I]; R3 compares live vs built | |
@@ -117,6 +120,9 @@ in the rootfs; country via `iw reg set` or NetworkManager.
 | --- | --- | --- |
 | 1 | `arm64: dts: qcom: instantnoodlep: Add PM8009` | include `pm8009.dtsi`; `regulators-0` with s2f only |
 | 2 | `arm64: dts: qcom: instantnoodlep: Enable Wi-Fi and Bluetooth` | PMU node + ldo0-ldo9 + enable GPIOs and pin states; `&pcie0`/`&pcie0_phy` okay; `wifi@0`; `&qupv3_id_0`/`&uart6` okay + `bluetooth` |
+| 3 | `arm64: dts: qcom: instantnoodlep: Add a serial alias for the Bluetooth UART` | `aliases { serial1 = &uart6; }`; found by the first RAM boot (§7.3) |
+
+PCIe0 supplies: the host bridge logs `supply vdda`/`vddpe-3v3 not found, using dummy regulator` [V: phone dmesg]. No SM8250 board in mainline (rb5, elish, pipa, sony edo) nor C sets either on `&pcie0`; they describe only the PHY rails [V: grep over K/arch/arm64/boot/dts/qcom/sm8250-*, qrb5165-rb5.dts; C:681-689]. `vddpe-3v3` is slot power on M.2 boards; the QCA6390 is powered by its PMU. None added; the messages are harmless.
 
 Order in the series for upstream: these sit on the clean tree too (no
 dependency on the kona patch). `Signed-off-by` is the owner's to add before
@@ -141,7 +147,7 @@ Linux arm64 container (Debian trixie, LLVM 23.1.6 from apt.llvm.org, the
 laptop has 23.1.3) on a named Docker volume, `LLVM=1 ARCH=arm64`,
 `combo.config` + `olddefconfig`: the resolved `.config` differs from combo
 only in toolchain version strings (`CC_VERSION_TEXT`, `*_VERSION`,
-`CC_CAN_LINK`). Outputs in `~/orca/build-out/k3-wifi/` with `SHA256SUMS`
+`CC_CAN_LINK`). Outputs in `~/orca/build-out/k3-wifi2/` (commits 1-3; `k3-wifi/` holds the first build, commits 1-2) with `SHA256SUMS`
 (see that file for release string and hashes). Offline gates:
 
 | Gate | Result |
@@ -160,7 +166,7 @@ add files and are removed by their rollback. Captures go to
 pasted output (mask the last three octets).
 
 Placeholders: `{{REL}}` = the release string in
-`~/orca/build-out/k3-wifi/SHA256SUMS`; `{{IMG}}` = the boot image the
+`~/orca/build-out/k3-wifi2/SHA256SUMS`; `{{IMG}}` = the boot image the
 coordinator builds from `Image.gz` + the dtb with the same builder flags,
 cmdline and ramdisk as `boot-r3-gpu.img`. Never run a block that still has
 a `{{...}}` in it.
@@ -169,7 +175,7 @@ a `{{...}}` in it.
 
 | # | Step | Expect | Stop | Rollback |
 | --- | --- | --- | --- | --- |
-| P0 | On the laptop: `sha256sum -c SHA256SUMS` in the copied `k3-wifi/` dir; build `{{IMG}}`; `unpack_bootimg` it and check kernel and dtb match the files | all OK; header and cmdline equal to `boot-r3-gpu.img` except the kernel/dtb | any mismatch | delete `{{IMG}}` |
+| P0 | On the laptop: `sha256sum -c SHA256SUMS` in the copied `k3-wifi2/` dir; build `{{IMG}}`; `unpack_bootimg` it and check kernel and dtb match the files | all OK; header and cmdline equal to `boot-r3-gpu.img` except the kernel/dtb | any mismatch | delete `{{IMG}}` |
 | P1 | Modules: `scp modules-{{REL}}.tar.gz root@172.16.42.1:/tmp/`; on the phone `test ! -e /usr/lib/modules/{{REL}} && tar -C /usr --keep-old-files -xzf /tmp/modules-{{REL}}.tar.gz` (the tarball holds only `lib/modules/{{REL}}/`), then `depmod {{REL}}` | `/usr/lib/modules/{{REL}}/` exists next to the combo release dir, which is untouched | the target dir already exists, or anything outside it would change | `rm -rf /usr/lib/modules/{{REL}}` |
 | P2 | Firmware: copy the six files of §4 to the phone (`/usr/lib/firmware/ath11k/QCA6390/hw2.0/`, `/usr/lib/firmware/qca/`), OTA-derived where available, LF otherwise; record which source and sha256 of each (hashes only, private capture) | files present, mode 0644 | a file would overwrite one owned by a package (`pacman -Qo` on each path first) | remove exactly those files |
 | P3 | Userspace check: `pacman -Q networkmanager wireless-regdb iw bluez bluez-utils 2>&1` | NM, wireless-regdb present; note iw/bluez | — | — (read only) |
@@ -186,11 +192,11 @@ from a copied static build; it is not needed for the Wi-Fi checks.
 | G1 | `fastboot getvar current-slot`, `slot-successful:b`, `slot-unbootable:b`, `slot-retry-count:b` (from the bootloader, reached by `systemctl reboot --reboot-argument=bootloader`) | `b`, `yes`, `no`, value recorded | anything else | `fastboot reboot` (combo K3 from `boot_b`) |
 | R1 | `fastboot boot {{IMG}}`; SSH at 172.16.42.1 within 2 min; `uname -r`; `systemctl is-system-running` | `Booting OKAY`; `{{REL}}`; `running` (or `degraded` only for units unrelated to Wi-Fi/BT) | `FAILED (remote: ...)`, no SSH after 2 min | hold Power+VolUp to reboot; `boot_b` (combo K3) comes up; per NOTES go via `reboot bootloader` before another `fastboot boot` |
 | R2a power | `dmesg \| grep -iE 'pwrseq\|qca6390\|pcie\|1c00000\|ath11k\|mhi\|qmi'`; `lsmod \| grep -E 'pwrseq_qcom_wcn\|pci_pwrctrl_pwrseq\|ath11k\|hci_uart\|btqca'`; `lspci -nn` | modules loaded by udev; `qcom-pcie 1c00000.pcie: PCIe Gen.N x1 link up` [V: format K/drivers/pci/controller/dwc/pcie-designware.c:812]; `lspci` shows `17cb:1101` at `0000:01:00.0` | no link up (C's s2f choice for vddpmu is the first suspect, I-M5-15), or pwrseq/pwrctrl probe error, or `-EPROBE_DEFER` that never clears (`cat /sys/kernel/debug/devices_deferred`) | `reboot` (back to `boot_b`) |
-| R2b ath11k | `dmesg \| grep ath11k` | `ath11k_pci 0000:01:00.0: chip_id 0x0 chip_family ... board_id 0xff soc_id ...` [V: format qmi.c:2276; values from P's board name, I-M5-7]; `fw_version ...`; no `failed to fetch board data`; then `ip link show wlan0` exists | `failed to fetch board data for bus=...` (note the name it prints, it is the answer to [I-M5-7]), MHI/QMI timeout, firmware -2 | `reboot`; fix §4 files |
-| R2c MAC | `ip -br link show wlan0`, report the OUI only | OUI recorded for [I-M5-13] | — | — |
+| R2b ath11k | `dmesg \| grep ath11k` | `ath11k_pci 0000:01:00.0: chip_id 0x0 chip_family ... board_id 0xff soc_id ...` [V: format qmi.c:2276; values from P's board name, I-M5-7]; `fw_version ...`; no `failed to fetch board data`; then a wireless netdev exists (`iw dev`; udev renames it `wlp1s0`, called `$WL` below) | `failed to fetch board data for bus=...` (note the name it prints, it is the answer to [I-M5-7]), MHI/QMI timeout, firmware -2 | `reboot`; fix §4 files |
+| R2c MAC | `ip -br link show $WL`, report the OUI only | OUI recorded for [I-M5-13] | — | — |
 | R3 live DT | `cp /sys/firmware/fdt /tmp/live.dtb`, pull it, `dtc -I dtb -O dts` both live and built, diff the `/qca6390-pmu`, `pcie@1c00000`, `phy@1c06000`, `serial@998000`, `&tlmm` wlan/bt states | QCA nodes identical; other diffs only the known kona root rewrite | a stock fragment changed a QCA node or GPIO 20/21 | record; `reboot` |
 | R4 scan | `iw reg get`; `nmcli radio wifi on`; `nmcli device wifi rescan; nmcli device wifi list` | regdomain shown (world `00` acceptable); access points listed | empty list after 60 s | `reboot` |
-| R5 connect (owner go: writes an NM profile to the rootfs) | `nmcli device wifi connect "{{SSID}}" password "{{PASSWORD}}" ifname wlan0 name m5-wifi-test`; `ip route`; `ping -c3 -I wlan0 1.1.1.1`; `timedatectl set-ntp true` and `timedatectl` | DHCP lease, ping replies, NTP syncs (first real network on the phone, no SOCKS) | auth fails, no lease | `nmcli connection delete m5-wifi-test` |
+| R5 connect (owner go: writes an NM profile to the rootfs) | `nmcli device wifi connect "{{SSID}}" password "{{PASSWORD}}" ifname $WL name m5-wifi-test`; `ip route`; `ping -c3 -I $WL 1.1.1.1`; `timedatectl set-ntp true` and `timedatectl` | DHCP lease, ping replies, NTP syncs (first real network on the phone, no SOCKS) | auth fails, no lease | `nmcli connection delete m5-wifi-test` |
 | R6 BT | `dmesg \| grep -iE 'bluetooth\|hci0\|qca'`; `btmgmt info`; if `unconfigured`, §5 `public-addr`; then `bluetoothctl power on`, `bluetoothctl --timeout 15 scan on` | `QCA ROM Version  :0x00000200` [V: format btqca.c:74; ROM 0x0200 per public log, I-M5-8]; `htbtfw20.tlv` and `htnv20.bin` download, `QCA setup on UART is completed` [V: btqca.c:999]; devices found | ROM version other than 0x200 (other file names), `-ENOENT` on a firmware file, hci0 timeout | `reboot` |
 | R7 exit | `systemctl reboot --reboot-argument=bootloader`; G1 reads again; `fastboot reboot` | fastboot reached (checks the PM8009 PON note in §6.1); slot vars equal to G1; combo K3 boots from `boot_b` | slot vars changed | stop, record, ask the owner |
 
@@ -198,21 +204,36 @@ After R7 the phone runs the flashed combo K3 again; the added modules
 directory and firmware files stay on the rootfs (harmless for combo, needed
 for the next RAM boot). Remove them with the P1/P2 rollbacks if wanted.
 
+### 7.3 Results, first RAM boot (2026-11-17, build `-g422090919028`, LF firmware)
+
+Run by the coordinator from the omabook laptop, with the LF files on the
+rootfs (`amss.bin`, `m3.bin`, `board-2.bin`, `qca/htbtfw20.tlv`,
+`qca/htnv20.bin`).
+
+| Step | Result |
+| --- | --- |
+| R1 | [V] boots, `systemctl is-system-running` = `running` |
+| R2a | [V] `qcom-pcie 1c00000.pcie: PCIe Gen.2 x1 link up`; `lspci` 17cb:1101 at 01:00.0; `pwrseq_qcom_wcn` and `pci_pwrctrl_pwrseq` loaded. The host bridge probed four times (deferrals) before link up; `vdda`/`vddpe-3v3` dummy-regulator notes (§6.1) |
+| R2b | [V] `ath11k_pci 0000:01:00.0: chip_id 0x0 chip_family 0xb board_id 0xff soc_id 0xffffffff`, `fw_version 0x10121492` (build 2021-11-04), no board-data error; netdev renamed `wlan0` to `wlp1s0` |
+| R4 | [V] `iw reg get` DK (DFS-ETSI); `nmcli` lists 30 APs on 2.4 and 5 GHz |
+| R6 | [V] **failed**: `qcom_geni_serial 998000.serial: Invalid line -19` at 0.47 s; no hci0, no `/sys/class/bluetooth`, `hci_uart`/`btqca` not loaded; `sync_state` pending on 998000.serial. Cause and fix: §3 UART6 row, commit 3 |
+| R2c, R3, R5, R7 | not reported in this run |
+
 ## 8. Open items
 
 | ID | Open | Resolves at |
 | --- | --- | --- |
-| I-M5-1 | Unit silicon is QCA6390 hw2.0 | R2b (`chip_family`, firmware dir accepted) |
-| I-M5-2 | TLMM 20/21 are WLAN/BT enable on this unit (C and E agree) | R2a/R6 |
+| I-M5-1 | Resolved [V]: QCA6390 hw2.0, `chip_family 0xb`, hw2.0 firmware loads (§7.3) | R2b |
+| I-M5-2 | TLMM 20 is WLAN enable [V: link up, §7.3]; TLMM 21 as BT enable still open | R6 on k3-wifi2 |
 | I-M5-4 | OTA `amss20.bin`/`m3.bin` vs LF copies | P2 hash comparison |
-| I-M5-7 | Runtime board name = `bus=pci,qmi-chip-id=0,qmi-board-id=255` (P's choice) | R2b: `board_id 0xff` in the info line, no fetch error |
+| I-M5-7 | Resolved [V]: `chip_id 0x0`, `board_id 0xff`, LF `board-2.bin` loads without error, so the name is `bus=pci,qmi-chip-id=0,qmi-board-id=255` (§7.3). Open: switching to the OTA `bdwlan.elf` under that name | R2b |
 | I-M5-8 | BT ROM 0x0200 → `ht*20` files | R6 |
 | I-M5-9 | bluez/iw on the rootfs | P3 |
 | I-M5-11 | PM8009 variant (`-1` per C) is right for s2f | R2a: regulator `vreg_s2f_0p95` enables without error |
 | I-M5-12 | OTA member path of `bdwlan.elf` | FIRMWARE-PLAN F2 listing |
 | I-M5-13 | Wi-Fi MAC from firmware is the unit's or a QCA default | R2c |
 | I-M5-14 | ABL's stock dtbo leaves the QCA nodes alone (no `__symbols__` in our DTB) | R3 |
-| I-M5-15 | vddpmu/vddrfa0p95 on PM8009 s2f (C) rather than s6a (E) | R2a: PCIe link up; else try s6a in a test build |
+| I-M5-15 | Resolved [V]: with s2f the link comes up (Gen.2 x1) and ath11k probes (§7.3); s6a not tried | R2a |
 
 Dropped since the first version: I-M5-3 (bdencoder: P shows the method),
 I-M5-5 (binding path settled in M5-REVIEW), I-M5-6 (`qca639x` node: not
@@ -220,7 +241,7 @@ carried; nothing consumes it), I-M5-10 (`wlan_mem` is not used, §2).
 
 ## 9. Done when
 
-R1-R7 pass with redacted output in NOTES.md; wlan0 associates and routes;
+R1-R7 pass with redacted output in NOTES.md; the Wi-Fi netdev (`wlp1s0`) associates and routes;
 hci0 scans with firmware loaded; slot vars unchanged. Then: a `boot_b`
 flash ticket for this kernel, the firmware rows (board-2 from `bdwlan.elf`)
 in `firmware.map` and the device package, and an upstream proposal of the
