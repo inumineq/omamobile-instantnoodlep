@@ -46,6 +46,7 @@ name, never copy them in.
 | --- | --- |
 | `~/src/l-k3` | K3 "combo" kernel tree: carries the test-only `qcom,kona` match patch (DO NOT UPSTREAM) |
 | `~/src/l-k3c` | K3 clean kernel tree, branch `instantnoodlep-k3-clean`: the upstreamable one |
+| `~/src/l-k3k` | K3 "kona" kernel tree, branch `instantnoodlep-k3-kona`: combo with the vendor alias reverted and the upstreamable SMEM/cpufreq-hw series on top |
 | `~/android/build/k1`, `k2`, `k2-full`, `k2-patches`, `k2-d1*` | K1/K2 build outputs and the K2 D1 baseline |
 | `~/android/build/k3-clean`, `k3-clean-boot`, `k3-combo`, `k3-combo-ram`, `k3-panel*`, `k3-touch` | K3 builds and RAM-boot images |
 | `~/android/build/m1b`, `b5-<date>` | Slot B images; B5 GPT reads and sectors |
