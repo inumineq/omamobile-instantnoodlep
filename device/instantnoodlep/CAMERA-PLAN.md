@@ -1,12 +1,11 @@
 <!-- SPDX-License-Identifier: MIT -->
 # CAMERA-PLAN: raw cameras on instantnoodlep (OnePlus 8 Pro IN2023)
 
-Status: research plan only; no kernel code, DTS, package or phone test is part
-of this change. The target is the IN2023 / SM8250 camera path, starting with a
+Status: M-CAM1 offline candidate in preparation; no phone test has run. The target is the IN2023 / SM8250 camera path, starting with a
 single raw Bayer frame from the fixed-focus front camera. All phone commands
 below are for the owner/coordinator; this worker had no phone access.
 
-- Date: 2026-11-17. Branch: `camera-misc`.
+- Date: 2026-11-17. Candidate branch: `instantnoodlep-k3-camera`.
 - Reading order: `AGENTS.md`, `DTS-PORT-PLAN.md`, `DTBO-PLAN.md`,
   `FIRMWARE-PLAN.md` and `firmware.map`, `DISPLAY-M3-PLAN.md`,
   `AUDIO-M5-PLAN.md`, `NOTES.md`, and `M5-REVIEW.md`.
@@ -52,8 +51,10 @@ below are for the owner/coordinator; this worker had no phone access.
   neutral-DTBO images tried to date were rejected by ABL; `dtbo_b` stays stock
   (`DTBO-PLAN.md` §1 and §6; `.trail/learnings/2026-11-17-the-stock-dtbo-rewrites-the-root-claude.md`,
   `.trail/learnings/2026-11-17-abl-rejects-a-neutral-single-entry-claude.md`).
-  Camera CAMSS experiments remain blocked until a separate, owner-approved
-  upstreamable resolution is in place. Do not retry either rejected DTBO.
+  Upstreamable camera releases remain blocked until a separate, owner-approved
+  resolution is in place. The coordinator explicitly authorized the combo
+  kernel workaround for the RAM-only candidate in §9; do not retry either
+  rejected DTBO.
 
 ## 2. Source pins and evidence boundary
 
@@ -116,6 +117,8 @@ they are not permission to copy the downstream tree wholesale.
   setup; those patches precede the two camera integrations. The tele, front
   and colour-filter candidates use D-PHY in the community DT (N/kernel patches
   0009, 0012 and pmaports patch 0022).
+- [V] The pinned `VIDEO_IMX471` driver lacks DT matching/binding and has
+  only the ACPI `vana` rail; §9 adds those prerequisites explicitly.
 - [V] Upstream `VIDEO_IMX471` and `VIDEO_S5K3M5` are V4L2 subdevice sensor
   drivers, not complete board camera support: correct clocks, regulators,
   reset, CSI graph, sensor modes, CAMSS VFE/CSID/CSIPHY operation and userspace
@@ -161,12 +164,17 @@ autofocus, OIS and the other four sensors out of the first experiment.
 
 | Order | Result | Work boundary |
 | --- | --- | --- |
-| 0 | Resolve camera prerequisites | DTBO root-compatible behavior has a separate blocker. Keep all camera nodes disabled until an upstreamable root-compatible/DTBO path is owner-approved; no rejected DTBO retries. |
-| 1 | Board graph, front camera disabled by default | Audit mainline CAMSS/CCI/PMIC definitions and bindings; add the CAMSS resources, front CCI node, sensor endpoint, rails, reset and clocks only in the kernel project. Do not import vendor DTS code. |
+| 0 | Resolve camera prerequisites | Upstreamable root-compatible work stays separate; §9 records the coordinator-approved combo-only RAM test exception. No rejected DTBO retries. |
+| 1 | Board graph (front enabled only in the §9 RAM candidate) | Audit mainline CAMSS/CCI/PMIC definitions and bindings; add the CAMSS resources, front CCI node, sensor endpoint, rails, reset and clocks only in the kernel project. Do not import vendor DTS code. |
 | 2 | V4L2 sensor subdevice | Enable upstream IMX471 + CCI/IMX/media config. Build/schema-check the board and inspect the graph offline. |
 | 3 | First raw frame (RAM boot) | With a separately reviewed overlay or equivalent one-boot enablement, stream one small RAW10 frame to `/tmp` and read it back. No camera preview, flash or persistent capture. |
 | 4 | Remaining cameras | Add S5K3M5 D-PHY, then the two C-PHY high-resolution modules and GC5035; stage by stage add their sensor drivers, CCI graph, lens/OIS devices, userspace and camera firmware policy. |
 | 5 | Device camera application | Only after reliable raw streams, implement/port libcamera support, safe tuning provenance, camera naming and app integration. |
+
+[V] Rows 1-2 are implemented offline as the three-commit kernel series and
+verified per §9.4; row 3 is the coordinator's C1-C5 gates in §9.1. Row 0 is
+covered for this RAM candidate only by the combo kernel's test-only Kona
+match (§9); the upstreamable replacement is separate work.
 
 - [I] M-CAM1 being front-first depends on the existing IMX471 driver's
   supported mode being sufficient and on its rails/CCI wiring matching this
@@ -256,3 +264,230 @@ camera works on the owner's phone.
 - [V] Public community link frequencies (748.8/400 MHz) describe its modified
   driver, not this pinned driver's 200 MHz mode. Use 200 MHz at both ends
   and retain all existing mode register values; successful streaming is [I].
+
+### 9.1 Coordinator RAM-test gates (supersedes R2/R4/R5 for this candidate)
+
+[V] This is the expressly authorized combo-based experiment, not an
+upstreamable root-compatible fix. No worker phone access occurred. The
+coordinator must preserve stock `dtbo_b`, slot B and the known-good daily
+boot; no flash, slot switch or partition write is part of these gates.
+
+1. **C0 — offline preparation.** Check the artifact SHA256SUMS, kernel release
+   and source base. Install the candidate modules into the existing rootfs
+   under their unique release (extract the `lib/modules/<release>` tree;
+   keep the old release). Ensure `media-ctl`, `v4l2-ctl`, `timeout` and
+   `sha256sum` are available before the RAM boot. This is a coordinator
+   rootfs operation, not a partition-flash command. Expect all hashes to
+   match and no existing release overwritten; stop on a mismatch or missing
+   tools; rollback by removing only this new module release.
+2. **C1 — RAM boot.** Run R0/R1 first, review C0 and the builder manifest,
+   then `fastboot boot "$CAMERA_IMAGE"` with the coordinator's actual new
+   image path, after written owner go. Expect `Booting OKAY` and SSH within
+   two minutes. Stop for rejection, hang, root mismatch outside the known
+   Kona test exception or changed slot flags. Rollback: owner returns to
+   bootloader, then reboots the already successful known-good slot B;
+   cold-reboot to bootloader after an ABL rejection before another RAM boot.
+3. **C2 — enumerate (no stream).** Run `uname -r`,
+   `dmesg | grep -Ei 'camss|cci|imx471|csiphy|csid|vfe|regulator|iommu'`,
+   `media-ctl -p -d /dev/media0`, and `v4l2-ctl --list-devices` in the SSH
+   session. Expect exactly one IMX471 subdevice connected to `msm_csiphy3`,
+   plus the CAMSS CSID/VFE graph; compare the release with C0. If CAMSS is
+   on another media device, inspect its graph before selecting it. Stop for
+   chip-ID failure, deferred probe, rail/clock error, IOMMU fault or extra
+   sensor. Rollback: no streaming; return to known-good slot B.
+4. **C3 — graph and format negotiation.** Use the block below only after
+   C2 confirms every named entity and pad. The sensor's I2C bus number is
+   dynamic: set SENSOR to the exact `imx471 ...-0010` entity from C2, and
+   MEDIA to the CAMSS media device. Expect all entities to accept
+   `SRGGB10_1X10/1928x1088`; `--get-fmt-video` must report packed `pRAA`,
+   1928x1088, 2416 bytes/line and 2628608 bytes/image for this RDI path.
+   These sizes follow 1928*10/8=2410 rounded to 16-byte VFE alignment,
+   times 1088 [V: `camss-video.c:57-65`, `camss-vfe.c:vfe_bpl_align_rdi`].
+   Stop on any mismatch, missing route or busy link; do not guess another
+   graph or FourCC. Rollback: reboot the known-good slot B.
+
+```sh
+# Coordinator's dedicated phone SSH shell; substitute C2 values first.
+set -eu
+MEDIA=/dev/media0
+SENSOR='REPLACE_WITH_EXACT_IMX471_ENTITY_FROM_C2'
+test "$SENSOR" != REPLACE_WITH_EXACT_IMX471_ENTITY_FROM_C2 || exit 1
+media-ctl -d "$MEDIA" -l '"msm_csiphy3":1 -> "msm_csid0":0 [1]'
+media-ctl -d "$MEDIA" -l '"msm_csid0":1 -> "msm_vfe0_rdi0":0 [1]'
+media-ctl -d "$MEDIA" -V "\"$SENSOR\":0 [fmt:SRGGB10_1X10/1928x1088 field:none]"
+media-ctl -d "$MEDIA" -V '"msm_csiphy3":0 [fmt:SRGGB10_1X10/1928x1088 field:none]'
+media-ctl -d "$MEDIA" -V '"msm_csiphy3":1 [fmt:SRGGB10_1X10/1928x1088 field:none]'
+media-ctl -d "$MEDIA" -V '"msm_csid0":0 [fmt:SRGGB10_1X10/1928x1088 field:none]'
+media-ctl -d "$MEDIA" -V '"msm_csid0":1 [fmt:SRGGB10_1X10/1928x1088 field:none]'
+media-ctl -d "$MEDIA" -V '"msm_vfe0_rdi0":0 [fmt:SRGGB10_1X10/1928x1088 field:none]'
+media-ctl -d "$MEDIA" -V '"msm_vfe0_rdi0":1 [fmt:SRGGB10_1X10/1928x1088 field:none]'
+VIDEO=$(media-ctl -d "$MEDIA" -e 'msm_vfe0_video0')
+test -c "$VIDEO" || exit 1
+v4l2-ctl -d "$VIDEO" --list-formats-ext
+v4l2-ctl -d "$VIDEO" --set-fmt-video=width=1928,height=1088,pixelformat=pRAA
+v4l2-ctl -d "$VIDEO" --get-fmt-video
+```
+
+[I] C3 route names/pads follow the pinned CAMSS sources, but the live graph
+must confirm them; no fallback CSID/VFE route is authorized by this block.
+Run each command with failure stopping the sequence (`set -e` in a dedicated
+shell); do not continue after a failed link or format operation.
+
+5. **C4 — capture one frame, then stop.** Owner explicitly agrees the front
+   camera will activate; frame a non-sensitive scene. In the same dedicated
+   shell, run the block below. Expect a single frame within 15 seconds,
+   exactly the negotiated size, and no CCI/CSID/VFE/IOMMU error. Stop on
+   timeout, empty/short frame, overflow, thermal/power warning or any
+   unexpected behavior. Rollback: kill the capture if needed, remove the
+   `/tmp` raw file, and return to the known-good slot B. Do not retry a
+   capture in the same boot after an error.
+
+```sh
+timeout --signal=TERM --kill-after=2s 15s v4l2-ctl -d "$VIDEO" \
+  --stream-mmap=3 --stream-count=1 --stream-to=/tmp/instantnoodlep-front.raw
+stat -c %s /tmp/instantnoodlep-front.raw
+sha256sum /tmp/instantnoodlep-front.raw
+dmesg | tail -100
+```
+
+6. **C5 — private read-back and return.** Coordinator runs
+   `scp root@172.16.42.1:/tmp/instantnoodlep-front.raw /tmp/instantnoodlep-front.raw`
+   on the laptop, checks `sha256sum /tmp/instantnoodlep-front.raw` against
+   C4, and locally checks for a plausible Bayer frame without uploading it.
+   Expect matching hashes and a non-empty plausible frame; [I] image
+   validity is not established merely by matching size/hash. Stop on mismatch
+   or invalid data. Remove both `/tmp` files when done, reboot to the
+   known-good slot B and perform R6. Rollback: delete only these temporary
+   files; retain the baseline boot and modules. Record redacted results in
+   NOTES, never the frame or identifying values in Git.
+
+### 9.2 Matching module staging (coordinator only)
+
+[V] After SCP of the delivered module tarball to `/tmp/camera-modules.tar.gz`,
+run this in a dedicated phone SSH shell before C1. Expect a new directory
+for only this release and successful depmod. Stop if the directory already
+exists, extraction fails or the archive contains a different release.
+Rollback (after returning to the baseline): remove only
+`/usr/lib/modules/7.3.0-rc6-instantnoodlep-k3-camera-g70d0761d1` and the
+`/tmp` staging directory/archive. The baseline module directory is retained.
+
+```sh
+set -eu
+CAMERA_RELEASE=7.3.0-rc6-instantnoodlep-k3-camera-g70d0761d1
+test ! -e "/usr/lib/modules/$CAMERA_RELEASE"
+CAMERA_STAGE=$(mktemp -d /tmp/camera-modules.XXXXXX)
+tar -xzf /tmp/camera-modules.tar.gz -C "$CAMERA_STAGE"
+test -d "$CAMERA_STAGE/lib/modules/$CAMERA_RELEASE"
+cp -a "$CAMERA_STAGE/lib/modules/$CAMERA_RELEASE" /usr/lib/modules/
+depmod "$CAMERA_RELEASE"
+```
+
+### 9.3 Laptop probe-builder command
+
+[V] Builder flags below follow `tools/build-instantnoodlep-probe` CLI and
+NOTES' known paths. It runs offline on omabook after the coordinator copies
+and checks the Mac artifacts. Set `STOCK_OVERLAY` to the owner's previously
+verified entry-16 overlay and `UFDT_APPLY` to the existing libufdt tool;
+these private input paths are intentionally not guessed. Stop if either is
+unset or does not match the known-good K3 builder inputs. Expect a new image,
+read-back validation and matching manifest hashes; rollback by deleting
+only the fresh output directory if offline validation fails. Never reuse an
+existing `--out`, and do not boot if the builder fails.
+
+[V] Copy the four files from macbookpro first and check them against the
+hashes in §9.4 before building:
+
+```sh
+# Laptop, from the Mac (paths as delivered in §9.4).
+mkdir -p "$HOME/android/build/k3-camera-artifacts"
+scp macbookpro:'~/build/instantnoodlep-k3-camera-70d0761d1/{Image.gz,sm8250-oneplus-instantnoodlep.dtb,camera-modules.tar.gz,kernel.config,SHA256SUMS}' \
+  "$HOME/android/build/k3-camera-artifacts/"
+cd "$HOME/android/build/k3-camera-artifacts" && sha256sum -c SHA256SUMS
+```
+
+```sh
+# Laptop, from this port repo. Use a fresh directory for every attempt.
+set -eu
+: "${STOCK_OVERLAY:?set the verified private entry-16 overlay path}"
+: "${UFDT_APPLY:?set the verified ufdt_apply_overlay executable path}"
+CAMERA_ARTIFACTS="$HOME/android/build/k3-camera-artifacts"
+CAMERA_BOOT_DIR=$(mktemp -d "$HOME/android/build/k3-camera-ram.XXXXXX")
+python3 tools/build-instantnoodlep-probe \
+  --kernel "$CAMERA_ARTIFACTS/Image.gz" \
+  --dtb "$CAMERA_ARTIFACTS/sm8250-oneplus-instantnoodlep.dtb" \
+  --ssh-key "$HOME/.ssh/id_ed25519.pub" \
+  --mkbootimg "$HOME/aosp-tools/system/tools/mkbootimg/mkbootimg.py" \
+  --omarchy-mobile "$HOME/src/omarchy-mobile" \
+  --initramfs-root "$HOME/android/build/initramfs-root" \
+  --stock-overlay "$STOCK_OVERLAY" --ufdt-apply "$UFDT_APPLY" \
+  --boot 2 --root userdata --debug-shell --out "$CAMERA_BOOT_DIR/boot.img"
+```
+
+[V] The watchdog, USB and storage path are built in (config fragment), so
+this candidate has no `qcom_wdt.ko` to copy. Verify that the prepared shared
+init's watchdog load tolerates built-in drivers (the existing K3 path);
+do not inject an older-release module to satisfy a missing module file.
+Any optional module loaded by the initramfs must match the new release.
+
+### 9.4 Offline verification results (2026-11-17, macbookpro)
+
+[V] The three-commit series (`2f48a3273` binding, `56a734ca4` driver,
+`70d0761d1` board) is on branch `instantnoodlep-k3-camera`, based directly on
+combo `aa996bae0`. The series contains no Kona workaround; the base does.
+No worker touched the phone.
+
+[V] Build: `make -j8 O=/w/out ARCH=arm64 LLVM=1
+LOCALVERSION=-camera-g70d0761d1 Image.gz
+qcom/sm8250-oneplus-instantnoodlep.dtb modules` in the `k3camera` container
+(Debian trixie arm64, clang/lld 19.1.7) finished with no error. The only
+compiler warnings in the log are two pre-existing `-Wformat` warnings in
+`drivers/soc/google/aoc/alsa/aoc_alsa_compr.c`, untouched by this series.
+Release: `7.3.0-rc6-instantnoodlep-k3-camera-g70d0761d1` (from
+`include/config/kernel.release` and the `Image` version string).
+
+[V] `scripts/checkpatch.pl --strict --no-signoff` on each patch: 0 errors,
+0 warnings, 0 checks. `dt_binding_check` with
+`DT_SCHEMA_FILES=media/i2c/sony,imx471.yaml`: clean (CHKDT/LINT/STYLE/DTEX/
+DTC, no diagnostics). `dtbs_check` (`CHECK_DTBS=y`) on the board DTB: clean.
+
+[V] Decompiled candidate DTB (`dtc -I dtb -O dts`): `camss@ac6a000` is
+`okay` with `vdda-phy`/`vdda-pll` supplies and one `port@3` endpoint
+(`clock-lanes = <7>`, `data-lanes = <0 1 2 3>`); `cci@ac50000` is `okay`
+with `i2c-bus@0` disabled; exactly one `camera@10` with
+`compatible = "sony,imx471"`, `reg = <0x10>`, three supplies, `reset-gpios`,
+MCLK3 at 19.2 MHz, sensor-side `data-lanes = <1 2 3 4>` and
+`link-frequencies = <200000000>`. No other sensor, flash, OIS or focus node
+is enabled. The decompile also prints pre-existing base-DTS warnings
+(geniqup i2c/spi duplicate unit-address, dsi `#address-cells`); none is
+introduced by this series and none appears in the build or schema logs.
+
+[V] Release config: `VIDEO_IMX471`, `VIDEO_QCOM_CAMSS`, `I2C_QCOM_CCI`,
+`V4L2_CCI`, `V4L2_CCI_I2C`, `SM_CAMCC_8250`, `MEDIA_CONTROLLER` and
+`VIDEO_V4L2_SUBDEV_API` are all `=y`, so the whole camera path is built in
+and needs no module from the tarball. The tarball carries the other 1777
+modules for the same release.
+
+[V] Names the C2/C3 gates must match, from the pinned sources:
+`msm_csiphy%d` (`camss-csiphy.c:794`), `msm_csid%d` (`camss-csid.c:1370`),
+`msm_vfe%d_rdi%d` (`camss-vfe.c:2077-2080`) and the video entity
+`msm_vfe%d_video%d` (`camss-vfe.c:2122`). RDI bytes-per-line alignment is 16
+for `CAMSS_8250` (`camss-vfe.c:2001-2024`), so 1928x1088 RAW10 is
+2416 bytes/line and 2628608 bytes/frame. `cam_mclk3_default` is GPIO97 with
+function `cam_mclk` (`sm8250.dtsi:5185`); CCI1 bus 1 uses GPIO107/108
+(`sm8250.dtsi:5242`).
+
+[V] Artefacts on macbookpro, `~/build/instantnoodlep-k3-camera-70d0761d1/`
+(`SHA256SUMS` in the same directory):
+
+| File | SHA256 |
+| --- | --- |
+| `Image.gz` | `5ed65c5a193aee8e7128675294445c81dae81d9072e4fdd09e646309c5167a97` |
+| `sm8250-oneplus-instantnoodlep.dtb` | `7074172c94df407ce43fa36b631c5f58c11d13dc4bf34e97ef364b2fab100bb9` |
+| `camera-modules.tar.gz` | `68ee7091dc09a4fac4bad54df3763edcd8302b4c9b553e3cb065f8ae052f4894` |
+| `kernel.config` | `c4aac462b08ac79a5d3e1579e28d15d6400f39314820ce598143f5d707ee2b7a` |
+
+[I] Still unproven and left to the coordinator gates: chip ID over CCI, rail
+ordering and module electrical timing, 200 MHz streaming through CSIPHY3/
+CSID0/VFE0 RDI0, and the `orientation`/`rotation` values, which are inherited
+from the public board patch and not measured on this unit. A chip-ID failure
+in C2 stops the experiment; do not retry with a different mode or graph.
