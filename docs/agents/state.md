@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # State: where the port stands now
 
-Last updated: 2026-11-17 (afternoon: Wi-Fi/BT verified, P2 charger hang, new workers), claude on omabook.
+Last updated: 2026-11-17 (late evening: sensors phase-1 kernel candidate built offline), vibe on omabook.
 
 The one page an agent reads first. Keep it short and current: it is
 overwritten, not appended to. History goes to `device/instantnoodlep/NOTES.md`
@@ -26,6 +26,7 @@ of it from `origin/main` plus the pushed branches.
 | M5 Wi-Fi/BT | Works on a RAM boot of k3-wifi2: Wi-Fi associated (owner's network, NTP synced), BT scan finds devices after `btmgmt public-addr` [V: NOTES 2026-11-17 afternoon]; not on `boot_b` yet (daily kernel) |
 | M5 modem/GNSS | Source-cited DTS/config/userspace delta prepared; flashless Sahara profile and private EFS/DDR policy block first boot [V: `device/instantnoodlep/MODEM-M5-DELTA.md` §1-6]. No kernel built or handset test. |
 | M5 power | P1 gauge works on a RAM boot; P2 charger image hangs early at boot (P2b in progress); no charging under any of our kernels [V: POWER-M5-PLAN §7.3-7.4] |
+| M5 sensors (phase 1) | SLPI/FastRPC kernel candidate built offline: release `7.3.0-rc6-instantnoodlep-k3-sensors-g8f7e5553760f`, SLPI `okay` with the firmware.map name, schema delta none, RAM image validated [V: SENSORS-M5-PLAN §10.3]. No phone test yet; gates S0-S8 pending. |
 
 ## The phone right now
 
@@ -57,7 +58,8 @@ See `docs/agents/active/` (power P2b, daily, kona on omabook; audio on macbookpr
 4. Daily kernel = combo + Wi-Fi/BT + P1 gauge as the `boot_b` candidate (worker `daily`).
 5. Power P2b (charger as a module), then P3 Type-C.
 6. Audio phase 1 (worker on macbookpro), kona upstream series (worker `kona`), UI issue drafts (worker on obsidian); modem/GNSS implementation gates in MODEM-M5-DELTA.
-7. Backlog: disk encryption + boot passphrase / lock-screen PIN (issue #70).
+7. Sensors phase 1: coordinator runs S0-S8 of SENSORS-M5-PLAN §10.2 on the built RAM candidate (SLPI boot, `/dev/fastrpc-sdsp`, monitor-sensor); userspace packages still to be built on aarch64.
+8. Backlog: disk encryption + boot passphrase / lock-screen PIN (issue #70).
 
 ## Offline UI proposals
 

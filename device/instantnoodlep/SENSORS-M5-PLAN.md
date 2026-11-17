@@ -260,9 +260,13 @@ on combo `aa996bae0695`. The two portable patches are in
 `git am`. Commit 1 enables `&slpi` with the exact firmware.map destination;
 commit 2 records `kernel/configs/instantnoodlep-sensors.config`.
 [V] Kernel commits: `a46ead2b0b823d9b79ef64fdbb66145a3fd3ac3a`
-(SLPI) and `314f6714e5f2d4a3360d1ff0dbc35ba0c86d9f8d`
-(config); both patches pass `scripts/checkpatch.pl --no-tree` with zero
-errors/warnings (private `checkpatch.log` under the output root).
+(SLPI) and `8f7e5553760f52435002abf89b69127735200240`
+(config; amended from `314f6714e` to drop the promptless
+`CONFIG_QCOM_PDR_HELPERS` line and document why); both patches pass
+`scripts/checkpatch.pl --no-tree` with zero errors. The config patch carries
+checkpatch's generic "added, moved or deleted file(s), does MAINTAINERS need
+updating?" warning for the new fragment, which is expected and not a style
+defect (private `checkpatch.log` under the output root).
 The existing SM8250 SLPI GLINK/FastRPC nodes and context banks need no new
 DTS definitions (`arch/arm64/boot/dts/qcom/sm8250.dtsi:3129-3155`).
 [V] The device-node name is **lowercase** `/dev/fastrpc-sdsp`: the driver
@@ -354,5 +358,62 @@ in a loop. Rollback is S8, with owner buttons if SSH is lost.
 
 ### 10.3 Build result
 
-[I] Build and schema validation are in progress; final artifact manifest
-will be recorded here before review.
+[V] Offline build and schema validation completed on omabook. Kernel head
+`8f7e5553760f52435002abf89b69127735200240` on `instantnoodlep-k3-sensors`
+(base combo `aa996bae0695`), kernelrelease
+`7.3.0-rc6-instantnoodlep-k3-sensors-g8f7e5553760f`. Output root
+`~/android/build/k3-sensors-20261117/` (private, not committed). Build:
+`ARCH=arm64 LLVM=1 -j6`, `nice -n 19`, `TMPDIR` on the output root because
+the 16 GiB `/tmp` tmpfs filled during a concurrent build and aborted one
+attempt with `Disk quota exceeded`. `make` exited 0.
+
+| Artifact | sha256 | Bytes |
+| --- | --- | --- |
+| `kernel/arch/arm64/boot/Image.gz` | `bf59f9ab8a06af835dd278da7a9b5b9ad99b6622b373b15663f45a09265f50dd` | 16167596 |
+| `kernel/arch/arm64/boot/dts/qcom/sm8250-oneplus-instantnoodlep.dtb` | `87a0f8ae777cbe10b60b062cdcff22ddbdb15bdecaa46cad58426c4a2d32e5bf` | 117845 |
+| `modules-7.3.0-rc6-instantnoodlep-k3-sensors-g8f7e5553760f.tar.gz` | `44b50556da2b6e853db586d3b92a3c0a6219fe79fc27d70f17efc2f0b309f90e` | 23281232 |
+| `boot-sensors.img` (RAM candidate) | `ffa69f0727249ae805c2b5265b237488658fb47860654b0ea89dfbb97e0eebb8` | 24182784 |
+| `boot-sensors.dtb` (post-overlay) | `7630d5a531679e07b6485a9fed8d4077c1a05b5545cc66ceb6ec1318726c163b` | 136176 |
+
+[V] `SHA256SUMS` and `RELEASE` in the output root carry the same values;
+`boot-sensors.manifest.json` records `hardware_boot_tested: false`,
+`flash_authorized: false`, `enabled_remoteprocs` = SLPI only, and
+`root_allowlist` = `userdata`. The modules tarball holds 1788 stripped
+modules; `qcom_q6v5_pas`, `qcom_fastrpc`, `qcom_pd_mapper`, `qcom_sysmon`,
+`qcom_qmi_helpers`, `qcom_pdr_msg`, `rpmsg_qcom_glink*`, `qcom_ipcc`,
+`qcom_smp2p`, `qcom_smem` and the IIO core are built in, so the SLPI path
+needs no rootfs module.
+
+[V] Config gate O2: every fragment symbol is `=y` in the built `.config`
+except `CONFIG_QCOM_PDR_HELPERS`, which is promptless and select-driven
+(SLIMBUS, APR/GPR); it resolves to `=m` from the defconfig chain and
+`qcom_q6v5_pas` does not reference it. The fragment therefore documents
+that instead of forcing it. `CONFIG_LOCALVERSION="-instantnoodlep-k3-sensors"`.
+
+[V] Schema gate O3: `dt-validate` against the generated
+`processed-schema.json` (5836 schemas) exits 0 with no diagnostics for this
+board, and `compare-schema.py` reports `SCHEMA DELTA: none` against the
+combo DTB.
+
+[V] Node gate O4 on the built DTB and again on the post-overlay
+`boot-sensors.dtb`: `/soc@0/remoteproc@5c00000` is `okay` with
+`firmware-name = "qcom/sm8250/OnePlus/instantnoodlep/slpi.mbn"` (identical
+to `firmware.map:26`), `glink-edge/fastrpc` keeps `label = "sdsp"` and
+`qcom,non-secure-domain`, the root compatible is
+`oneplus,instantnoodlep`, `qcom,sm8250`, and `remoteproc@8300000` (CDSP) and
+`remoteproc@17300000` (ADSP) stay `disabled`. The DTB diff against the combo
+DTB is exactly the two added SLPI properties.
+
+[V] RAM candidate: `build-ram-image.py` ran the probe builder with a fresh
+`--out`, copied the intermediate probe DTB to a new staging path, set only
+`/soc@0/remoteproc@5c00000/status` to `okay`, asserted the firmware-name and
+that every other remoteproc stayed disabled, checked the stock overlay
+applies, packed with the known-good mkbootimg arguments, and read the image
+back to confirm the SLPI node in the unpacked DTB. Header: boot header v2,
+kernel `0x00008000`, ramdisk `0x01000000`, tags `0x00000100`, dtb
+`0x01f00000`, command line
+`console=tty0 panic=10 clk_ignore_unused pd_ignore_unused printk.devkmsg=on systemd.watchdog_sec=20 systemd.debug_shell=ttyGS0`.
+
+[I] Nothing above proves SLPI boots or that any sensor reports data: no
+phone was accessed. Gates S0-S8 in §10.2 remain the only path to that
+evidence, and S5a stays conditional on an early missing-firmware failure.
