@@ -4,6 +4,44 @@
 Newest first. Findings that matter beyond one subsystem go here; subsystem
 detail lives in the *-PLAN.md files.
 
+## 2026-11-17 (night): daily K3 on boot_b, B5 set
+
+- [V] Part R (RAM boot of `boot-daily.img`) passed: `running`, panel
+  connected, Hyprland on `msm`, Wi-Fi connected (37 BSS in a scan), hci0
+  on `hci_uart_qca`; with a random locally administered public address set
+  on the phone (not recorded) a 20 s `btmgmt find` returned 610 events;
+  gauge 95 %, 4.256 V, 28.4 °C, Not charging; touch 13101 event lines
+  while the owner tapped.
+- [V] F2 `fastboot flash boot_b boot-daily.img` (sha256 `710a61b5…`):
+  afterwards `successful:b no`, `retry-count:b 7`. The laptop's
+  `/tmp/claude-1000` quota ran out during the command, so its output was
+  lost; the vars and the later boot confirm the write.
+- [V] The first boot from flash dropped off USB for a while; the owner saw
+  it come back at the Linux console. Hours later (the laptop's network and
+  Orca restarted) the slot's retry count had fallen to 1
+  (attributes 0x000f…). Watch-out: count boots after any `boot_b` flash and
+  do B5 straight after the first good boot.
+- [V] F5 B5 from fresh reads (`~/android/build/b5-20261117-2209-daily/`):
+  attributes 0x000f… -> 0x004f…, exactly LBAs 1, 3, 655356, 655359
+  (8/1/1/8 bytes changed), read-backs equal, `ro` 1 again.
+- [V] F6: `current-slot b`, `slot-successful:b yes`, `unbootable:b no`;
+  slot A unchanged. Daily boots from flash to Hyprland on `msm`, Wi-Fi
+  connected, hci0 present. Rollback kernel: combo
+  `~/android/build/k3-combo-ram/boot-r3-gpu.img` (then B5 again).
+
+## 2026-11-17 (afternoon, omabook): daily K3 built (offline)
+
+- [V] Kernel branch `instantnoodlep-k3-daily` (`~/src/l-k3-daily` @
+  `78f38a2acc99`) = combo K3 + the three Wi-Fi/BT DTS commits + the P1
+  gauge commit; cherry-picks applied without conflicts. Release
+  `7.3.0-rc6-instantnoodlep-k3-g78f38a2acc99`; `.config` identical to the
+  P1 build's. `dtbs_check` clean. RAM image
+  `~/android/build/k3-daily-ram/boot-daily.img` (sha256
+  `710a61b5c56c…3d4981`), ramdisk byte-identical to combo's. Details and hashes: DAILY-K3-PLAN §6. Not
+  booted yet.
+- [V] A `-j12` kernel build was killed (make error 137) while other builds
+  ran on the laptop; `-j6` finished it. Use `-j6` when another kernel build
+  is running.
 ## 2026-11-17 (evening): modem kernel candidate built offline
 
 - [V] Branch `instantnoodlep-k3-modem` on `aa996bae0` builds
