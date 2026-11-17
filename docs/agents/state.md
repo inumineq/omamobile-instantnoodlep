@@ -52,6 +52,7 @@ See `docs/agents/active/`. Vibe workers on omabook: power P2b, kona, misc-hw, au
 ## Next
 
 0. Daily K3 is on `boot_b`: implement the BT address unit (DAILY-K3-PLAN §5.3); fold further features into daily as they pass RAM tests.
+0. ABL kernel size: tested `image_size` ceiling is 0x2b60000; public Kona-era ABL guards decompressed Image size against its runtime kernel-to-DTB gap. OnePlus reservation and any DTS carve-out overlap remain unverified [V: `device/instantnoodlep/ABL-KERNEL-SIZE-RESEARCH.md`].
 1. Owner: upstream proposal for freedreno in the omamobile Mesa (PR of
    `inumineq/gpu-mesa-freedreno`; draft in `~/claude/instantnoodlep/`).
 2. Power: battery gauge and charger (POWER-M5-PLAN), the daily-use blocker.
