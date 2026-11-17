@@ -9,6 +9,9 @@ Device support request: [derekross/omarchy-mobile#808](https://github.com/derekr
 
 ## Status (2026-11-15)
 
+The current state is in [`docs/agents/state.md`](docs/agents/state.md); this
+table is the starting point.
+
 | Item | State |
 | --- | --- |
 | Support request | Posted and open: issue #808 |
@@ -55,6 +58,10 @@ docs/runbooks/               Owner-run gated runbooks (Expect / Stop / Rollback)
 device/instantnoodlep/       Device work: descriptor, plans, notes
 scripts/stage0-collect.sh   Read-only stock capture (run before unlocking)
 scripts/omabook-fetch-tools.sh  Laptop tools + Magisk APK for the runbooks (no phone)
+docs/agents/state.md         Where the port stands now (agents: read first)
+docs/agents/where.md         Paths on every host
+.trail/learnings/            Decisions and watch-outs (Trail-code format)
+scripts/trail-lite           brief / note / lint for the project memory
 captures/                    Private captures (gitignored, never commit)
 ```
 
