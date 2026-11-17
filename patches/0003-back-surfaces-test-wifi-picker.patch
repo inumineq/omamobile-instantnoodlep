@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: MIT
+# Proposal against derekross/omarchy-mobile c4623572be1c141d602cf99a83ae0bf9e3eea09c.
+# Belongs with 0002: test/back-surfaces.py fails without it ("WifiPanel.qml
+# registers with Back but isn't tested here"), so the package's own check()
+# cannot pass. Test-only; the package installs no test/.
+diff --git a/packages/omamobile-shell/test/back-surfaces.py b/packages/omamobile-shell/test/back-surfaces.py
+--- a/packages/omamobile-shell/test/back-surfaces.py
++++ b/packages/omamobile-shell/test/back-surfaces.py
+@@ -31,6 +31,7 @@ EXPECT = {
+     "omamobile.voice/Voice.qml": ["voice settings", "voice result"],
+     "omamobile.home/Home.qml": ["home screen"],
+     "omamobile.home/OwlCell.qml": ["widget screen"],
++    "omamobile.quicksettings/WifiPanel.qml": ["wifi picker"],
+ }
+ 
+ 
+@@ -91,6 +92,7 @@ FAKES = '''
+     property string phase: "idle"
+     property bool homeShown: false
+     property string backLevel: ""
++    property string sheet: ""
+     property var layersOver: ({})
+     property var calls: []
+     function note(n) { calls = calls.concat([n]) }
+@@ -100,6 +102,8 @@ FAKES = '''
+     function dismissSettings() { note("dismissSettings"); opened = false }
+     function reset() { note("reset"); phase = "idle" }
+     function backOneLevel() { note("backOneLevel"); backLevel = ""; return true }
++    function cancelSheet() { note("cancelSheet"); sheet = "" }
++    function backRequested() { note("backRequested") }
+   }
+   QtObject {
+     id: languageWindow
+@@ -146,6 +150,7 @@ TestCase {
+   Component { id: vres; SurfVoiceResult {} }
+   Component { id: home; SurfHomeScreen {} }
+   Component { id: wscreen; SurfWidgetScreen {} }
++  Component { id: wifi; SurfWifiPicker {} }
+   Component { id: plain; BackLinkClient {} }
+ 
+   function init() { BackLink.clear(); Quickshell.executed = [] }
+@@ -179,6 +184,36 @@ TestCase {
+     alone(make(wscreen), "widget screen", function(o) { o.fake.homeShown = true; o.screen.screenOpen = true }, "closeScreen")
+   }
+ 
++  // The Wi-Fi picker closes itself on Back (backRequested), so it is not
++  // `alone`: the list follows `opened`, which the panel sets.
++  function test_wifiPicker() {
++    var o = make(wifi)
++    compare(names(), "")
++    o.fake.opened = true
++    compare(names(), "wifi picker")
++    compare(back(), "wifi picker")
++    compare(o.fake.calls.join(","), "backRequested")
++    compare(names(), "wifi picker", "the panel closes itself; the list follows opened")
++    o.fake.opened = false
++    compare(names(), "")
++    compare(sent(), 0)
++    compare(back(), "ok")
++    compare(sent(), 1)
++  }
++
++  // Its password or actions sheet goes first, and the picker stays open.
++  function test_wifiPickerSheetClosesBeforeThePanel() {
++    var o = make(wifi)
++    o.fake.opened = true
++    o.fake.sheet = "password"
++    compare(back(), "wifi picker")
++    compare(o.fake.calls.join(","), "cancelSheet")
++    compare(names(), "wifi picker", "still open behind its sheet")
++    compare(back(), "wifi picker")
++    compare(o.fake.calls.join(","), "cancelSheet,backRequested")
++    compare(sent(), 0)
++  }
++
+   function test_languageSheetGoesBackAPageThenCloses() {
+     var o = make(lang)
+     o.fake.languagesOpen = true

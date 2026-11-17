@@ -28,6 +28,17 @@ coordinate comparison also needs confirmation of compositor mapping and scale.
 - Upstream Qt `test/back-surfaces.py` returned 77 (qmltestrunner unavailable).
   No rendered QML, compositor, touchscreen or lock-session test ran.
 
+[V] Container run on 2026-11-17 (shell-pkg worker, macbookpro): the patched tree
+built as `omamobile-shell 0.2.133-1.1` in the Arch Linux ARM aarch64 container
+with `qt6-declarative` installed, so `test/all` ran instead of skipping: 335
+checks, 0 failures, including `test/back-surfaces.py` (21 Qt checks) and the
+offscreen touch tests. Patch 2 alone fails that test — "WifiPanel.qml registers
+with Back but isn't tested here" — so `patches/0003-back-surfaces-test-wifi-picker.patch`
+adds the missing entry (the surface table, the stand-ins its block names, and
+two tests: the panel closes itself, its sheet closes first). It is test-only;
+the package installs no `test/`. The package's file list is upstream's, with
+`Back.qml` and `WifiPanel.qml` the only changed files.
+
 [V] Source establishes the fixed mask, focus-dependent Wi-Fi Escape fallback,
 and missing native Settings PIN route. [I] It does not establish the actual
 cause of the owner's panel-exit failure, whether the session was locked, or
@@ -35,6 +46,7 @@ when/why the older Settings entry disappeared. The lock intentionally excludes
 ordinary shell surfaces; changing its above-lock rules is not proposed.
 
 [V] Coordinator verification gates, including stop and rollback conditions,
-are in `device/instantnoodlep/SHELL-UX-PLAN.md`. Installation/restart is explicitly
-blocked on checking the actual phone layout and recovery command: this research
-worker has no phone access and supplies no guessed service name.
+are in `device/instantnoodlep/SHELL-UX-PLAN.md`. Its step 3 now carries the
+concrete install, restart and rollback commands: the shell is not a systemd
+unit, `omarchy-restart-shell` restarts it, and the geometry goes in with
+`hyprctl eval 'hl.env(...)'`. [I] None of that has run on the phone.

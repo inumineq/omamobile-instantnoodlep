@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # State: where the port stands now
 
-Last updated: 2026-11-17 (evening: modem kernel candidate built offline), claude on macbookpro.
+Last updated: 2026-11-17 (evening: patched shell package built offline), claude on macbookpro.
 
 The one page an agent reads first. Keep it short and current: it is
 overwritten, not appended to. History goes to `device/instantnoodlep/NOTES.md`
@@ -66,3 +66,10 @@ See `docs/agents/active/` (power P2b, daily, kona on omabook; audio on macbookpr
   issue drafts are in `patches/` and `docs/upstream/`; host applicability/model
   checks passed (details: `docs/upstream/README.md`). [I] Phone verification
   remains pending under `device/instantnoodlep/SHELL-UX-PLAN.md`.
+- [V] The patched package for that plan's step 3 is built offline:
+  `omamobile-shell-0.2.133-1.1-any.pkg.tar.zst` (sha256 `4ab37382…4ec955`,
+  `~/vibe-runs/shellpkg/out/` on macbookpro) from upstream `c462357` with
+  patches 0001-0003; `test/all` passes in the ALARM container. [V] The shell is
+  not a systemd unit: `omarchy-restart-shell` restarts it, and the geometry goes
+  in with `hyprctl eval 'hl.env(...)'` (learning `l-7cf2b6a8`). [I] Nothing is
+  installed on the phone; steps 3-6 are the coordinator's.
