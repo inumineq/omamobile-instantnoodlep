@@ -3,8 +3,8 @@
 
 **[V]** Research snapshot: 2026-11-17; kernel references are pinned to
 upstream Linux `v7.3-rc6` ([tag](https://github.com/torvalds/linux/tree/v7.3-rc6)).
-**[V]** This is a design note only: no kernel code, device access, or flash
-procedure is included.
+**[V]** Implementation and coordinator-only RAM validation are recorded below.
+No worker device access or partition writes are included.
 
 ## Decision
 
@@ -263,3 +263,257 @@ bootloader DT conventions. Do not recommend.
   [AOSP DTBO format](https://source.android.com/docs/core/architecture/dto/partitions),
   [QCOM `qcom,msm-id` binding discussion](https://lore.kernel.org/linux-arm-msm/20220830065744.161163-1-krzysztof.kozlowski@linaro.org/T/),
   and the cited Sony/Xiaomi/OnePlus/U-Boot references above.
+
+
+## 5. Implementation and coordinator-only runbook
+
+[V] The subsystem gate is [KONA-ROOT-PLAN.md](KONA-ROOT-PLAN.md).
+The kernel worktree is `~/src/l-k3k`, branch `instantnoodlep-k3-kona`.
+The base is combo `aa996bae0`; local revert `c1795c0df` removes all three
+DO-NOT-UPSTREAM aliases. The three review patches and unsent cover letter
+are in [patches/kona-root/](patches/kona-root/0000-cover-letter.patch).
+The root tables remain the first choice: existing supported machines,
+including board-specific UBWC choices, follow the same path. Only an
+unmatched root tries SMEM ID 356. The stock A6 socinfo capture records
+SM8250 ID 356 [V: NOTES.md:526]; this candidate still needs runtime testing.
+Unknown IDs retain the unsupported result.
+[V: patches 1–2.] PD mapper propagates `-EPROBE_DEFER` through its auxiliary
+probe; UBWC already checks `qcom_smem_is_available()` before matching
+[V: kernel `smem.c:826`, `qcom_pd_mapper.c:785`, `ubwc_config.c:219`].
+
+[V] The cpufreq check walks **all** matching nodes, releases references,
+and succeeds on any available cpufreq-hw/EPSS node, including a later node
+after a disabled one. It needs no initialized driver or SoC bus.
+The controller matches agree with `qcom-cpufreq-hw.c:437–440`.
+[V: patch 3.] Existing machine blocklists and whitelist precedence remain.
+
+[V] Plain `checkpatch.pl --strict` on each review patch reports exactly
+one error: missing human `Signed-off-by`. With `--strict --no-signoff`,
+each has zero errors, warnings or checks. A human must review, test and
+add their DCO sign-off; the AI does not certify it. No patches were sent
+upstream. The revert is local scaffolding and must not be sent upstream.
+
+### 5.1 Owner gates and baseline limitations
+
+[I] Every step below is coordinator-run after the owner approves that
+step; the worker runs none. Keep outputs in private captures and summarize
+facts only. Do not collect SSIDs, addresses or identifiers into git.
+Never change slot flags or boot stock Android: the known fallback can erase
+Arch on `userdata` [V: learning `l-f3c8caea`, BRINGUP-M1b-PLAN].
+
+[V] This is combo plus the three generic driver fixes, not Wi-Fi/BT or
+power bring-up. The probe builder unconditionally disables remoteprocs
+(`tools/build-instantnoodlep-probe:456`); the combo DTS does not enable the
+Wi-Fi M5 nodes. Consequently this candidate cannot prove PD service
+registration/remoteproc start or Wi-Fi association. Those are outstanding
+integration gates under AUDIO-M5-PLAN and WIFI-BT-M5-PLAN, with the later
+Wi-Fi commits and a separately reviewed remoteproc-enabled image.
+Do not turn those nodes on ad hoc or reuse mismatched daily modules.
+
+[I] Before the RAM boot, coordinator must confirm the installed slot-B
+kernel and its modules remain available, slot B is successful and bootable,
+the backup checks in the relevant plans remain valid, and the battery can
+cover the test (this candidate does not charge). Stop otherwise; rollback
+is no action. Never use `set_active` to repair flags in this runbook.
+
+### 5.2 Module staging and RAM boot
+
+[I] Stage matching modules into their **new release directory only** on
+`userdata`; do not replace the running kernel's modules. Coordinator uses
+the existing authenticated USB SSH connection (shown here as
+`root@172.16.42.1`) and the private archive recorded in §5.4:
+
+```sh
+scp ~/android/build/k3-kona/modules-*.tar.zst root@172.16.42.1:/tmp/
+# On phone, use the exact archive and release from §5.4, not a wildcard:
+tar --zstd -tf /tmp/MODULE_ARCHIVE
+# Expect only lib/modules/RELEASE/ (or usr/lib/modules/RELEASE/).
+# Stop if absolute paths, parent traversals, or any other release appears.
+tar --zstd -xf /tmp/MODULE_ARCHIVE -C /
+depmod -a RELEASE
+```
+
+[I] Expect new module files for the exact release and no depmod errors.
+Stop on any mismatch; rollback: delete only the newly staged release
+directory after confirming it is not the installed kernel's release.
+Staging writes files on `userdata`, not raw partitions.
+
+[I] With explicit owner go, first start a private serial/log capture per
+BRINGUP-M1b-PLAN, then request `reboot bootloader` over the existing SSH
+connection. Expect fastboot; stop if it does not return. Owner handles
+buttons if needed; no automatic slot changes or flashing.
+
+```sh
+fastboot getvar current-slot
+# Expect b; stop otherwise. Do not print or save device identifiers.
+fastboot boot "$HOME/android/build/k3-kona/ram/boot.img"
+```
+
+[I] Expect USB SSH within three minutes, the exact §5.4 kernel release,
+and Arch root on `userdata`. Stop if boot hangs, the release differs,
+or root is wrong. Rollback: owner returns to bootloader with the established
+button sequence, checks `current-slot` is still `b`, then runs
+`fastboot reboot` to the installed kernel. If the slot is no longer B,
+stop and escalate under BRINGUP-M1b-PLAN; never let stock Android boot.
+This runbook has no flash step and never writes `super`, `_a`, or DTBO.
+
+### 5.3 Read checks and attended scaling check
+
+[I] Coordinator runs these on the phone and compares with the installed
+combo baseline; expect the root still to contain the vendor Kona strings:
+
+```sh
+uname -r
+tr '\0' '\n' < /proc/device-tree/compatible
+findmnt -no SOURCE,FSTYPE /
+readlink /sys/class/drm/renderD128/device/driver
+ls /dev/dri/renderD128
+journalctl -b -k --no-pager | rg 'UBWC|msm|DPU|PDM|pd.mapper|remoteproc|cpufreq'
+for p in /sys/devices/system/cpu/cpufreq/policy*; do
+    cat "$p/related_cpus" "$p/scaling_driver" "$p/scaling_governor"
+    cat "$p/cpuinfo_min_freq" "$p/cpuinfo_max_freq" "$p/scaling_cur_freq"
+done
+```
+
+[I] Expect `msm_dpu`, render node present, no unsupported-UBWC or MDSS
+probe error, policies covering 0–3 / 4–6 / 7 using `qcom-cpufreq-hw`, and
+no generic `cpufreq-dt` platform device (`test ! -e
+/sys/bus/platform/devices/cpufreq-dt`). Stop on a missing policy or driver
+mismatch, oops, repeated deferred probes, display corruption or USB loss;
+rollback: return to the installed B kernel as above.
+
+[I] Verify the SMEM SoC ID that patches 1 and 2 key on, read-only, through
+the SoC bus. `qcom_smem` registers `qcom-socinfo`, which publishes the same
+`SMEM_HW_SW_BUILD_ID` item that `qcom_smem_get_soc_id()` returns
+[V: kernel `smem.c:826-838`, `socinfo.c:434,901-933`, `drivers/base/soc.c:39`]:
+
+```sh
+modprobe qcom_socinfo
+cat /sys/devices/soc0/soc_id /sys/devices/soc0/machine
+```
+
+[I] Expect `356` and `SM8250`. Read only those two attributes: the same
+directory also carries `serial_number`, which must never be printed, saved
+or quoted (rule 4). Stop if the ID is not 356, because the fallback tables
+would then not select SM8250 data and the UBWC/PD result would be
+meaningless. This is the only direct runtime evidence for the SMEM path
+that this candidate can produce; see the PD note below for why.
+
+[I] Hardware GL check, matching GPU-USERSPACE-PLAN §9: run `eglinfo -B`
+inside the existing graphical session if installed, and inspect Hyprland's
+`/proc/PID/fdinfo/*` for `drm-driver: msm` and increasing GPU time while the
+owner moves a window. Confirm Hyprland maps `libgallium` in
+`/proc/PID/maps`. Expect FD650/hardware rendering, panel at
+1440x3168@120, working owner taps/swipes, and no render faults. Do not
+restart or reconfigure the session to make a failing test pass. Stop on
+llvmpipe, input failure or GPU faults; rollback: installed B kernel.
+
+[I] Panel and touch check, read-only first, then the owner's own taps:
+
+```sh
+cat /sys/class/drm/card0-DSI-1/modes
+cat /sys/class/drm/card0-DSI-1/status
+readlink /sys/class/drm/card0-DSI-1/device/driver
+for i in /sys/class/input/input*/name; do cat "$i"; done
+journalctl -b -k --no-pager | rg 'ams678uw01|s6sy761|dsi|panel'
+```
+
+[I] Expect the 1440x3168 mode, `connected`, the panel bound through
+`msm_dpu`, an input device named for the `samsung,s6sy761` touchscreen
+[V: DTS `sm8250-oneplus-instantnoodlep.dts:370,397`; drivers
+`panel-samsung-ams678uw01.c:456`, `s6sy761.c:982`], and no DSI or panel
+probe errors. Then the owner taps and swipes once: expect the pointer to
+follow without dead zones or a stuck contact. Stop on a blank or corrupted
+panel, a missing input device, or DSI errors; rollback: installed B kernel.
+
+[I] For a brief attended scaling exercise, owner authorizes screen/load
+changes; stream logs privately first. Run a bounded workload on one CPU
+per cluster and sample frequencies during the workload:
+
+```sh
+for cpu in 0 4 7; do
+    timeout 5 taskset -c "$cpu" sh -c 'while :; do :; done' &
+done
+for i in 1 2 3 4 5; do
+    for p in /sys/devices/system/cpu/cpufreq/policy*; do
+        cat "$p/scaling_cur_freq"
+    done
+    sleep 1
+done
+wait
+```
+
+[I] Expect each policy within its min/max range, rising under load and
+settling afterwards; no governor changes are required. Stop immediately
+on thermal warnings, instability or owner concern; kill the bounded jobs
+and return to installed B if needed. A fixed frequency despite a responsive
+system is an unresolved scaling gate, not a pass.
+
+[I] PD/remoteproc baseline check: inspect `/sys/class/remoteproc/*/state`
+when present, DT statuses, and kernel log errors. Expect no newly running
+remoteprocs, because the builder disables them. Loading `qcom_pd_mapper`
+only proves module linkage, not SMEM table selection: without an enabled
+remoteproc auxiliary consumer it cannot establish runtime PD registration.
+Stop on unexpected running remoteprocs; rollback: installed B kernel.
+
+[I] Wi-Fi baseline check: `test -d /sys/class/ieee80211` and interface
+presence without printing hardware addresses. Expect no enabled WLAN in
+this combo-only candidate. Association is pending the separately reviewed
+Wi-Fi integration candidate; then require connection to the owner's network
+and working traffic per WIFI-BT-M5-PLAN R gates, without recording its name.
+Do not call either of these disabled baselines a completed hardware gate.
+
+### 5.4 Build evidence and private artifacts
+
+[V] Targeted `ARCH=arm64 LLVM=1 W=1` compilation completed for UBWC and
+PD mapper as both `=y` and `=m`, plus cpufreq-dt-platdev as `=y`.
+`CPUFREQ_DT_PLATDEV` is bool (`drivers/cpufreq/Kconfig:245`), so no valid
+`=m` configuration exists. Module object command files confirm `-DMODULE`.
+Private logs: `~/android/build/k3-kona/linkage-y-final.log` and
+`linkage-m.log`, with resolved configs under `linkage-y/` and `linkage-m/`.
+The `=y` check sets QRTR built-in; the `=m` check sets DRM_MSM modular so
+its UBWC select does not force UBWC built-in. No changed-driver warnings.
+
+[V] Existing root-match tables were compared byte-for-byte with the
+post-revert base: all unchanged. The node compatible set was compared
+with qcom-cpufreq-hw's table: all three covered. All three patches pass
+reverse `git apply --check` against the resulting tree.
+
+[I] Full candidate build in progress; artifact hashes will be filled before
+handoff. No runtime tests have run in this worker session.
+
+
+### 5.5 Folding into the daily kernel (coordinator)
+
+[V] A detached throwaway worktree at `instantnoodlep-k3-daily`
+`78f38a2acc99facc8465e80b95a3048884d45464` accepted the following
+`git cherry-pick --no-commit` without conflicts; the staged diff passed
+`git diff --cached --check`. Only the four expected driver/Kconfig files
+changed. The throwaway worktree was then removed; the daily branch and its
+active worktree were untouched. Private log:
+`~/android/build/k3-kona/daily-apply-check.log`.
+
+```sh
+# In the coordinator's isolated integration worktree, based on that daily:
+git cherry-pick c1795c0df e5230d669 65140a843 8fb338f6e
+```
+
+[V] Include the local revert **first**: daily still inherits the combo's
+vendor aliases. The three review patches alone leave those aliases in
+place and fail to exercise the fallback. The revert stays out of any
+upstream submission. [I] Recheck applicability if daily moves; rebuild
+and package matching modules for its new release, never pair this RAM
+image with daily modules.
+
+[I] On the daily integration candidate, coordinator repeats §5.2–5.3 GPU,
+all-cluster cpufreq, panel and touch checks, then runs WIFI-BT-M5-PLAN's
+association/traffic gates. Expect Wi-Fi to keep its previously verified
+behaviour and no new UBWC errors. For PD mapper, follow AUDIO-M5-PLAN's
+separate firmware/backup, logging and remoteproc enablement gates: merely
+integrating onto daily does not enable a disabled remoteproc, and the
+probe builder still disables it. Under that separately approved image,
+expect SMEM ID 356 to select `sm8250_domains`, in-kernel mapper service
+registration and the intended DSP reaching its planned running state,
+without unsupported-platform notices, repeated deferrals, PDR faults or
+crash loops. Stop on any failed expectation; return to the installed B
+kernel as in §5.2, without slot changes. These remain unrun hardware gates.
