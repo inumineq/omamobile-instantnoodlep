@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Set the phone-local Bluetooth public address for %I
+After=bluetooth.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-bt-public-addr %I
+TimeoutStartSec=40

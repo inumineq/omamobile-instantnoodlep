@@ -1,0 +1,13 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+stage=$(mktemp -d)
+trap 'rm -rf "$stage"' EXIT
+./install "$stage"
+test -f "$stage/usr/share/omamobile/device.conf"
+test -f "$stage/usr/share/omamobile/firmware.map"
+test -f "$stage/usr/share/uwsm/env.d/90-omamobile-instantnoodlep-graphics"
+test -f "$stage/usr/lib/environment.d/50-omamobile-back.conf"
+test -f "$stage/usr/lib/systemd/system/omamobile-bt-public-addr@.service"
+! rg -n '^[^#].*\.(mbn|mdt|bin|tlv)([[:space:]]|$)' firmware.map
