@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # State: where the port stands now
 
-Last updated: 2026-11-17 (midday, K3 on boot_b), claude on omabook.
+Last updated: 2026-11-17 (K3 on boot_b; modem/GNSS plans refreshed), claude on omabook.
 
 The one page an agent reads first. Keep it short and current: it is
 overwritten, not appended to. History goes to `device/instantnoodlep/NOTES.md`
@@ -22,7 +22,7 @@ of it from `origin/main` plus the pushed branches.
 | K3 (panel, touch, keys, GPU) | On `boot_b` (combo build), boots to Hyprland on the GPU, B5 set [V: NOTES 2026-11-17 midday] |
 | Neutral `dtbo_b` (DTBO-PLAN) | Parked: ABL rejected v1 (table) and v2 (raw FDT); stock dtbo back [V: DTBO-PLAN §6; learning `l-48e0c482`] |
 | M3 display stack on the device (hardware GL) | Hardware GL works under combo K3 with the freedreno Mesa (rootfs, not upstream yet) [V: NOTES 2026-11-17 day; learning `l-405b6773`] |
-| M5 (Wi-Fi/BT, modem, audio, sensors, power, camera, misc) | All seven subsystem plans written; the five original M5 plans cross-reviewed; nothing run [V: `device/instantnoodlep/{WIFI-BT,MODEM,AUDIO,SENSORS,POWER}-M5-PLAN.md`, `CAMERA-PLAN.md`, `MISC-HW-PLAN.md`, `M5-REVIEW.md`] |
+| M5 (Wi-Fi/BT, modem, GNSS, audio, sensors, power, camera, misc) | All plans written (GNSS, camera and misc new; modem refreshed); the five original M5 plans cross-reviewed; nothing run on the phone [V: `device/instantnoodlep/*-M5-PLAN.md`, `GNSS-M5-PLAN.md`, `CAMERA-PLAN.md`, `MISC-HW-PLAN.md`, `M5-REVIEW.md`] |
 
 ## The phone right now
 
@@ -51,4 +51,4 @@ None (see `docs/agents/active/`).
 2. Power: battery gauge and charger (POWER-M5-PLAN), the daily-use blocker.
 3. A kernel-side answer to the `qcom,kona` root rewrite that upstream can
    take (DTBO-PLAN §6).
-4. M5 runbooks, in the order M5-REVIEW gives.
+4. Cross-review GNSS-M5-PLAN, then continue M5 runbooks in the order M5-REVIEW gives.
