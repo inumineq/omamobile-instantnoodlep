@@ -20,3 +20,6 @@ touches:
 
 ## Decided
 - A Mesa build with freedreno (and Turnip) runs as the `gpu-mesa` worker on macbookpro. Whether upstream's Mesa should enable freedreno is an upstream decision; propose, do not fork silently.
+
+## Update 2026-11-17 (day)
+- Solved on the phone: Mesa 26.2.4 with freedreno + Turnip (branch `inumineq/gpu-mesa-freedreno`) installed with `pacman -U`, the env.d switch in `/usr/share/uwsm/env.d/`, the `env-hyprland` line commented out. Under combo K3 Hyprland renders on the GPU (`drm-driver: msm`, GPU time > 0) [V: NOTES 2026-11-17 day]. Upstreaming the Mesa change is still the owner's call.

@@ -4,6 +4,46 @@
 Newest first. Findings that matter beyond one subsystem go here; subsystem
 detail lives in the *-PLAN.md files.
 
+## 2026-11-17 (day): M0 on the screen, two dtbo_b attempts rejected, hardware GL
+
+- [V] M0, combo K3 RAM boot: the owner saw the lock screen at 1440x3168;
+  Hyprland reports DSI-1 `1440x3168@120.00000`. Touch (s6sy761, `event2`)
+  needs no axis fix: taps in the four corners read (168,173) top left,
+  (1312,172) top right, (1295,3078) bottom right, (144,3041) bottom left;
+  an upward swipe ran (776,3110) to (709,1493). The driver reports MT slots
+  without `BTN_TOUCH`, so tools that wait for BTN_TOUCH see nothing.
+- [V] Neutral `dtbo_b` v1 (one `mkdtboimg` entry, DTBO-PLAN §2): ABL did
+  not boot slot B, set `slot-unbootable:b: yes`, switched to slot A, and
+  Android stopped in stock recovery (its language screen). v2, a raw FDT
+  (magic `d00dfeed`, as pmaports' empty dtbo is built) so ABL would skip the
+  overlay: same result. Both times `slot-successful:b` stayed `yes` and
+  `slot-retry-count:b` was not used up. Details: DTBO-PLAN §6.
+- [V] Recovery from that state, done twice: stock recovery, English,
+  Advanced, Reboot to fastboot; `fastboot flash dtbo_b` with the stock OTA
+  `dtbo.img`; `fastboot --set-active=b` (this clears `successful:b`, retry
+  count back to 7); reboot to K2; B5 mark again from a fresh GPT read. The
+  first time the phone went through stock recovery once more before K2
+  came up; the second time K2 booted straight away. The Arch root on
+  `userdata` survived both slot-A stops (`systemctl is-system-running` =
+  `running` afterwards).
+- [V] `fastboot getvar all`: `off-mode-charge:1`. With the cable in,
+  `systemctl poweroff` ends in a new boot (seen twice); unplugged, the
+  phone stays off (previous boot ended at the poweroff timer).
+- [V] Hardware GL: Mesa 26.2.4 with freedreno + Turnip, built by the
+  `gpu-mesa` worker (branch `inumineq/gpu-mesa-freedreno`) and installed
+  on the rootfs with `pacman -U` (old files and db entries kept on the
+  phone for rollback), plus its uwsm env.d switch in
+  `/usr/share/uwsm/env.d/`; the `LIBGL_ALWAYS_SOFTWARE=1` line in the
+  user's `env-hyprland` is commented out. Under combo K3 the render node's
+  driver is `msm_dpu`, the switch picks hardware, Hyprland maps
+  `libgallium` and holds `/dev/dri/renderD128`, and its DRM fdinfo shows
+  `drm-driver: msm` with 0.79 s of GPU time after boot. The owner: the
+  lock-screen animations are smooth now. Frame rate not measured [I].
+  Under K2 (no GPU) the same switch falls back to llvmpipe [I: by the
+  script's logic].
+- [V] pacman refuses the `omamobile` sync db when the phone clock is at
+  1970 (PGP signature check); set the clock from the laptop first.
+
 ## 2026-11-17 (early morning, latest): keys, modules, GPU renders
 
 - [V] Clean K3 (no `qcom,kona` patch, branch `instantnoodlep-k3-clean`)
