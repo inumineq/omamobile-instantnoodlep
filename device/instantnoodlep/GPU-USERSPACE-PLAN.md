@@ -275,3 +275,15 @@ steps 4-6.
    build? This plan assumes one, on the size delta in §5.
 4. Should coral and flame move from Arch's Mesa to the omamobile build
    once freedreno is in it? Their maintainers decide.
+
+## 9. On-device result 2026-11-17 [V: NOTES 2026-11-17 day]
+
+- Runbook §7 done on the phone (rootfs only, old package files and db
+  entries kept for rollback). Under combo K3 `renderD128`'s driver is
+  `msm_dpu` (open question 1: covered by the case list), the switch
+  exports `LIBGL_ALWAYS_SOFTWARE=0`, and Hyprland renders on the GPU with
+  this 26.2.4 build (open question 2): `drm-driver: msm`, GPU time > 0,
+  `libgallium` mapped, panel at 1440x3168@120. The owner judged the
+  animations smooth; no rendering faults seen. Frame rate not measured [I].
+- `pacman -U` needs the phone clock set first (the `omamobile` sync db
+  signature check fails at 1970).
