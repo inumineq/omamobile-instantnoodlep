@@ -4,6 +4,35 @@
 Newest first. Findings that matter beyond one subsystem go here; subsystem
 detail lives in the *-PLAN.md files.
 
+## 2026-11-17 (night, latest): network, time, device package 0.0.3, screen
+
+- [V] Network without sudo on the laptop: NetworkManager "shared" mode
+  needs `dnsmasq` (not installed) and ufw drops forwarding, so instead a
+  reverse SSH SOCKS tunnel: `ssh -N -R 127.0.0.1:1080 root@172.16.42.1`
+  gives the phone `socks5h://127.0.0.1:1080` (curl to archlinux.org: 200
+  in 0.24 s). No UDP, so no NTP: the clock is set over SSH with
+  `date -u -s @$(date -u +%s)`. The RTC came up at 1970/2026-01-02, so
+  time is lost on every boot until NTP or an RTC fix.
+- [V] The two failed firstboot steps are Windows-on-ARM laptop steps
+  (`hardware/qualcomm/dtb-uki.sh`: a UKI with X1/sc8280xp DTBs;
+  `firmware.sh`: firmware from a Windows partition), gated only on
+  `omarchy-hw-aarch64-qualcomm`. They must not run on a phone; not re-run.
+  Upstream note: omamobile-firstboot does not skip them on Qualcomm phones
+  (dodge would hit this too).
+- [V] Pacman on the phone refused the local repository DB ("key
+  653B6B58... is unknown"): the image is built `--channel local` but the
+  local build key is not in its keyring. Fixed on the phone with
+  `pacman-key --add` + `--lsign-key` of `keys/instantnoodlep/public.asc`.
+  `omamobile-device-instantnoodlep` 0.0.3 (usb0 network files, the
+  `systemd-firstboot` mask) then installed with `pacman -U` and owns those
+  files. No `-Syu` against upstream's channel (it would mix their packages
+  into our local build).
+- [V] Screen: `simpledrm` provides `card0`/`fb0`; SDDM autologged in and
+  started Hyprland (uwsm), but the panel stays black. The earlier console
+  text came from tty0 on the same framebuffer. Cause open (Hyprland on
+  simpledrm, or the panel sleeping once the bootloader image is replaced):
+  M3.
+
 ## 2026-11-17 (night, later): M1b B4-B5 — slot B marked, M1b complete
 
 - [V] B4: `systemctl reboot --reboot-argument=bootloader` reaches
