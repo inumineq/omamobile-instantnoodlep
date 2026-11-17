@@ -4,6 +4,20 @@
 Newest first. Findings that matter beyond one subsystem go here; subsystem
 detail lives in the *-PLAN.md files.
 
+## 2026-11-17 (afternoon): Wi-Fi associated and BT scanning on k3-wifi2
+
+- [V] k3-wifi2 (`-gf9a20697e2ae`) RAM-booted: with the `serial1 = &uart6`
+  alias the GENI UART probes and hci0 appears, but comes up unconfigured
+  (no public address). After `btmgmt public-addr` with a locally
+  administered address (not persistent; value not recorded here) the
+  controller powers on and a scan lists dozens of devices. Persistent
+  address handling: design in progress (daily kernel worker).
+- [V] The owner joined their Wi-Fi network from the phone UI; NTP synced
+  the clock. SSH is not reachable over Wi-Fi (UFW blocks 22 on `wlp1s0`).
+- [V] UI: the owner could not leave the Wi-Fi panel with gestures (no
+  Android buttons; the edge back-swipe does not register on the curved
+  edges). Drafts for upstream in progress (worker `shell-ux`).
+
 ## 2026-11-17 (evening): Wi-Fi up on a RAM boot; BT needs a serial alias
 
 - [V] k3-wifi (`-g422090919028`) RAM-booted with the linux-firmware
