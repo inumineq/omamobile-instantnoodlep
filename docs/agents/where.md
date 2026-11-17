@@ -45,9 +45,10 @@ name, never copy them in.
 | Path | What |
 | --- | --- |
 | `~/src/l-k3` | K3 "combo" kernel tree: carries the test-only `qcom,kona` match patch (DO NOT UPSTREAM) |
+| `~/src/l-k3-daily` | Daily K3 tree, branch `instantnoodlep-k3-daily`: combo + Wi-Fi/BT + P1 gauge (DAILY-K3-PLAN) |
 | `~/src/l-k3c` | K3 clean kernel tree, branch `instantnoodlep-k3-clean`: the upstreamable one |
 | `~/android/build/k1`, `k2`, `k2-full`, `k2-patches`, `k2-d1*` | K1/K2 build outputs and the K2 D1 baseline |
-| `~/android/build/k3-clean`, `k3-clean-boot`, `k3-combo`, `k3-combo-ram`, `k3-panel*`, `k3-touch` | K3 builds and RAM-boot images |
+| `~/android/build/k3-clean`, `k3-clean-boot`, `k3-combo`, `k3-combo-ram`, `k3-daily`, `k3-daily-ram`, `k3-panel*`, `k3-touch` | K3 builds and RAM-boot images |
 | `~/android/build/m1b`, `b5-<date>` | Slot B images; B5 GPT reads and sectors |
 | `~/android/build/dtbo-neutral` | The rejected neutral dtbo image and checksums |
 | `~/android/build/p3`, `ufdt`, `sink`, `qabl` | Offline dtbo/overlay work, ABL source reading |

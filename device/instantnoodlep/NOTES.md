@@ -4,6 +4,20 @@
 Newest first. Findings that matter beyond one subsystem go here; subsystem
 detail lives in the *-PLAN.md files.
 
+## 2026-11-17 (afternoon, omabook): daily K3 built (offline)
+
+- [V] Kernel branch `instantnoodlep-k3-daily` (`~/src/l-k3-daily` @
+  `78f38a2acc99`) = combo K3 + the three Wi-Fi/BT DTS commits + the P1
+  gauge commit; cherry-picks applied without conflicts. Release
+  `7.3.0-rc6-instantnoodlep-k3-g78f38a2acc99`; `.config` identical to the
+  P1 build's. `dtbs_check` clean. RAM image
+  `~/android/build/k3-daily-ram/boot-daily.img` (sha256
+  `710a61b5c56c…3d4981`), ramdisk byte-identical to combo's. Details and hashes: DAILY-K3-PLAN §6. Not
+  booted yet.
+- [V] A `-j12` kernel build was killed (make error 137) while other builds
+  ran on the laptop; `-j6` finished it. Use `-j6` when another kernel build
+  is running.
+
 ## 2026-11-17 (midday): K3 on boot_b
 
 - [V] `boot_b` now holds the combo K3 image (`boot-r3-gpu.img`, sha256
