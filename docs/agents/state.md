@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # State: where the port stands now
 
-Last updated: 2026-11-17 (night: daily K3 on boot_b, B5 set), claude on omabook.
+Last updated: 2026-11-17 (night: daily K3 on boot_b, audio phase-1 kernel built offline), claude on omabook.
 
 The one page an agent reads first. Keep it short and current: it is
 overwritten, not appended to. History goes to `device/instantnoodlep/NOTES.md`
@@ -28,6 +28,7 @@ of it from `origin/main` plus the pushed branches.
 | M5 modem/GNSS | Kernel candidate built offline: PCIe2/MHI endpoint, GIC MBI route, bounded image-only Sahara loader, fragment merged; series in `patches/instantnoodlep/kernel-modem/` [V: MODEM-M5-DELTA §6]. No handset test; private EFS/DDR policy still blocks first boot. |
 | M5 power | P1 gauge works on a RAM boot; P2 charger image hangs early at boot (P2b in progress); no charging under any of our kernels [V: POWER-M5-PLAN §7.3-7.4] |
 | M5 camera (M-CAM1 front IMX471) | Kernel series built and offline-verified: release `7.3.0-rc6-instantnoodlep-k3-camera-g70d0761d1`, clean checkpatch/dt_binding_check/dtbs_check, one IMX471 on CCI1 master 1 to CSIPHY3 in the DTB [V: CAMERA-PLAN §9.4]. No RAM boot or frame yet; coordinator gates C0-C5 pending. |
+| M5 audio | Phase 1 kernel delta (ADSP + WCD9385 + VA DMIC + q6 card, amps disabled) built offline on `instantnoodlep-k3-audio`, release `7.3.0-rc6-instantnoodlep-k3-gedc18c3cd5c4`; no handset test yet [V: AUDIO-M5-PLAN §3 build record]. Phase 2 (TFA987x driver, speaker link) designed, not implemented [V: AUDIO-M5-PLAN §8-§9] |
 
 ## The phone right now
 
@@ -47,7 +48,7 @@ of it from `origin/main` plus the pushed branches.
 
 ## Running workers
 
-See `docs/agents/active/`. Vibe workers on omabook: power P2b, kona, misc-hw, audio, sensors, repo review.
+See `docs/agents/active/`. Vibe workers on omabook: power P2b, kona, misc-hw, sensors, repo review.
 
 ## Next
 
@@ -58,7 +59,7 @@ See `docs/agents/active/`. Vibe workers on omabook: power P2b, kona, misc-hw, au
 3. A kernel-side answer to the `qcom,kona` root rewrite that upstream can
    take (DTBO-PLAN §6).
 5. Power P2b (charger as a module), then P3 Type-C.
-6. Audio phase 1 (worker on macbookpro), kona upstream series (worker `kona`), UI issue drafts (worker on obsidian); modem/GNSS kernel side is built, gates A-C of MODEM-M5-DELTA §6 (stock wiring, packages, private-state policy) are the coordinator's.
+6. Audio: coordinator RAM-boots the phase-1 image (AUDIO-M5-PLAN §7), then phase 2 driver and the quiet speaker gate (§9). Kona upstream series (worker `kona`), UI issue drafts (worker on obsidian); modem/GNSS kernel side is built, gates A-C of MODEM-M5-DELTA §6 (stock wiring, packages, private-state policy) are the coordinator's.
 7. Backlog: disk encryption + boot passphrase / lock-screen PIN (issue #70).
 
 ## Offline UI proposals
