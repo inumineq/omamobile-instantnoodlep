@@ -32,6 +32,19 @@ detail lives in the *-PLAN.md files.
   text came from tty0 on the same framebuffer. Cause open (Hyprland on
   simpledrm, or the panel sleeping once the bootloader image is replaced):
   M3.
+- [V] Stock DTBO entry 16, applied by the bootloader on every boot, rewrites
+  the live root compatible to `qcom,kona-mtp`, `qcom,kona`, `qcom,mtp`.
+  This was observed in the live DT on 2026-11-17; the M1a overlay experiment
+  already recorded the merged root-compatible behavior (see the 2026-11-16
+  P3/P4 entry below). It makes root-machine tables keyed on `qcom,sm8250`
+  miss: `drivers/soc/qcom/ubwc_config.c` machine matching causes `msm-mdss`
+  probe to fail with `-EINVAL`; source inspection confirms the same match
+  issue in `qcom_pd_mapper.c` and the SM8250 entry in
+  `cpufreq-dt-platdev.c`. Use a neutral DTBO on `dtbo_b` before M3/M5 RAM
+  boots; the image must be prepared under the existing owner-gated slot-B
+  write rules. The public Nura package builds and installs its own empty
+  `dtbo.img` (`device/testing/device-oneplus-instantnoodlep/APKBUILD`,
+  `kernel_mainline()`), corroborating the approach.
 
 ## 2026-11-17 (night, later): M1b B4-B5 — slot B marked, M1b complete
 

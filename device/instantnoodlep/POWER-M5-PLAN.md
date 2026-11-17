@@ -16,6 +16,16 @@ gated runbook (AGENTS.md rule 6).
   writes only ever name slot-B boot images and `userdata`, each behind an
   owner go. All M5 phone steps are `fastboot boot` (RAM) first; nothing in
   this plan flashes anything. Never `fastboot flash`/`erase`/`--set-active`.
+- New prerequisite: neutral DTBO installed on `dtbo_b` through a separate
+  owner-gated slot-B write plan before RAM boot. Stock entry 16 changes the
+  live root compatible to `qcom,kona-mtp`, `qcom,kona`, `qcom,mtp`
+  [V: NOTES.md 2026-11-17 entry]. `cpufreq-dt-platdev.c` checks the machine
+  compatible blocklist before creating its generic platform device; with the
+  stock root it misses the `qcom,sm8250` blocklist entry and may register a
+  second cpufreq provider despite the SM8250 `cpufreq_hw` node [V:
+  L/drivers/cpufreq/cpufreq-dt-platdev.c, `blocklist` and
+  `cpufreq_dt_platdev_init`]. Nura's device package also installs an empty
+  DTBO [V: <https://gitlab.com/postmarketOS/pmaports/-/raw/master/device/testing/device-oneplus-instantnoodlep/APKBUILD>, `kernel_mainline()`].
 
 ## 1. Source pins
 
@@ -33,8 +43,13 @@ gated runbook (AGENTS.md rule 6).
   copied (AGENTS.md rule 5).
 - `U/` = derekross/omarchy-mobile @ `6c11752ae4c3bc59f0c7a7fd3cacc12e65d3c0c4`
   (FIRMWARE-PLAN pin). `M/` = torvalds/linux @ `aebb7274476403040d582c61478df8f4a7bf9cd3`
-  (DISPLAY-M3-PLAN pin). Remote URLs were not reachable from this
-  environment; claims resting on them are tagged [I] or cited via repo files.
+  (DISPLAY-M3-PLAN pin). `D/` = public Nura/OnePlus 8 Pro repository at
+  <https://github.com/darknagel/oneplus-instantnoodlep-nura-unofficial>,
+  including README and `docs/charging.md` (checked during review).
+- `D/` = public Nura/OnePlus 8 Pro repository
+  <https://github.com/darknagel/oneplus-instantnoodlep-nura-unofficial>;
+  its charging docs report the earlier overvoltage and the BQ27411-based
+  policy used in the newer image [V: README and docs/charging.md].
 
 ## 2. Hardware identification
 
@@ -44,7 +59,7 @@ gated runbook (AGENTS.md rule 6).
 | Stock wired charger | PM8150B (USID 2) SMB5 block, stock compatible `qcom,qpnp-smb5`, carries VOOC/Warp props (`qcom,vooc_project`, `qcom,input_current_vooc_ma_*`, `qcom,oplus-pps-usbpd-detection`, `qcom,wireless_support`), `qcom,external_gauge`, `qcom,batt_capacity_mah = <0x119e>` (4502 mAh) | [V: E/ fragment@2, `pm8150b_charger: qcom,qpnp-smb5` block] |
 | External charger IC | TI **BQ25980** on `i2c5` @ `0x66` | [V: DTS-PORT-PLAN §2.3 quoting C:626-637 `&i2c5` + `charger@66`] |
 | Fuel gauge | TI **BQ27411** on `i2c16` @ `0x55`; stock PM8150B FG (`qcom,fg-gen4`) is `status = "disabled"` with `qcom,external_gauge` | [V: DTS-PORT-PLAN §2.3 quoting C:639-647; E/ fragment@2 `pm8150b_fg` disabled] |
-| Battery | single pack, ID resistor read via PM8150B VADC `bat_id@4b`; stock profiles: ID 0x6b (107 kΩ) = 3600 mAh/4.35 V, ID 0x3c (60 kΩ) = 3450 mAh | [V: E/ fragment@2 vadc `bat_id@4b`; E/ fragment@72 `kona_mtp_batterydata`] |
+| Battery | single pack; the draft cites different capacities for the SMB5 and batterydata profiles | [I-P5-11: reconcile the owner's actual battery ID/profile before using any capacity or voltage value; the referenced entry16 source was not independently available in this review]. Do not choose a `simple-battery` capacity or charge limit from either value until the live profile is reconciled. |
 | USB-C controller | PM8150B (USID 2) `typec@1500` + `pdphy@1700`; stock sink PDOs 5 V/3 A, 9 V/3 A, 12 V/2.25 A; VBUS reg `0x1100`; stock wires `extcon = <&pm8150b_pdphy>` on usb0 and the QMP DP PHY | [V: E/ fragment@2 `pm8150b_pdphy qcom,default-sink-caps = <0x1388 0xbb8 0x2328 0xbb8 0x2ee0 0x8ca>`; E/ fragments 9-11] |
 | Wireless charging | IDT receiver behind OnePlus-specific pinctrl: pm8150 gpio10 `idt_en`, gpio1 `usbin_int` (`op_wlchg_pm8250_gpio`); pm8150l gpio8 `wrx_en`, gpio11 `wrx_otg` (`op_wlchg_pm8150a_gpio`) | [V: E/ fragment@0 `op_wlchg_pm8250_gpio`; E/ fragment@4 `op_wlchg_pm8150a_gpio`] |
 | Thermal sensors | SoC TSENS0 (16 sensors) + TSENS1 (9), PM8150/PM8150B/PM8150L temp-alarm (die temp), PM8150B VADC `chg_temp@9`, adc-tm `skin_therm@4d`/`conn_therm@4f` | [V: L/sm8250.dtsi:5039-5061 tsens0/tsens1 `qcom,sm8250-tsens`; L/pm8150.dtsi:78-83; L/pm8150b.dtsi:100-106, 130-133, 135-141; E/ fragment@2 vadc/adc_tm channels; E/ fragment@76 zones] |
@@ -61,26 +76,30 @@ gated runbook (AGENTS.md rule 6).
 | PM8150B SMB5 charger (`qcom,qpnp-smb5`, stock wired/VOOC path) | **no driver, no binding** in L: power/supply bindings list has no smb5; `qcom_smbx.c` matches only `qcom,pmi8998-charger` / `qcom,pm660-charger` | none [V: L/Documentation/devicetree/bindings/power/supply listing; L/drivers/power/supply/qcom_smbx.c:1036-1039] | node doesn't even exist (K2 does not include pm8150b.dtsi) [V: K2 dts includes] | nothing — deliberately not ported; VOOC/Warp is downstream-only (see verdict below) |
 | PMIC glink battery manager | exists but is an auxiliary `pmic_glink.power-supply` service for newer SoCs | `qcom_battmgr.c` id `pmic_glink.power-supply` [V: L/qcom_battmgr.c:1716-1720] | n/a | not used: this phone has a local I2C gauge (stock `qcom,external_gauge`, FG disabled) [V: E/ fragment@2] |
 | Direct SMBx driver | covers pmi8998/pm660 only, not PM8150B | `qcom_smbx.c` [V: :1036-1039] | n/a | not applicable to PM8150B |
-| TI BQ25980 on i2c5@0x66 | **present**: driver + binding | `drivers/power/supply/bq25980_charger.c` of_match `ti,bq25980/75/60` [V: :1271-1275]; binding `bq25980.yaml` requires `compatible`, `reg`, `monitored-battery` [V: L/.../bq25980.yaml:66-70] | node absent; i2c5/qupv3_id_0 disabled [V: L/sm8250.dtsi:1430-1910 i2c5 under qupv3_id_0, `status = "disabled"`; K2 dts enables only qupv3_id_1] | DTS commit: i2c5 + charger@66 node with supplies/interrupt from C:626-637 (values [I] until live-DT compare), qupv3_id_0 okay, pinctrl `qup_i2c5_default` (gpio12/13) [V: L/sm8250.dtsi:5310-5605] |
+| TI BQ25980 on i2c5@0x66 | driver + binding exist, but probing registers a charger supply and programs current/voltage limits during init [V: L/drivers/power/supply/bq25980_charger.c, `bq25980_hw_init`/`bq25980_set_input_*`] | `ti,bq25980` [V: :1271-1275]; binding requires `compatible`, `reg`, `monitored-battery` [V: L/.../bq25980.yaml:66-70] | node absent; i2c5/qupv3_id_0 disabled [V: L/sm8250.dtsi:1430-1910 i2c5 under qupv3_id_0, `status = "disabled"`; K2 dts enables only qupv3_id_1] | **Do not enable this node in M5** until a separate gated plan validates the exact unit battery profile and safe charger policy. A generic BQ25980 node is not proof it can safely replace the unsupported SMB5 control path. |
 | USB-PD sink negotiation | present | PM8150B typec + pdphy via `tcpm/qcom/qcom_pmic_typec.c` [V: :136-146] | typec node absent (no pm8150b.dtsi include) | see 3.3 |
 
 **Warp/VOOC verdict.** Stock runs Warp/VOOC on the PM8150B SMB5 with a large
 set of `qcom,vooc_*` / `qcom,oplus-pps-*` properties [V: E/ fragment@2]. That
 block has no mainline driver or binding [V: above], and the VOOC protocol
 itself is downstream-only — porting it would mean reimplementing a proprietary
-protocol, which AGENTS.md rule 5 forbids doing from decompiled code. **M5
-ceiling is therefore slow charging only: 5 V USB through the BQ25980, plus
-USB-PD sink contracts up to 12 V/2.25 A negotiated by the PM8150B PDPHY**
-[V: E/ fragment@2 default-sink-caps; L/ qcom,pmic-typec.yaml]. Whether the
-BQ25980 or the (driverless) SMB5 sits in the VBUS→BAT path on this unit is
-[I-P5-1], resolved at gate R2 by which `power_supply` reports online.
+protocol, which AGENTS.md rule 5 forbids doing from decompiled code. This
+plan does **not** claim charging support: the main wired charger is SMB5, for
+which this tree has no driver. The external BQ25980 driver programs charger
+limits on probe, so enabling it before a reviewed policy is unsafe. A public
+Nura report documents an earlier 4.76 V overcharge and a later BQ27411-based
+charging-policy fix [V: D/README, warning; D/docs/charging.md]. Defer all
+charger-node enablement and charging tests to a separate gated plan with the
+exact battery profile, regulator path, voltage/current safety bounds, and
+owner approval. M5 checks battery telemetry and Type-C role/PD detection only;
+it makes no charger property writes and requests no charging/high-voltage PD.
 
 ### 3.2 Fuel gauge, battery, temperature
 
 | Piece | Mainline status | Driver / binding | K2 today | Missing for M5 |
 | --- | --- | --- | --- | --- |
 | Fuel gauge BQ27411 @ i2c16:0x55 | present | `bq27xxx_battery_i2c.c` of_match includes `ti,bq27411` [V: L/bq27xxx_battery_i2c.c:273]; binding `bq27xxx.yaml` enum includes `ti,bq27411`, requires `monitored-battery`, and forbids `interrupts` for it [V: L/.../bq27xxx.yaml:40, 76-96] | node absent; i2c16/qupv3_id_2 disabled [V: L/sm8250.dtsi:1000-1430 i2c16 under qupv3_id_2] | DTS commit: i2c16 + fuel-gauge@55 from C:639-647 ([I] values), qupv3_id_2 okay, pinctrl `qup_i2c16_default` (gpio48/49) [V: L/sm8250.dtsi:5310-5605] |
-| Battery node | `simple-battery` binding present (`battery.yaml`) | community uses static design data [V: DTS-PORT-PLAN §2.1 C:274-280] | absent | simple-battery node; design values from C:274-280 [I] cross-checked against stock batterydata (4.35 V max, 3600/3450 mAh by ID) [V: E/ fragment@72] |
+| Battery node | `simple-battery` binding present (`battery.yaml`) | community DTS includes static design data [V: DTS-PORT-PLAN §2.1 C:274-280] | absent | fuel-gauge node only for M5 telemetry; add `simple-battery` only after the exact unit battery ID/profile is reconciled. Do not port static capacity/voltage values from C or infer them from the conflicting draft evidence. |
 | Battery temperature | gauge reports TEMP via power_supply [I-P5-2: confirm prop name at R2]; PM8150B VADC `chg_temp@9` exists [V: L/pm8150b.dtsi:130-133]; adc-tm `skin_therm@4d`/`conn_therm@4f` exist but `pm8150b_adc_tm` is disabled [V: L/pm8150b.dtsi:135-141]; stock zones: skin-therm trips 46/47/49/50 °C, conn-therm 125 °C, all `wake-capable-sensor` [V: E/ fragment@76] | `qcom,spmi-adc5` / `qcom,spmi-adc-tm5` / `qcom,spmi-temp-alarm` drivers in L [V: L/drivers/iio/adc/qcom-spmi-adc5.c, qcom-spmi-adc-tm5.c; L/drivers/thermal/qcom/qcom-spmi-temp-alarm.c] | pm8150b.dtsi not included; pm8150 adc/temp exist but unused | enable pm8150b temp-alarm + adc; optionally adc-tm + 2 board zones with stock trips (commit 4) |
 
 ### 3.3 USB-C role switching and orientation
@@ -109,10 +128,10 @@ description exists.
 
 | Piece | Status | Evidence |
 | --- | --- | --- |
-| TSENS | generic nodes present: tsens0 (16 sensors), tsens1 (9), `qcom,sm8250-tsens` | [V: L/sm8250.dtsi:5039-5061] |
+| TSENS | generic, node-matched sensors present: tsens0 (16 sensors), tsens1 (9), `qcom,sm8250-tsens`; the TSENS driver matches node compatibles, not the root machine compatible | [V: L/sm8250.dtsi:5039-5061; L/drivers/thermal/qcom/tsens.c, `tsens_table`] |
 | SoC thermal zones | present in dtsi: cpu0-3, cpu4-7 top/bottom, aoss0/1, cluster0/1, gpu top/bottom (cooling-maps to CPUs/GPU), plus tsens1 zones (wlan, video, mem, camera, npu, compute) | [V: L/sm8250.dtsi:6313-7072] |
 | PMIC die-temp zones | `pm8150-thermal` and `pm8150b-thermal` zones with 95/115/145 °C trips ship in the PMIC dtsis; pm8150 one is active once pm8150.dtsi is included (already is), pm8150b one activates with commit 1 | [V: L/pm8150.dtsi:11-37, 78-83; L/pm8150b.dtsi:11-37, 100-106] |
-| cpufreq | `cpufreq_hw: cpufreq@18591000` `qcom,sm8250-cpufreq-epss` with 3 freq-domains; cpus reference `&cpufreq_hw` + `cpu0/4/7_opp_table`; driver `qcom-cpufreq-hw.c` | [V: L/sm8250.dtsi:6283-6301, 93-99, 372-700; L/drivers/cpufreq/qcom-cpufreq-hw.c:756-763]. K2 already boots 8 CPUs with no cpufreq defer [V: NOTES.md 2026-11-16 R3] — sanity gate R5 only re-checks `scaling_driver` |
+| cpufreq | `cpufreq_hw: cpufreq@18591000` `qcom,sm8250-cpufreq-epss` with 3 freq-domains; CPUs reference `&cpufreq_hw` + `cpu0/4/7_opp_table`; driver `qcom-cpufreq-hw.c` | [V: L/sm8250.dtsi:6283-6301, 93-99, 372-700; L/drivers/cpufreq/qcom-cpufreq-hw.c:756-763]. The separate `cpufreq-dt-platdev` init uses a root-machine blocklist containing `qcom,sm8250`; if stock DTBO replaces the root with Kona/MTP strings, that check misses and may register generic `cpufreq-dt` in addition to the hardware provider [V: L/drivers/cpufreq/cpufreq-dt-platdev.c, `blocklist` and `cpufreq_dt_platdev_init`]. K2's previous clean boot is not proof with the stock overlay; after neutral DTBO, verify no `cpufreq-dt` device and `scaling_driver=qcom-cpufreq-hw` |
 | cpuidle | idle-states `cpu-sleep-0-0`/`cpu-sleep-1-0` (psci suspend param 0x40000004) + `cluster-sleep-0` (0x4100c244); psci `arm,psci-1.0` method smc with cpu_pd0-7 + cluster_pd | [V: L/sm8250.dtsi:337-367, 721-749] |
 
 ### 3.6 Suspend-to-idle and wake sources
@@ -167,9 +186,9 @@ PON part of commit 5; the rest of those commits stays with their owners.
 
 | # | Commit | Content |
 | --- | --- | --- |
-| 0 | (repo, not kernel) `device/instantnoodlep/kernel.config` additions | POWER_SUPPLY, BQ25980 charger, BQ27XXX battery+I2C, TYPEC_TCPM, USB_ROLE_SWITCH, QCOM_SPMI_ADC5, QCOM_SPMI_ADC_TM5, QCOM_SPMI_TEMP_ALARM, QCOM_TSENS, RTC_DRV_PM8XXX; verify QCOM_CPUFREQ_HW/THERMAL/CPU_IDLE already set. Exact symbols [I-P5-3] checked against L Kconfigs at O2 |
+| 0 | (repo, not kernel) `device/instantnoodlep/kernel.config` additions | POWER_SUPPLY, BQ27XXX battery+I2C, TYPEC_TCPM, USB_ROLE_SWITCH, QCOM_SPMI_ADC5, QCOM_SPMI_ADC_TM5, QCOM_SPMI_TEMP_ALARM, QCOM_TSENS, RTC_DRV_PM8XXX; do **not** enable BQ25980 until its separate safe-charge plan passes; verify `BATTERY_BQ27XXX_DT_UPDATES_NVM` is unset because that option writes gauge NVM [V: L/drivers/power/supply/Kconfig, option help]. Verify QCOM_CPUFREQ_HW/THERMAL/CPU_IDLE already set. Exact symbols [I-P5-3] checked against L Kconfigs at O2 |
 | 1 | `arm64: dts: qcom: instantnoodlep: Add PM8150B Type-C, VBUS and USB role switch` | include pm8150b.dtsi; `&pm8150b_typec` okay + vdd-pdphy-supply + connector graph; `&pm8150b_vbus` okay; `&usb_1_dwc3` otg + usb-role-switch + HS endpoint (DTS-PORT-PLAN commit 8; C:751-793, 916-918) |
-| 2 | `arm64: dts: qcom: instantnoodlep: Add battery, fuel gauge and charger` | simple-battery node; `&qupv3_id_0`/`&i2c5` + `charger@66` (ti,bq25980, monitored-battery); `&qupv3_id_2`/`&i2c16` + `fuel-gauge@55` (ti,bq27411, monitored-battery); pinctrl qup_i2c5/16_default (DTS-PORT-PLAN commit 6; C:274-280, 626-647) |
+| 2 | `arm64: dts: qcom: instantnoodlep: Add battery and fuel-gauge telemetry` | `simple-battery` only after the unit's battery ID/profile is reconciled; `&qupv3_id_2`/`&i2c16` + `fuel-gauge@55` (ti,bq27411, monitored-battery); pinctrl `qup_i2c16_default` (DTS-PORT-PLAN commit 6; C:274-280, 639-647). Do not enable `&i2c5`/BQ25980 in this series; require a separate charger-policy plan first. |
 | 3 | `arm64: dts: qcom: instantnoodlep: Enable PON keys and reboot modes` | `&pon` (pm8150@0) okay, `&pon_pwrkey`/`&pon_resin` okay, `mode-bootloader = <2>`, `mode-recovery = <1>`; pm8150b `pon@800` stays disabled |
 | 4 | `arm64: dts: qcom: instantnoodlep: Enable PM8150B thermal ADC and skin/conn zones` | `&pm8150b_temp`/`&pm8150b_adc` active via include; `&pm8150b_adc_tm` okay + board thermal-zones skin-therm/conn-therm with stock trips [V: E/ fragment@76] |
 
@@ -192,12 +211,12 @@ export K2DTB=/path/to/private/k2-build/arch/arm64/boot/dts/qcom/sm8250-oneplus-i
 
 | Gate | Command or review | Expect/pass | Stop | Rollback |
 | --- | --- | --- | --- | --- |
-| O0 Inputs | M1b complete (slot B default, flags recorded); M2/M3 state recorded; DTS-PORT-PLAN D0-D9 passed; L pinned | all present | any input missing | no changes; return to owning ticket |
+| O0 Inputs | M1b complete (slot B default, flags recorded); neutral DTBO owner-gated install on `dtbo_b` complete; live root compatible verified; M2/M3 state recorded; battery ID/profile reconciled for `simple-battery`; DTS-PORT-PLAN D0-D9 passed; L pinned | all present; no BQ25980 node/driver in the M5 image | missing prerequisite, unresolved battery profile, or an unreviewed charger node | no changes; return to owning ticket |
 | O1 Binding baseline | `make -C "$L" O="$OUT" dt_binding_check` on unchanged base; repeat after each commit | baseline recorded; no new schema errors (no new bindings expected) | new error | drop the offending edit |
-| O2 Build + config | `make -C "$L" O="$OUT" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- qcom/sm8250-oneplus-instantnoodlep.dtb` after every commit; verify the commit-0 config symbols exist in L Kconfig | dtc exit 0, DTB produced; no unknown symbol | build error / unknown CONFIG | delete output; fix current commit only |
+| O2 Build + config | `make -C "$L" O="$OUT" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- qcom/sm8250-oneplus-instantnoodlep.dtb` after every commit; verify the commit-0 config symbols exist in L Kconfig and `CONFIG_BATTERY_BQ27XXX_DT_UPDATES_NVM` is unset | dtc exit 0, DTB produced; no unknown symbol; gauge NVM-update option disabled | build error / unknown CONFIG or gauge NVM-update option enabled | delete output; fix current commit only |
 | O3 Schema | `make ... dtbs_check` | no new warning/error for this board | typec/connector/power-supply schema failure | revert uncommitted change |
-| O4 Node checks | fdtget block below vs `"$DTB"`; diff vs `"$K2DTB"` | diff limited to the M5 set (pm8150b include, typec/vbus, dwc3 otg+role-switch, i2c5/16 children, pon, adc_tm zones) | any extra enable or missing node | discard output; fix defining commit |
-| O5 Live-DT compare | decompile `"$DTB"` + stage-0 live.dtb; classify differences; check C's charger/gauge supplies+IRQ GPIOs against live DT | no unexplained power-node difference | unexplained difference | suppress candidate; update plan |
+| O4 Node checks | fdtget block below vs `"$DTB"`; diff vs `"$K2DTB"` and live DT | diff limited to the M5 set (PM8150B Type-C/thermal, dwc3 role-switch, i2c16 gauge, PON); built/live root is `oneplus,instantnoodlep`, `qcom,sm8250`; no BQ25980 node | any extra enable, wrong live compatible, or missing node | discard output; return to neutral-DTBO gate / fix defining commit |
+| O5 Live-DT compare | decompile `"$DTB"` + stage-0 live.dtb; classify differences; check the gauge supplies/IRQ against live DT; do not enable BQ25980 | no unexplained power-node difference | unexplained difference | suppress candidate; update plan |
 | O6 Packaging | build the M5 boot image with the PR-#44 builder; assert no UFS write allowlist; upower present in rootfs | builder exits 0 | builder refuses | delete images |
 | O7 Release | review commits 0-4, O1-O6 logs, hashes, open [I]s with coordinator/owner | written approval for one RAM boot | any failed gate | keep current state; do not boot |
 
@@ -209,13 +228,12 @@ fdtget -t s "$DTB" /soc@0/spmi@c440000/pmic@2/typec@1500/connector compatible # 
 fdtget -t s "$DTB" /soc@0/spmi@c440000/pmic@2/usb-vbus-regulator@1100 status # okay
 fdtget -t s "$DTB" /soc@0/usb@a6f8800/usb@a600000 dr_mode                     # otg
 fdtget -t s "$DTB" /soc@0/usb@a6f8800/usb@a600000 usb-role-switch             # (present)
-fdtget -t s "$DTB" /soc@0/geniqup@9c0000/i2c@994000/charger@66 compatible   # ti,bq25980
 fdtget -t s "$DTB" /soc@0/geniqup@8c0000/i2c@888000/fuel-gauge@55 compatible # ti,bq27411
 fdtget -t s "$DTB" /soc@0/spmi@c440000/pmic@0/pon@800 status                 # okay
 fdtget -t x "$DTB" /soc@0/spmi@c440000/pmic@0/pon@800 mode-bootloader         # 2
 fdtget -t s "$DTB" /soc@0/spmi@c440000/pmic@2/pon@800 status                 # disabled
 fdtget -t s "$DTB" / battery compatible                                      # simple-battery
-fdtget -t s "$DTB" / compatible                                              # oneplus,instantnoodlep qcom,sm8250 (unchanged)
+fdtget -t s "$DTB" / compatible                                              # oneplus,instantnoodlep qcom,sm8250
 ```
 
 ### 7.2 Owner gates (phone; RAM boot first)
@@ -227,11 +245,11 @@ serial (private, never pasted). Captures go to `captures/<date>/m5/`
 | # | Step | Expect | Stop | Rollback |
 | --- | --- | --- | --- | --- |
 | G1 | `fastboot -s {{SERIAL}} devices`; `getvar current-slot` + slot flags recorded | one device; flags equal the M1b B5 capture (`current-slot:b`, successful:b yes) | flags differ | `fastboot reboot`; slot-B Linux boots (B5-marked) |
-| R1 | `fastboot -s {{SERIAL}} boot {{K5_IMG}}`; ssh root@172.16.42.1; dmesg | `Booting OKAY`; probes: `bq25980` on i2c5, `bq27xxx` on i2c16, `qcom-pon` on pmic@0 only (no -EEXIST), `qcom_pmic_typec`, `qcom-tsens` x2, `qcom-cpufreq-hw`, `rtc-pm8xxx`; SSH works | FAILED remote msg, no SSH in 2 min, pon -EEXIST, any firmware error | hold Power+VolUp 10-30 s; slot-B boots |
-| R2 | over SSH: `ls /sys/class/power_supply/`; `cat .../battery/{capacity,status,temp,voltage_now,charge_full*}`; owner plugs a 5 V USB charger; `cat .../charger/{online,current_now,voltage_now}`; `upower -d` | battery psy present with sane values; charger online, current_now > 0; upower lists the battery | no battery psy, no charger psy, or online never asserts | `reboot -f`; record which path is live (I-P5-1) |
+| R1 | `fastboot -s {{SERIAL}} boot {{K5_IMG}}`; ssh root@172.16.42.1; read `/sys/firmware/devicetree/base/compatible`; dmesg | `Booting OKAY`; live root is `oneplus,instantnoodlep` + `qcom,sm8250`; probes: `bq27xxx` on i2c16, `qcom-pon` on pmic@0 only (no -EEXIST), `qcom_pmic_typec`, `qcom-tsens` x2, `qcom-cpufreq-hw`, `rtc-pm8xxx`; no BQ25980 probe; SSH works | wrong live root; BQ25980 unexpectedly bound; FAILED remote msg, no SSH in 2 min, pon -EEXIST, any firmware error | hold Power+VolUp 10-30 s; slot-B boots |
+| R2 | over SSH: `ls /sys/class/power_supply/`; read battery capacity/status/temp/voltage/charge-full properties and `upower -d`. **Do not plug a charger for this M5 plan**; no charger control/property write and no BQ25980 node is enabled. | BQ27411 battery telemetry is present and plausible; upower lists the battery; battery ID/profile is recorded without changing charge limits | missing gauge data, implausible voltage/temp, or unit profile not reconciled | `reboot -f`; record telemetry; do not proceed to charging until the separate safe-charge plan passes |
 | R3 | over SSH: `ls /sys/class/typec/`, `cat .../port0/{power_role,data_role,orientation}`; `cat /sys/class/usb_role/usb_1_dwc3-role-switch/role`; owner plugs the laptop cable both orientations | typec port present; role switches peripheral↔host; data_role dual; orientation flips; dwc3 enumerates as peripheral to the laptop (NCM up) | no typec port; role stuck peripheral; no enumeration either orientation | `reboot -f` |
 | R4 | over SSH: `cat /sys/power/mem_sleep`; `systemctl suspend`; owner presses power key to wake; then `rtcwake -m mem -s 15` and watch dmesg for RTC alarm wake | suspend enters (s2idle), wakes on pwrkey and on RTC alarm; `dmesg` shows wake source | hangs in suspend (no wake) | hard reboot; record; check wakeirqs in /proc/interrupts |
-| R5 | over SSH: `ls /sys/class/thermal/`; `cat .../thermal_zone*/type temp` (pm8150b-thermal, tsens zones); `cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_driver`; `cat .../scaling_cur_freq` | zones present with sane temps; scaling_driver `qcom-cpufreq-hw`; freq within opp table | missing zones or wrong driver | `reboot -f` |
+| R5 | over SSH: `ls /sys/class/thermal/`; read thermal zone types/temps; `cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_driver`; list cpufreq platform devices and confirm no generic `cpufreq-dt` instance | TSENS/PMIC zones present with plausible temps; `scaling_driver` is `qcom-cpufreq-hw`; no duplicate `cpufreq-dt`; frequency within OPP table | missing zones, `cpufreq-dt` also registered, wrong driver, or implausible temperatures | `reboot -f`; stop and review neutral-DTBO / machine matching |
 | R6 | over SSH: `reboot --reboot-argument=bootloader`; expect fastboot in <10 s [V: NOTES B4 precedent]. Optional, owner only: `reboot --reboot-argument=recovery` lands in stock recovery — do NOT choose wipe | fastboot reached; slot flags unchanged afterwards | not in fastboot in 30 s | hold Power 30 s; slot-B boots |
 | R7 | `fastboot -s {{SERIAL}} getvar all` (filtered); boot slot-B Linux once normally | slot flags equal G1; nothing written by any step | any flag changed | stop; record; ask on #808 before further boots |
 
@@ -239,7 +257,7 @@ serial (private, never pasted). Captures go to `captures/<date>/m5/`
 
 | ID | Open inference | Resolution gate |
 | --- | --- | --- |
-| I-P5-1 | Which charger IC is in the VBUS→BAT path on this unit (BQ25980 vs the driverless SMB5) | R2: which power_supply reports online + current; O5 live-DT compare of C:626-637 supplies |
+| I-P5-1 | Which path charges the battery and whether the BQ25980 can safely operate without the unsupported SMB5 policy | Not resolved by this M5 plan. A separate charger-policy plan must identify the path, validate the unit battery profile/limits, and gate any charge test; M5 must not enable BQ25980. |
 | I-P5-2 | BQ27411 reports battery TEMP through power_supply under the name the bq27xxx driver uses | R2 `.../battery/temp` |
 | I-P5-3 | Exact CONFIG symbols for commit 0 (POWER_SUPPLY, BQ25980_CHARGER, BQ27XXX_BATTERY*, TYPEC_TCPM, USB_ROLE_SWITCH, QCOM_SPMI_*, QCOM_TSENS, RTC_DRV_PM8XXX) as named in L Kconfig | O2 build |
 | I-P5-4 | SS (SuperSpeed) lane polarity on usb_1_qmpphy is board-fixed; only CC/HS orientation is dynamic | R3 flipped-plug test |
@@ -249,13 +267,15 @@ serial (private, never pasted). Captures go to `captures/<date>/m5/`
 | I-P5-8 | Arch Linux ARM package names (upower, rtcwake) as listed in §5 | O6 image build |
 | I-P5-9 | `mode-recovery = <1>` lands in stock recovery without touching data (only bootloader mode is proven) | R6 optional owner step; Stop = do not wipe |
 | I-P5-10 | Whether host (source) mode with VBUS boost works for OTG accessories | R3; if not, keep `dr_mode="otg"` but document sink-only in practice |
+| I-P5-11 | A safe charging policy for this unit's exact battery profile; a public Nura release reported an overvoltage before a BQ27411 policy fix [V: D/README; D/docs/charging.md] | separate gated charge-policy plan; no charger test or BQ25980 enablement in this plan |
 
 ## 9. Definition of done for M5 power
 
 O0-O7 pass; G1 and R1-R7 pass with pasted (redacted) output; upower shows the
-battery with capacity/temp and the charger online at 5 V; Type-C role switch
+battery with capacity/temp; Type-C role switch
 and both orientations work with the K2 gadget networking preserved; suspend
 enters s2idle and wakes on power key and RTC alarm; `reboot bootloader` works
 from the board DTS alone; thermal zones and qcom-cpufreq-hw report sane
 values; slot flags are unchanged; commits 1-4 exist in a linux-omarchy-mobile
-branch with gates rerun; results appended to NOTES.md with dates.
+branch with gates rerun; results appended to NOTES.md with dates. Charging
+remains out of scope for this run until the separate safe-charge plan passes.

@@ -23,6 +23,17 @@ this plan exists with its gated runbook (AGENTS.md rule 6).
   `devinfo`, `persist`, `efs*`, `modem*` or bootloader/radio partitions
   (AGENTS.md rule 3). Firmware comes from the owner's own OTA at install
   time per `firmware.map`, never from git (rule 8).
+- New prerequisite: neutral DTBO installed on `dtbo_b` under a separate
+  owner-gated slot-B write plan before any RAM boot. Stock entry 16 rewrites
+  the live root compatible to `qcom,kona-mtp`, `qcom,kona`, `qcom,mtp`
+  [V: NOTES.md 2026-11-17 entry]. The PAS remoteproc registers a PDM
+  auxiliary subdevice and `QCOM_PD_MAPPER` uses `of_machine_get_match()` to
+  select the SM8250 domain/service table [V: L/drivers/remoteproc/qcom_common.c,
+  `qcom_add_pdm_subdev`; L/drivers/soc/qcom/qcom_pd_mapper.c,
+  `qcom_pdm_start`/`sm8250_domains`]. With the stock live root it cannot match
+  `qcom,sm8250`; audio is blocked until the neutral overlay restores the
+  intended machine compatible. The pmaports device package builds and installs
+  an empty DTBO [V: <https://gitlab.com/postmarketOS/pmaports/-/raw/master/device/testing/device-oneplus-instantnoodlep/APKBUILD>, `kernel_mainline()`].
 
 ## 1. Source pins
 
@@ -43,9 +54,12 @@ this plan exists with its gated runbook (AGENTS.md rule 6).
   `gitlab.nura.eco/soc/qualcomm-sm8250/linux` @ `3c5440e9dd3c3e3b5735ad8f1b22bdfd02c707d9`
   (pinned in DTS-PORT-PLAN §1). **Not opened in this session** (no network
   here): every C/-dependent claim below is [I] until the tree is fetched.
-- Remote sources I could not open in this session (no network connector):
-  the darknagel repo, postmarketOS wiki/pmaports, alsa-ucm-conf upstream.
-  Claims relying on them are [I].
+- `D/` = public Nura/OnePlus 8 Pro sources; `docs/audio.md` and the main README
+  were checked during review. `alsa-ucm-conf` upstream's generic RB5
+  `ucm2/Qualcomm/sm8250/HiFi.conf` was also checked; it is not an
+  instantnoodlep-specific profile.
+- The pinned Nura kernel `C/` audio tree was still unavailable behind its
+  Anubis gate, so C-only node-shape claims remain [I].
 
 ## 2. Hardware identification
 
@@ -74,8 +88,8 @@ adsp|sound|swr|wcd|amp is empty apart from the memory nodes].
 | Piece | Mainline status | Driver / binding | K2 today | Missing for M5 |
 | --- | --- | --- | --- | --- |
 | ADSP node | generic, `remoteproc@17300000`, `qcom,sm8250-adsp-pas`, `memory-region = <&adsp_mem>`, status disabled | `qcom_q6v5_pas`: `sm8250_adsp_resource` (pas_id 1, auto_boot, default fw `adsp.mdt`, DT `firmware-name` overrides) [V: L/ qcom_q6v5_pas.c:1066-1081, :1891, :838-846]; dtsi node L/ sm8250.dtsi:6008-6034 | disabled; `adsp_mem` reserved (37 MiB at 0x91b00000) [V: DTS-PORT-PLAN §2.1] | `status = "okay"` + `firmware-name` matching the firmware.map adsp row (§4) |
-| APR / glink | generic (smp2p, ipcc, aoss_qmp, rpmhpd all present in dtsi) | `qcom,apr-v2` edge with services q6core/q6afe/q6asm/q6adm [V: L/ sm8250.dtsi:6046-6097]; drivers `qdsp6/q6afe*.c, q6asm*.c, q6adm.c, q6routing.c, q6core.c` [V: L/ sound/soc/qcom/qdsp6/ listing] | not enabled (child of adsp) | nothing — comes up with ADSP; needs CONFIG_QCOM_APR + SOUNDWIRE [V: L/ sound/soc/qcom/Kconfig:187] |
-| **q6afe/q6asm/q6adm vs audioreach** | SM8250 dtsi describes the **classic** q6 services; `audioreach.c`/`q6apm*.c` exist in the tree but bind to `qcom,q6apm*` compatibles that sm8250.dtsi does **not** have | decision: **q6afe/q6asm/q6adm** (audioreach is for newer SoCs whose ADSP firmware speaks the APM protocol) | n/a | nothing; the ADSP firmware from the OTA serves the v2 APR services the dtsi encodes [V: L/ sm8250.dtsi:6046-6097; I-A8: C/ tree not opened, but the Nura image runs speakers/mics on this SoC family [V: NOTES.md 2026-11-15]] |
+| APR / glink / PDM mapper | generic (smp2p, ipcc, aoss_qmp, rpmhpd all present in dtsi) | `qcom,apr-v2` edge with services q6core/q6afe/q6asm/q6adm [V: L/ sm8250.dtsi:6046-6097]; PAS adds a PDM auxiliary subdevice [V: L/drivers/remoteproc/qcom_common.c, `qcom_add_pdm_subdev`]; `QCOM_PD_MAPPER` selects its machine domain table using `of_machine_get_match()` [V: L/drivers/soc/qcom/qcom_pd_mapper.c, `qcom_pdm_start`] | not enabled (child of ADSP) | enable/verify `QCOM_PD_MAPPER` plus APR/QRTR/QMI/PDR/AUXILIARY_BUS prerequisites, and pass the neutral-DTBO gate so the SM8250 match succeeds; root machine match is not fixed by the ADSP DTS |
+| **q6afe/q6asm/q6adm vs audioreach** | SM8250 dtsi describes the **classic** q6 services; `audioreach.c`/`q6apm*.c` exist in the tree but bind to `qcom,q6apm*` compatibles that sm8250.dtsi does **not** have | decision: **q6afe/q6asm/q6adm** (audioreach is for newer SoCs whose ADSP firmware speaks the APM protocol) | n/a | nothing; the ADSP/SLPI firmware versions and service layout still require the per-device firmware gate [V: L/ sm8250.dtsi:6046-6097; D/docs/audio.md says its tested IN2023 image used the phone's own SLPI with packaged ADSP] |
 | Machine driver | `sound/soc/qcom/sm8250.c`, compatible `qcom,sm8250-sndcard` [V: L/ sm8250.c:214; Kconfig SND_SOC_SM8250:185-196, depends on QCOM_APR && SOUNDWIRE, selects QDSP6/QCOM_COMMON/QCOM_SDW]; binding `qcom,sm8250.yaml` enum includes `qcom,sm8250-sndcard` [V: L/ bindings/sound/qcom,sm8250.yaml:54] and dai-link subnode schema :76-115, `aux-devs` :66-70 | `sound: sound {}` empty node exists, board fills it [V: L/ sm8250.dtsi:6315-6316] | sound card with dai-links (§3.7), mtp pattern [V: L/ sm8250-mtp.dts:655-757] |
 
 ### 3.2 LPASS macros and SoundWire controllers
@@ -158,9 +172,9 @@ No codec/amp firmware: wcd938x, wsa881x, tfa989x, dmic request none [V: no reque
 | Need | Plan | Evidence |
 | --- | --- | --- |
 | PipeWire + WirePlumber + ALSA | upstream's `omamobile-audio` package already depends on `alsa-ucm-conf pipewire wireplumber swh-plugins alsa-lib alsa-utils` and ships pipewire/wireplumber config, udev rules and ucm2 overrides (`ucm2/Google/`, `conf.d/`) | [V: U/ packages/omamobile-audio/PKGBUILD:10; dir listing pipewire/ wireplumber/ ucm2/ systemd/ udev.rules] |
-| UCM profile for this card | ship `ucm2/OnePlus/instantnoodlep*.conf` in our device package (dodge precedent: `device/dodge/audio/ucm2/OnePlus/` + `OnePlus-dodge.m4`), installed over alsa-ucm-conf's `conf.d`. Whether upstream alsa-ucm-conf already has a qcom sm8250 profile is [I-A4] (remote not opened); either way the device package wins | [V: U/ device/dodge/audio/ listing] |
+| UCM profile for this card | ship `ucm2/OnePlus/instantnoodlep*.conf` in our device package, installed over alsa-ucm-conf's `conf.d`. Upstream has a generic Qualcomm RB5 profile at `ucm2/Qualcomm/sm8250/HiFi.conf`, but it is not an instantnoodlep profile [V: <https://raw.githubusercontent.com/alsa-project/alsa-ucm-conf/master/ucm2/Qualcomm/sm8250/HiFi.conf>]. The device package must supply/override board-specific routes. |
 | Bring-up service | dodge pattern: `omamobile-<device>-audio.service` running an `audio-bringup.sh` that waits for `/sys/class/remoteproc/*/name = adsp` to reach `online`, loads fastrpc + snd-soc modules in order, checks `/proc/device-tree/sound/compatible` | [V: U/ device/dodge/audio/audio-bringup.sh:36-40, install:8-26] |
-| Kernel modules | audio drivers as **modules** (K2 kernel limit unmeasured [V: device/instantnoodlep/kernel.config:12-13]); pin in the M5 config fragment: `SND_SOC_SM8250=m`, `SND_SOC_WCD938X_SDW=m`, `SND_SOC_LPASS_RX_MACRO/TX_MACRO/VA_MACRO=m` (+`WSA_MACRO` if path B), `SND_SOC_WSA881X=m` or `SND_SOC_TFA989X=m`, `SND_SOC_DMIC=m`, `SOUNDWIRE_QCOM=m`, `QCOM_APR` (with glink), `SND_USB_AUDIO=m` for USB-C digital; QDSP6/QCOM_COMMON/QCOM_SDW come via `select` [V: L/ qcom/Kconfig:185-196]; K2 config has only `QCOM_Q6V5_PAS=m`/`QCOM_SYSMON=m`, no SND* [V: kernel.config:70-71] | config edit belongs to the M5 implementation ticket, not this file |
+| Kernel modules | audio drivers as **modules** (K2 kernel limit unmeasured [V: device/instantnoodlep/kernel.config:12-13]); pin in the M5 config fragment: `SND_SOC_SM8250=m`, `SND_SOC_WCD938X_SDW=m`, `SND_SOC_LPASS_RX_MACRO/TX_MACRO/VA_MACRO=m` (+`WSA_MACRO` if path B), `SND_SOC_WSA881X=m` or `SND_SOC_TFA989X=m`, `SND_SOC_DMIC=m`, `SOUNDWIRE_QCOM=m`, `QCOM_APR` (with glink), `QCOM_PD_MAPPER` (and QRTR/QMI/PDR/AUXILIARY_BUS dependencies), `SND_USB_AUDIO=m` for USB-C digital; QDSP6/QCOM_COMMON/QCOM_SDW come via `select` [V: L/sound/soc/qcom/Kconfig:185-196; L/drivers/soc/qcom/Kconfig, `QCOM_PD_MAPPER`]; K2 config has only `QCOM_Q6V5_PAS=m`/`QCOM_SYSMON=m`, no SND* [V: kernel.config:70-71] | O1 must show `QCOM_PD_MAPPER` is built and available before ADSP start; the neutral-DTBO gate is required for its SM8250 machine table |
 | hexagonrpcd / libssc | **not needed** for basic audio — the q6 services are kernel-side via APR; userspace never opens the DSP directly for playback/capture. Revisit only for offload use-cases | [I: dodge runs them for other reasons; not verified here] |
 
 ## 6. Kernel-side commit order (in linux-omarchy-mobile `~/src/l`, not this repo)
@@ -198,11 +212,11 @@ export K2DTB=/path/to/private/k2-build/arch/arm64/boot/dts/qcom/sm8250-oneplus-i
 
 | Gate | Command or review | Expect/pass | Stop | Rollback |
 | --- | --- | --- | --- | --- |
-| O0 Inputs | M1b/M2/M3 results recorded; FIRMWARE-PLAN F0-F6 passed (adsp row mapped, names only); L pinned at `a28aaf1a09db` | all present | any input missing | no changes; return to owning ticket |
-| O1 Config audit | `make -C "$L" O="$OUT" ARCH=arm64 defconfig` + omamobile.config + kernel.config; grep resulting `.config` for QCOM_APR, GLINK, SOUNDWIRE, SND_SOC | APR/glink/soundwire core present or pinned by the commit-6 fragment; no SND_SOC_SM8250 yet on base | base lacks a prerequisite that commit 6 does not add | fix the fragment, not the base |
+| O0 Inputs | M1b/M2/M3 results recorded; neutral DTBO owner-gated install on `dtbo_b` complete and live root compatible verified; FIRMWARE-PLAN F0-F6 passed (ADSP row mapped, names only); L pinned at `a28aaf1a09db` | all present | any input missing, stock root compatible, or `QCOM_PD_MAPPER` unresolved | no changes; return to owning ticket |
+| O1 Config audit | `make -C "$L" O="$OUT" ARCH=arm64 defconfig` + omamobile.config + kernel.config; grep resulting `.config` for QCOM_APR, GLINK, SOUNDWIRE, QCOM_PD_MAPPER, QRTR, QCOM_QMI_HELPERS, QCOM_PDR_HELPERS, AUXILIARY_BUS, SND_SOC | APR/glink/soundwire and PDM mapper/dependencies are built or loadable before ADSP start; no SND_SOC_SM8250 yet on base | base lacks a prerequisite that commit 6 does not add | fix the fragment, not the base |
 | O2 Build | `make -C "$L" O="$OUT" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- qcom/sm8250-oneplus-instantnoodlep.dtb` after every commit; full Image build for commit 6 | dtc exit 0; DTB produced; Image builds | any error or stale output | delete output; fix current commit only |
 | O3 Schema | `make ... dtbs_check` | no new warning/error for this board | sound/swr/codec schema failure | revert uncommitted change |
-| O4 Node checks | `fdtget` block below on `"$DTB"`; `dtc -I dtb -O dts` diff vs `"$K2DTB"` | nodes exactly as §3; diff limited to the M5 audio set; root compatible unchanged | extra enable, missing node | discard output; fix defining commit |
+| O4 Node checks | `fdtget` block below on `"$DTB"`; `dtc -I dtb -O dts` diff vs `"$K2DTB"` and live DT | nodes exactly as §3; diff limited to the M5 audio set; built/live root compatible is `oneplus,instantnoodlep`, `qcom,sm8250` | extra enable, missing node, or stock `qcom,kona-mtp` live root | discard output; fix defining commit / return to neutral-DTBO gate |
 | O5 Live-DT compare | decompile `"$DTB"` and stage-0 `live.dtb`; classify every audio-related difference (swr/macros/wcd/amps/dmic/gpios) | no unexplained audio difference; GPIO numbers [I-A3] confirmed against live DT | unexplained difference | suppress candidate; update plan |
 | O6 Packaging | device-package build installs ucm2/wireplumber files + service; builder asserts (no UFS write allowlist, image hashes) | builder exits 0; `omamobile-audio` deps resolvable in the local repo | builder refuses | delete images |
 | O7 Release | review commits 1-6, O1-O6 logs, hashes, open [I]s with coordinator/owner | written approval for one RAM boot | any failed gate or [I] promoted to fact | keep M3 state; do not boot |
@@ -240,10 +254,10 @@ to `captures/<date>/m5-audio/` (gitignored).
 | # | Step (command block) | Expect | Stop | Rollback |
 | --- | --- | --- | --- | --- |
 | G1 | `fastboot -s {{SERIAL}} devices`; `getvar current-slot` + slot flags, recorded | one device; flags equal to the M1b B5 baseline | flags differ | `fastboot -s {{SERIAL}} reboot`; stock boots |
-| R1 | `fastboot -s {{SERIAL}} boot {{K5_IMG}}`; SSH `root@172.16.42.1`; `dmesg \| grep -Ei 'adsp\|q6\|apr\|glink\|soundwire\|swr\|wcd\|snd'`, `cat /sys/class/remoteproc/remoteproc*/name,state` | `Booting OKAY`; adsp firmware loads from the mapped path (no firmware error), state `online`; q6core/q6afe/q6asm/q6adm services appear; swr1/swr2 enumerate; wcd938x slaves attach; `snd-soc-sm8250` card registers (`/proc/asound/cards`) | `FAILED (remote: …)`: paste, stay in fastboot; no SSH after 2 min; any firmware-load error; adsp crash loop | hold Power+VolUp 10-30 s; stock/active slot boots; per NOTES, cold-reboot to bootloader before the next `fastboot boot` after a refused boot [V: NOTES.md 2026-11-16 R1 consequence] |
+| R1 | `fastboot -s {{SERIAL}} boot {{K5_IMG}}`; SSH `root@172.16.42.1`; read `/sys/firmware/devicetree/base/compatible`, `dmesg \| grep -Ei 'adsp\|q6\|apr\|glink\|soundwire\|swr\|wcd\|snd'`, then `for r in /sys/class/remoteproc/remoteproc*; do cat "$r/name" "$r/state"; done` | `Booting OKAY`; live root is `oneplus,instantnoodlep` + `qcom,sm8250`; ADSP firmware loads from the mapped path (no firmware error), state `running`; q6core/q6afe/q6asm/q6adm services appear; swr1/swr2 enumerate; WCD938x slaves attach; `snd-soc-sm8250` card registers (`/proc/asound/cards`) | wrong live root; `FAILED (remote: …)`: paste, stay in fastboot; no SSH after 2 min; firmware-load error; ADSP crash loop | hold Power+VolUp 10-30 s; stock/active slot boots; per NOTES, cold-reboot to bootloader before the next `fastboot boot` after a refused boot [V: NOTES.md 2026-11-16 R1 consequence] |
 | R2 | over SSH: `aplay -l`, `arecord -l`, `amixer -c 0 scontrols \| head` | one card (sm8250); WCD + VA + (WSA or TFA) DAIs listed; controls present (HPH, AMIC, micbias) | no card, or card without codec DAIs | `reboot -f` |
 | R3 | amp identification: `i2cdetect -l` + probe of the amp bus for 0x34/0x35; `cat /sys/bus/soundwire/devices/*/dev_id` on swr0; resolve [I-A1] | exactly one amp family populated; record which | both or neither | `reboot -f`; keep both node sets in DTS, disable the absent one at commit 3 |
-| R4 | playback test at minimal volume (owner sets volume on screen first — no screen steps by the agent): `speaker-test -c 2 -t wav -l 1` at lowest volume, then `amixer` HPH: `arecord -d 3 -f S16_LE -r 48000 t.wav` on VA DMIC and on AMIC; `aplay t.wav` via HPH | sound from the correct speaker/earpiece; captures non-silent (DMIC and AMIC) | no sound, or wrong device | `reboot -f`; check routing/UCM |
+| R4 | playback test at minimal volume (owner sets volume on screen first — no screen steps by the agent): `speaker-test -c 2 -t wav -l 1` at lowest volume, then `amixer` HPH: `arecord -d 3 -f S16_LE -r 48000 /tmp/mic-test.wav` on VA DMIC and AMIC; `aplay /tmp/mic-test.wav` via HPH | sound from the correct speaker/earpiece; captures non-silent (temporary file under `/tmp`, not `userdata`) | no sound, or wrong device | `reboot -f`; remove `/tmp/mic-test.wav`; check routing/UCM |
 | R5 | USB-C: plug a USB-C headset (owner action), check `qcom,msm-mbhc-usbc-audio-supported` path via MBHC (`dmesg \| grep -i mbhc`) and/or `lsusb` + `aplay -D hw:...` via snd-usb-audio | analog: MBHC insertion detected, WCD RX plays; digital: snd-usb-audio enumerates and plays | neither | `reboot -f`; record which path works [I-A7] |
 | R6 | boot the installed slot-B system (not RAM): `systemctl status pipewire wireplumber omamobile-instantnoodlep-audio.service`; `wpctl status`; play via `pw-play` | card appears as a PipeWire node; UCM profile loaded; playback works | service failed or no node | reboot; fix userspace (§5) |
 | R7 | `fastboot -s {{SERIAL}} getvar all` (filtered) after rebooting to bootloader | slot flags equal to G1; nothing written by any step | any flag changed | stop; record; ask on #808 before further boots |
@@ -255,7 +269,7 @@ to `captures/<date>/m5-audio/` (gitignored).
 | I-A1 | Which speaker amps the owner's unit has: TFA98xx on i2c2 0x34/0x35 [V: E/ 10799] vs WSA881x on swr0 [V: E/ 10517-10547] | R3 (i2c probe + swr0 dev_id enumeration); C/ community DTS when fetched [I-A8] |
 | I-A2 | Mainline `&i2cN` label for downstream i2c adapter 2 (`qupv3_se2_i2c`) | O5 live-DT/base-DTB compare (base DTB dtb_idx=3 not in p3/) |
 | I-A3 | GPIO numbers for wcd938x reset and amp sd_n (stock keeps them in the base DTB / separate `msm_cdc_pinctrl` nodes, not in entry 16) [V: E/ 10688-10714, 14721-14726] | O5 live-DT compare; candidates: tlmm 32 for wcd reset [V: mtp pattern L/ sm8250-mtp.dts:30] |
-| I-A4 | Whether upstream alsa-ucm-conf ships a usable qcom/sm8250 UCM (remote not opened this session) | O6: inspect the `alsa-ucm-conf` package contents in the local repo; device package overrides regardless (dodge precedent [V: U/ device/dodge/audio/ucm2/OnePlus/]) |
+| I-A4 | Whether upstream's generic RB5 UCM profile is reusable for the instantnoodlep codec and amp routes | The upstream `ucm2/Qualcomm/sm8250/HiFi.conf` exists, but configures WSA881x and generic VA-macro DMIC routes [V: <https://raw.githubusercontent.com/alsa-project/alsa-ucm-conf/master/ucm2/Qualcomm/sm8250/HiFi.conf>]. O6 must verify the local package and board-specific route names; provide a device profile if needed. |
 | I-A5 | Exact TFA98xx part (mainline covers tfa9890/9895/9897 [V: L/ tfa989x.c:406-412]) and WCD938x variant (9380 vs 9385 [V: L/ wcd938x.c:30-31]) | R1/R3 chip-id reads; O4 accepts either enum string |
 | I-A6 | OTA `adsp.mbn` vs linux-firmware `qcom/sm8250/adsp.mbn` equivalence | FIRMWARE-PLAN F5 hash compare [V: FIRMWARE-PLAN §5 F5]; firmware.map row is the default |
 | I-A7 | USB-C headphone path: analog via MBHC (needs M2 Type-C altmode) vs USB audio class in host mode | R5; until M2 Type-C lands, snd-usb-audio is the fallback [V: SND_USB_AUDIO plan §5] |
