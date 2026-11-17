@@ -1,0 +1,148 @@
+From e2c4a607b53b977053ae26b7507d10f17b20389f Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Mikkel=20Inumineq=20J=C3=B8rgensen?=
+ <6770514+inumineq@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 13:37:03 +0100
+Subject: [PATCH 1/3] dt-bindings: input: Describe Awinic AW8697 actuator
+ parameters
+
+[V] Describe the volatile parameters consumed by the public GPL
+haptics driver at SM8250 tag 7.2.0-dev. Board descriptions must supply
+their actual actuator parameters. This compatible is distinct from
+AW86927; no register compatibility is assumed.
+
+Assisted-by: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../bindings/input/awinic,aw8697.yaml         | 108 ++++++++++++++++++
+ MAINTAINERS                                   |   4 +
+ 2 files changed, 112 insertions(+)
+ create mode 100644 Documentation/devicetree/bindings/input/awinic,aw8697.yaml
+
+diff --git a/Documentation/devicetree/bindings/input/awinic,aw8697.yaml b/Documentation/devicetree/bindings/input/awinic,aw8697.yaml
+new file mode 100644
+index 000000000..1ea55dd4c
+--- /dev/null
++++ b/Documentation/devicetree/bindings/input/awinic,aw8697.yaml
+@@ -0,0 +1,108 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/input/awinic,aw8697.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++
++title: Awinic AW8697 LRA haptics controller
++
++maintainers:
++  - Luca Weiss <luca.weiss@fairphone.com>
++
++description: |
++  AW8697 drives a linear resonant actuator. Actuator-specific electrical
++  parameters configure volatile registers, not a vendor waveform library.
++  Board descriptions must supply parameters for their actual actuator.
++
++properties:
++  compatible:
++    const: awinic,aw8697
++  reg:
++    maxItems: 1
++  reset-gpios:
++    maxItems: 1
++    description: Reset pin, high when the controller is running.
++  interrupts:
++    maxItems: 1
++  awinic,f0-preset:
++    $ref: /schemas/types.yaml#/definitions/uint32
++    minimum: 1000
++    maximum: 3000
++    description: Actuator resonance in tenths of a hertz.
++  awinic,f0-coefficient:
++    $ref: /schemas/types.yaml#/definitions/uint32
++    minimum: 100
++    maximum: 1000
++    description: Chip frequency conversion coefficient.
++  awinic,f0-calibration-percent:
++    $ref: /schemas/types.yaml#/definitions/uint32
++    minimum: 0
++    maximum: 10
++    description: Allowed percentage deviation during resonance calibration.
++  awinic,drive-level:
++    $ref: /schemas/types.yaml#/definitions/uint32
++    minimum: 1
++    maximum: 127
++    description: Actuator drive level for resonance detection.
++  awinic,f0-detection-play-time:
++    $ref: /schemas/types.yaml#/definitions/uint32
++    minimum: 1
++    maximum: 15
++    description: Resonance detection preamble cycles.
++  awinic,f0-detection-wait-time:
++    $ref: /schemas/types.yaml#/definitions/uint32
++    minimum: 0
++    maximum: 15
++    description: Resonance detection waiting cycles.
++  awinic,f0-detection-repeat:
++    $ref: /schemas/types.yaml#/definitions/uint32
++    minimum: 1
++    maximum: 4
++    description: Number of resonance detection repetitions.
++  awinic,f0-detection-trace:
++    $ref: /schemas/types.yaml#/definitions/uint32
++    minimum: 1
++    maximum: 15
++    description: Resonance detection trace cycles.
++  awinic,bemf-upper-threshold:
++    $ref: /schemas/types.yaml#/definitions/uint32
++    minimum: 0
++    maximum: 65535
++    description: Upper back EMF threshold register value.
++  awinic,bemf-lower-threshold:
++    $ref: /schemas/types.yaml#/definitions/uint32
++    minimum: 0
++    maximum: 65535
++    description: Lower back EMF threshold register value.
++  awinic,boost-debug:
++    $ref: /schemas/types.yaml#/definitions/uint8-array
++    minItems: 3
++    maxItems: 3
++    description: Three actuator-specific boost configuration bytes.
++  awinic,tset:
++    $ref: /schemas/types.yaml#/definitions/uint8
++    description: Actuator-specific TSET register value.
++  awinic,r-spare:
++    $ref: /schemas/types.yaml#/definitions/uint8
++    description: Actuator-specific spare resistance register value.
++
++required:
++  - compatible
++  - reg
++  - reset-gpios
++  - interrupts
++  - awinic,f0-preset
++  - awinic,f0-coefficient
++  - awinic,f0-calibration-percent
++  - awinic,drive-level
++  - awinic,f0-detection-play-time
++  - awinic,f0-detection-wait-time
++  - awinic,f0-detection-repeat
++  - awinic,f0-detection-trace
++  - awinic,bemf-upper-threshold
++  - awinic,bemf-lower-threshold
++  - awinic,boost-debug
++  - awinic,tset
++  - awinic,r-spare
++
++additionalProperties: false
+diff --git a/MAINTAINERS b/MAINTAINERS
+index a44d4a1fb..e342a16eb 100644
+--- a/MAINTAINERS
++++ b/MAINTAINERS
+@@ -4419,6 +4419,10 @@ L:	linux-media@vger.kernel.org
+ S:	Maintained
+ F:	drivers/media/pci/hws/
+ 
++AWINIC AW8697 HAPTICS DRIVER
++S:	Odd Fixes
++F:	Documentation/devicetree/bindings/input/awinic,aw8697.yaml
++
+ AWINIC AW99706 WLED BACKLIGHT DRIVER
+ M:	Junjie Cao <junjie.cao@linux.dev>
+ S:	Maintained

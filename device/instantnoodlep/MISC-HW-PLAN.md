@@ -1,8 +1,10 @@
 <!-- SPDX-License-Identifier: MIT -->
 # MISC-HW-PLAN: remaining handset hardware on instantnoodlep
 
-Status: research plan only; no kernel code, DTS, package or phone test is part
-of this change. This inventory covers haptics, under-display fingerprint,
+Status: phase 1 offline implementation in progress; no phone test performed.
+Kernel branch `instantnoodlep-k3-misc`, worktree `~/src/l-k3-misc`, build
+`~/android/build/k3-misc`, based on combo `aa996bae0` (test-only Kona
+workaround retained by explicit coordinator instruction). This inventory covers haptics, under-display fingerprint,
 NFC, torch, optical/proximity and IR/ToF sensors, alert slider, notification
 LED, SIM-tray detection and wired USB audio. This worker had no phone access.
 
@@ -164,3 +166,139 @@ source/status, userspace route, daily-driver priority and explicit `[I]` gate;
 phone activation remains owner-gated. It does not claim that haptics, NFC,
 torch, fingerprint, alert slider, proximity, SIM detection or USB audio work
 on the owner's current kernel.
+
+## 8. Phase 1 implementation gate (2026-11-17)
+
+- [V] Coordinator authorizes combo-based **offline RAM candidates** despite
+  the earlier O0 clean-root gate; this is no claim of upstream readiness.
+  The inherited Kona workaround must never be proposed upstream.
+- [V] Public GPL-2.0-only driver `drivers/input/misc/aw8695-haptics.c`
+  at the C/ tag implements AW8697 and a mathematically generated sine;
+  it requests no firmware. It requires safety fixes before import: interrupt
+  setup ordering, lifecycle cleanup, bounded playback, calibration error
+  propagation and parameter validation. Existing AW86927 is a different
+  driver and will not acquire a guessed compatible.
+- [V] Public N/ patch 0074 at commit
+  `4e04b523eefa5494dae95fe374561ced5b781686` describes I2C11, reset 72,
+  IRQ118 and board parameters; patch 0075 describes the PM8150L torch.
+  These are public GPL board descriptions, not extracted binary tuning.
+- [I] Alert-slider electrical interface remains under source audit; do not
+  invent GPIOs or copy another handset's mapping.
+- [V] Proximity and SIM status are already assigned to Sensors/Modem (§3.1),
+  so the other firmware-free P1 candidate here is the torch. It will remain
+  disabled in the committed DTS and use a separate RAM candidate.
+
+| Gate | Command/action | Expect | Stop | Rollback |
+| --- | --- | --- | --- | --- |
+| M0 offline | Import reviewed GPL driver/binding; add disabled board nodes; build with `nice -n 10 make ... LLVM=1 W=1`; checkpatch and schemas | Firmware-free modules and no new relevant build/schema warnings | Missing licence, unsafe calibration, unknown wiring, failed check | Revert only misc work; no phone access |
+| M1 stage images | Copy compiled DTB; enable only one reviewed node per candidate with host `fdtput`; probe builder with fresh `--out`, boot 2/root userdata | Separate RAM images, watchdog and storage guard retained | Shared output exists, driver set unexpectedly changes | Discard candidate |
+| M2 owner baseline | Coordinator runs §5 R0 and announces haptics/torch activation; verifies B successful before boot | Known-good B and recovery available | Any unknown slot state or insufficient battery | No boot |
+| M3 owner input | RAM boot one candidate; inspect input capabilities, one bounded FF_RUMBLE effect, or slider observations only when its wiring is proven | Brief bounded effect / verified position events | Unexpected vibration, fault, boot/USB hang | Stop effect, reboot known-good B; owner buttons if needed |
+| M4 owner torch | Separate RAM boot, no automatic trigger; one bounded low brightness test, no strobe | Light turns on briefly and off; no fault | Current/thermal warning or cannot turn off | Brightness zero, reboot known-good B |
+
+[I] Exact artifact hashes, commands and offline outcomes follow below after
+build validation; M2-M4 are not authorized to this worker.
+
+### 8.1 Slider identification: confirmed protocol, unconfirmed fitted pair
+
+- [V] Coordinator decision for this phase: defer the Hall driver; enable
+  **only the I2C1 controller** in the haptics RAM candidate, with no clients,
+  and prepare four device-ID reads. This is an explicit exception to the
+  earlier single-block candidate outline, not permission to probe other
+  addresses or enable a supply.
+- [V] OnePlus GPL source pin
+  `cad09e061ef6cf689a4a1e54d27562e0f042236a`,
+  [`kona-oem.dtsi:49-95`](https://github.com/OnePlusOSS/android_kernel_oneplus_sm8250/blob/cad09e061ef6cf689a4a1e54d27562e0f042236a/arch/arm64/boot/dts/vendor/qcom/kona-oem.dtsi#L49),
+  describes alternative IST8801 pairs at `0x18/0x19` and MXM1120 pairs at
+  `0x0c/0x0d` on `qupv3_se1_i2c`, with IRQ157/158 and L10A supply.
+  This shared vendor description does **not** establish the fitted pair.
+- [V] Both public GPL headers identify **register `0x09`** as device ID:
+  [MXM1120, `hall_mxm1120.h:151-154`](https://github.com/OnePlusOSS/android_kernel_oneplus_sm8250/blob/cad09e061ef6cf689a4a1e54d27562e0f042236a/drivers/oneplus/tri_state_key/hall_ic/hall_mxm1120.h#L151)
+  expects `0x9c`;
+  [IST8801, `hall_ist8801.h:133-136`](https://github.com/OnePlusOSS/android_kernel_oneplus_sm8250/blob/cad09e061ef6cf689a4a1e54d27562e0f042236a/drivers/oneplus/tri_state_key/ist_hall_ic/hall_ist8801.h#L133)
+  expects `0x81`. These are public GPL protocol definitions, **not a claim
+  to have obtained or checked the chip datasheets**.
+- [V] Mainline `sm8250.dtsi` maps `i2c1` to `0x984000`, GPIO4/5 and QUP0
+  DMA (`arch/arm64/boot/dts/qcom/sm8250.dtsi:1421-1444,5310-5315`). The
+  misc DTS pins alias `i2c1`, uses 100 kHz and adds no client nodes.
+- [I] The Hall supply may be off. No L10A node or regulator write is added;
+  NACKs do not prove absence. Unknown IDs, bus timeouts or existing client
+  drivers require stopping, not resetting, forcing access or enabling rails.
+- [V] Do **not** use `i2cdetect -y -r 1 0x0c 0x19`: that range also probes
+  ten addresses outside the approved four. Use the four `i2cget` commands
+  below. Their command byte selects a documented read register; no device
+  data/configuration register is written.
+
+### 8.2 Slider follow-up design (documentation only)
+
+- [I] After identifying the fitted pair and reviewing its power/measurement
+  protocol, implement a licensed raw Hall interface and a separate userspace
+  calibration tool. No activation or threshold driver is in this phase.
+- [I] Owner labels **ring, vibrate, silent** by physically placing the slider
+  in each position. Collect stationary paired raw samples, estimate noise
+  and centers, and reject overlapping/unstable position clusters. Derive
+  thresholds only if the measured projection is monotonic; otherwise stop
+  for a reviewed two-dimensional classifier rather than invent cutoffs.
+- [I] Store the model, common chip-ID/model, thresholds, hysteresis and noise
+  bounds in an owner-created local config, e.g.
+  `/var/lib/omamobile/alert-slider/calibration.json`. No serial, unit identity,
+  stock partition, `persist` read, calibration extraction or Git asset is
+  involved. Owner cancellation leaves the previous local config intact.
+- [I] A later service applies debounce/hysteresis, rejects out-of-cluster
+  values (magnetic interference), and maps only stable calibrated positions
+  to desktop profiles. It must recover a known position after restart and
+  resume, and leave profile selection unchanged on sensor failure.
+- [I] Future acceptance: owner moves all three positions while `evtest`
+  observes the reviewed input adapter; compare profile state separately.
+  `libinput debug-events` is useful only if the eventual adapter is a device
+  libinput accepts. No synthetic slider event or libinput support is claimed
+  by this controller-only candidate.
+
+### 8.3 Offline artefacts and the owner runbook (M2-M4)
+
+[V] Two RAM candidates are built from the same kernel and differ only in the
+board DTB, which is edited on the host with `fdtput`; the committed DTS keeps
+every new node disabled. Both use the probe builder's `--boot 2 --root
+userdata` mode, so the watchdog feeder and the storage guard are unchanged
+from the K3 combo image. Nothing here is flashed.
+
+| Candidate | Enabled nodes | Purpose |
+| --- | --- | --- |
+| A `misc-haptics` | `i2c11` + `haptics@5a`, `i2c1` controller only (no clients) | M3a haptics, M3b Hall chip-ID reads |
+| B `misc-torch` | `pm8150l_flash` + `led-0` only | M4 torch |
+
+[V] The haptics module is `aw8695_haptics.ko` (`CONFIG_INPUT_AW8695_HAPTICS=m`)
+and registers `EV_FF`/`FF_RUMBLE` through `input_ff_create_memless`
+(`drivers/input/misc/aw8695-haptics.c:1224-1226`). The torch is
+`leds_qcom_flash.ko` (`CONFIG_LEDS_QCOM_FLASH=m`), whose LED name comes from
+the child node's `function`/`color`, i.e. `white:flash`.
+
+[V] Both modules are built for a new release string, so the phone's Arch
+rootfs needs that release's module tree before the candidate boots. The
+coordinator installs it on `userdata` only (no partition write):
+
+```
+# on the phone, from the existing K3 SSH session, after the owner's go
+tar -xzf modules-<release>.tar.gz -C /
+depmod -a <release>
+```
+
+[I] `evtest` and `fftest` (package `linuxconsole`) must be present on the
+rootfs; `i2cget` comes from `i2c-tools`. If a tool is missing, stop that step
+rather than substituting an untested path.
+
+| Step | Command / action | Expect | Stop | Rollback |
+| --- | --- | --- | --- | --- |
+| M2 baseline | §5 R0, then confirm `slot-successful:b: yes` and `slot-unbootable:b: no` | Known-good B, recovery available, battery sufficient | Unknown slot state or low battery | No boot |
+| M3a-1 boot | Coordinator: `fastboot -s {{SERIAL}} boot misc-haptics.img` | Kernel reaches the Arch rootfs; SSH on `172.16.42.1` returns | No boot, USB never enumerates, or a panic before userspace | Power-cycle to known-good B; no partition was written |
+| M3a-2 probe | `ssh root@172.16.42.1 'uname -r; lsmod \| grep aw8695; dmesg \| grep -iE "aw8695\|i2c1"'` | Release `7.3.0-rc6-instantnoodlep-k3-misc-…`; `aw8695_haptics` loaded; probe messages, no `-EIO`/timeout | Probe error, I2C timeout, or the module is not loaded | Reboot to known-good B; do not `modprobe` again in the same boot |
+| M3a-3 capabilities | `ssh root@172.16.42.1 'for d in /sys/class/input/event*/device/name; do echo "$d: $(cat $d)"; done'`, then `evtest --info /dev/input/event{{N}}` | One input device named by the driver; `--info` lists `EV_FF` and `FF_RUMBLE` | No FF capability, or the device is not the haptics node | Stop; report the capability dump |
+| M3a-4 one bounded effect | Owner runs `fftest /dev/input/event{{N}}`: upload `FF_RUMBLE` (type `82`), length `100` ms, both magnitudes `0x2000`, play once, then stop and quit | One short, weak buzz; the driver returns to idle | Continuous vibration, no stop, a kernel splat, or USB dropping | `fftest` stop, then reboot to known-good B; owner holds power+volume-up if input is dead |
+| M3b Hall chip IDs | Same boot as M3a: `ssh root@172.16.42.1 'ls -l /dev/i2c-1; for a in 0x0c 0x0d 0x18 0x19; do printf "%s: " $a; i2cget -y 1 $a 0x09 \|\| echo "no answer"; done'` | `0x9c` on `0x0c`/`0x0d` (MXM1120) **or** `0x81` on `0x18`/`0x19` (IST8801); the other pair does not answer | Any other value, a bus timeout, or a kernel splat | Stop; do not retry with `-f`, do not run `i2cdetect`, do not enable a rail; reboot to known-good B |
+| M4 torch | Separate boot of `misc-torch.img`, then `ssh root@172.16.42.1 'ls /sys/class/leds; brightnessctl -d white:flash set 5%; sleep 3; brightnessctl -d white:flash set 0'` | `white:flash` exists; a brief dim light, then off; no fault or thermal warning | Light does not turn off, a fault/thermal warning appears, or the LED name is missing | `echo 0 > /sys/class/leds/white:flash/brightness`, then reboot to known-good B |
+| M5 state check | §5 R6 | Slot flags match M2 | Any change | Stop all feature work |
+
+[I] M3a-4 is the only step that moves the actuator, and M4 the only step that
+emits light; both are announced to the owner first. No step writes a
+partition, and no step runs `i2cdetect`, `-f` forced access, a strobe/flash
+command or a second `modprobe` in the same boot.

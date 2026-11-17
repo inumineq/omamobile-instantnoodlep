@@ -1,0 +1,109 @@
+From 58e7251709b1f777298f91a207bfa5d73ca294ad Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Mikkel=20Inumineq=20J=C3=B8rgensen?=
+ <6770514+inumineq@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 13:37:04 +0100
+Subject: [PATCH 3/3] arm64: dts: qcom: instantnoodlep: Describe gated haptics
+ and torch
+
+[V] Use the public wiring and actuator parameters in patches 0074 and
+0075 of darknagel/oneplus-instantnoodlep-nura-unofficial at
+4e04b523eefa. Combine both torch channels with a 20 mA total ceiling.
+Retain only binding-minimum flash limits required by the generic
+driver. There is no trigger, and strobe testing is excluded.
+
+Keep both nodes disabled. Prepare I2C1 for controller-only Hall
+chip-ID reads with a stable bus alias and no clients. Explicitly
+enable I2C1 and haptics only in the separately built RAM candidate.
+[I] The fitted Hall pair and power state are unknown; no regulator or
+calibration path is added. Hardware operation remains untested.
+
+Assisted-by: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../qcom/sm8250-oneplus-instantnoodlep.dts    | 63 +++++++++++++++++++
+ 1 file changed, 63 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8250-oneplus-instantnoodlep.dts b/arch/arm64/boot/dts/qcom/sm8250-oneplus-instantnoodlep.dts
+index 0d14a19ff..3d298aa01 100644
+--- a/arch/arm64/boot/dts/qcom/sm8250-oneplus-instantnoodlep.dts
++++ b/arch/arm64/boot/dts/qcom/sm8250-oneplus-instantnoodlep.dts
+@@ -10,6 +10,7 @@
+ 
+ #include <dt-bindings/gpio/gpio.h>
+ #include <dt-bindings/input/input.h>
++#include <dt-bindings/leds/common.h>
+ #include <dt-bindings/interrupt-controller/irq.h>
+ #include <dt-bindings/regulator/qcom,rpmh-regulator.h>
+ #include "sm8250.dtsi"
+@@ -43,6 +44,10 @@ / {
+ 	qcom,msm-id = <0x164 0x10000>, <0x164 0x20001>;
+ 	qcom,board-id = <0x08 0x00>, <0x00 0x00>;
+ 
++	aliases {
++		i2c1 = &i2c1;
++	};
++
+ 	chosen {
+ 		#address-cells = <2>;
+ 		#size-cells = <2>;
+@@ -542,3 +547,61 @@ &usb_1_qmpphy {
+ 	vdda-pll-supply = <&vreg_l18a_0p92>;
+ 	status = "okay";
+ };
++
++/* Enable only in a separately gated RAM candidate until device validation. */
++&i2c11 {
++	status = "disabled";
++
++	haptics: haptics@5a {
++		compatible = "awinic,aw8697";
++		reg = <0x5a>;
++		interrupts-extended = <&tlmm 118 IRQ_TYPE_EDGE_FALLING>;
++		reset-gpios = <&tlmm 72 GPIO_ACTIVE_HIGH>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&haptics_irq_default>;
++		awinic,f0-preset = <1700>;
++		awinic,f0-coefficient = <260>;
++		awinic,f0-calibration-percent = <7>;
++		awinic,drive-level = <54>;
++		awinic,f0-detection-play-time = <5>;
++		awinic,f0-detection-wait-time = <3>;
++		awinic,f0-detection-repeat = <2>;
++		awinic,f0-detection-trace = <15>;
++		awinic,boost-debug = /bits/ 8 <0x30 0xeb 0xd4>;
++		awinic,tset = /bits/ 8 <0x12>;
++		awinic,r-spare = /bits/ 8 <0x68>;
++		awinic,bemf-upper-threshold = <4104>;
++		awinic,bemf-lower-threshold = <1016>;
++		status = "disabled";
++	};
++};
++
++&tlmm {
++	haptics_irq_default: haptics-irq-default-state {
++		pins = "gpio118";
++		function = "gpio";
++		drive-strength = <2>;
++		input-enable;
++		bias-pull-up;
++	};
++};
++
++/* No default trigger; never enable alongside the haptics first-test node. */
++&pm8150l_flash {
++	status = "disabled";
++
++	led-0 {
++		function = LED_FUNCTION_FLASH;
++		color = <LED_COLOR_ID_WHITE>;
++		led-sources = <1 2>;
++		led-max-microamp = <20000>;
++		flash-max-microamp = <25000>;
++		flash-max-timeout-us = <10000>;
++	};
++};
++
++/* Controller-only identification: never instantiate unverified Hall clients. */
++&i2c1 {
++	clock-frequency = <100000>;
++	status = "disabled";
++};
