@@ -173,8 +173,8 @@ Kernel release from `include/config/kernel.release`:
 
 | Artefact | Path | Bytes | sha256 |
 | --- | --- | --- | --- |
-| kernel | `~/android/build/k3-audio-p1/arch/arm64/boot/Image.gz` | 16120307 | see `REPORT.md` |
-| board DTB | `~/android/build/k3-audio-p1/arch/arm64/boot/dts/qcom/sm8250-oneplus-instantnoodlep.dtb` | 122762 | see `REPORT.md` |
+| kernel | `~/android/build/k3-audio-p1/arch/arm64/boot/Image.gz` | 16120307 | `fb8a24901a916b7cd3c548685412897dc698658acf3d7fd355435c3f08b587b1` |
+| board DTB | `~/android/build/k3-audio-p1/arch/arm64/boot/dts/qcom/sm8250-oneplus-instantnoodlep.dtb` | 122762 | `bfae76d9ec087d7a87afce32b5e9e43757d4d0c7addbd699a31d93e986db124d` |
 | modules | `~/android/build/k3-audio-p1-modules.tar.zst` | 21937880 | `ee4599682e887eca87ab6392045c1dd2782d20c93177b2e8058b11c652d11a8b` |
 | RAM image | `~/android/build/k3-audio-p1-ram/boot.img` | 24137728 | `c4f706ef0919c8fec009cdd1f7bd2f11f030ca2ffc2e14c9c32008325bb42dfd` |
 
