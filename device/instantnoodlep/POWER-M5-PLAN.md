@@ -64,7 +64,7 @@ match their own nodes, not the root, and are unaffected. R5's "no duplicate
 | Stage | Content | Writes to hardware | State |
 | --- | --- | --- | --- |
 | **P1** fuel gauge | bq27411 on i2c16 @0x55, read only: capacity, voltage, current, temperature, status through `/sys/class/power_supply/bq27411-0` | none (gauge reads only, see 0.4) | **Built**, RAM-boot image ready; runbook §7.3 step P1-R1 |
-| **P2** charger | D/'s PM8150B charger driver with the gauge-led stock policy (§0.5) | PM8150B charger registers (float voltage, currents, watchdog) | **Staged, not implemented**: needs P1 readings from this unit first (0.5) |
+| **P2** charger | D/'s PM8150B charger driver with the gauge-led stock policy (§0.5) | PM8150B charger registers (float voltage, currents, watchdog) | **Built** after P1 passed; RAM-boot image ready; runbook §7.4, first boot behind an owner go |
 | **P3** USB-C | PM8150B Type-C/PD + dwc3 role switch (old commit 1 in §6) | Type-C/VBUS block | Not started; changes the USB link we SSH over, so it runs after P2 |
 
 ### 0.4 P1: what the image contains
@@ -143,7 +143,7 @@ the stricter one). The stock fast-charge MCU node carries
 is why a 4.435 V float at the charger (measured behind the charge path)
 and a 4.385 V cell "full" are stock.
 
-Why P2 is staged and not built in this pass:
+Why P2 was staged at first (resolved: P1 passed, §7.3 P1 result; P2 built as below):
 
 1. D/'s policy is only as safe as the gauge data it reads; P1 has not yet
    shown plausible bq27411 readings on this unit (P1-R1).
@@ -156,18 +156,22 @@ Why P2 is staged and not built in this pass:
 3. It needs `pm8150b.dtsi` included, whose second `pon@800` must stay
    disabled (K1 `-EEXIST`, §3.7), and the PM8150B ADC for USB-in telemetry.
 
-P2 port, when P1-R1 passes (kernel branch on top of P1, author of each
-patch kept, Assisted-by on our own):
+P2 port as built (kernel branch on top of P1, author of each patch kept,
+Assisted-by on our own). Two additions over the first sketch: the C/ base
+adds a `charging_enabled` power_supply property in the core, which the
+driver needs (P2.0, `DO NOT UPSTREAM`), and the binding was written and
+passes `dt_binding_check`:
 
 | # | Commit | Source |
 | --- | --- | --- |
+| P2.0 | `DO NOT UPSTREAM: power: supply: Add the charging_enabled property` | C/include/linux/power_supply.h, C/power_supply_sysfs.c at the C/ pin |
 | P2.1 | `power: supply: Add the Qualcomm PM8150B charger driver` (author Teguh Sobirin) + Kconfig/Makefile | C/drivers/power/supply/qcom_pm8150b_charger.c at the C/ pin |
 | P2.2-P2.9 | D/ 0068, 0073, 0082, 0083, 0084, 0085, 0165, 0166 with `git am`, authors kept | D/kernel-patches |
-| P2.10 | `dt-bindings: power: supply: Add qcom,pm8150b-charger` | new, ours (needed for dtbs_check) |
+| P2.10 | `dt-bindings: power: supply: Add the Qualcomm PM8150B charger` | new, ours: the binding, plus its entry in the `qcom,spmi-pmic.yaml` `charger@` list; dt_binding_check and dtbs_check clean |
 | P2.11 | `arm64: dts: qcom: pm8150b: Add the charger` (+ D/0086 source-change IRQ) | C/pm8150b.dtsi:109-126, D/0086 |
 | P2.12 | board: include `pm8150b.dtsi`, keep `&pm8150b` `pon@800` disabled; `battery` node; `&pm8150b_charger` okay with `monitored-battery`, `qcom,fuel-gauge = <&fuel_gauge>` (D/0167); no `power-supplies` until P3 (the driver then uses its own APSD detection [V: driver :1512 `has_tcpm` is optional]) | C:274-280, D/0087, D/0167 |
 
-P2.12 has an open safety question to settle before it is written: the
+P2.12 settled the safety question this way (built): the
 charger needs `monitored-battery` (voltage-max 4.35 V, 2 A limit from
 D/0087), but the gauge must not get one (0.4). Give the charger its own
 `battery` node and leave the gauge without; do not copy C/'s design
@@ -438,12 +442,110 @@ P1-4 tells P2 three things: whether the gauge reads plausibly on this unit
 without a charger driver (the cable test), and the gauge's own
 `charge_full_design` (the stock value it keeps, since we write none).
 
+#### P1 result (2026-11-17, RAM boot of `boot-p1-gauge.img`, run by the coordinator)
+
+- [V] `uname -r` = `7.3.0-rc6-instantnoodlep-k3-g11fedfae5a37`;
+  `/sys/class/power_supply/bq27411-0` present. Readable: `status`,
+  `capacity`, `voltage_now`, `current_now`, `temp`, `charge_full`,
+  `charge_full_design`, `charge_now`, `technology`. Absent: `health`,
+  `cycle_count` (P1-4 listed them; the bq27411 property set lacks them).
+- [V] Readings: capacity 96 %, 4.265 V, 32.3 °C, `charge_full` 4111000 µAh,
+  `charge_full_design` 4455000 µAh (the gauge's own value; we write none),
+  `technology` Li-ion. All inside the P1-4 Expect ranges.
+- [V] 5 s log, cable in: `Not charging`, `current_now` 0. USB carries the
+  system load; **the battery does not charge on K3 without a charger
+  driver**. Cable out: `Discharging`, −178 to −382 mA idle (screen off),
+  4.213-4.235 V.
+- [V] First re-plug: stayed `Discharging` at −178 mA (USB input not
+  restored) and the USB gadget did not re-enumerate. Second re-plug about
+  1 min later: `Not charging`, 0 mA, gadget back. This is the behaviour
+  D/0165 describes (USB input suspended after a detach and not restored
+  while VBUS is present) [V: D/0165 commit message].
+- Consequence: I-P5-2 resolved (temp is `temp`, 0.1 °C). The gauge reads
+  plausibly, which was P2's gate (§0.5 reason 1). P2 is built next (§7.4).
+
+#### Input for P3 (Type-C)
+
+The re-plug finding means the PM8150B USB input and the gadget link do not
+always recover from a detach/attach under K3, where nothing drives the
+PM8150B Type-C block. P3 must test repeated unplug/replug (≥ 5 cycles,
+both orientations) and check both VBUS input (charger `online`, gauge
+current) and gadget re-enumeration (`ip link` on the laptop) each time.
+Until P3, a re-plug that leaves the phone `Discharging` with no gadget is
+known and is cleared by a second re-plug; do not read it as a P2 fault on
+its own.
+
+### 7.4 P2 charger RAM boot (K3 power + PM8150B charger)
+
+**This boot programs the PM8150B charger** (float voltage, charge and input
+current, termination current, charger watchdog) the moment the driver
+probes, before anyone can type. P2-4 therefore needs the **owner's explicit
+go**, given after reading this section. Nothing is flashed; `boot_b` keeps
+combo K3.
+
+Inputs [V: built 2026-11-17, §0.5]:
+
+- Kernel `~/src/l-k3p` @ `28bdb8d1614e` (branch `instantnoodlep-k3-power`,
+  P1 + 14 commits), build dir `~/android/build/k3-power-p2`, release
+  `7.3.0-rc6-instantnoodlep-k3-g28bdb8d1614e`.
+- Image `~/android/build/k3-power-ram/boot-p2-charger.img`, sha256
+  `8bf4fc47b4cdcccaa00dc109665982455b7b8b17a2c99fc4881a459bb4def37e`; manifest
+  `~/android/build/k3-power-ram/boot-p2-charger.manifest.json`; same builder
+  flags and ramdisk as P1 and combo.
+- Modules `~/android/build/k3-power-p2/modules-7.3.0-rc6-instantnoodlep-k3-g28bdb8d1614e.tar.zst`,
+  sha256 `19bd68eff5d3ac4f21575e6c53a3aea89d409da18dbf3c5943a0ef940c3b1e22` (1799 modules: P1 minus the now built-in charger and ADC5).
+- Watch script `tools/instantnoodlep-charge-watch` (this repo): runs on the
+  phone, logs gauge + charger every 5 s, and on a stop condition writes 0 to
+  `charging_enabled` itself and exits.
+
+What the driver does with this DT [V: driver after the D/ series, §0.5]:
+it starts at 3.98 V / 0.5 A, looks up the bq27411 through
+`qcom,fuel-gauge`, and every 5 s sets the zone limits from the gauge's
+temperature (2 A / 4.435 V at 5-45 °C, capped by the charger battery
+node's 2 A); full at > 4.385 V and < 230 mA or when the gauge says full;
+hard stop at 4.46 V; back to 3.98 V / 0.5 A whenever gauge data is invalid;
+the charger watchdog stops charging if the policy work stops petting it;
+3.98 V float on shutdown/reboot. With no Type-C link (P3) the input limit
+comes from the PM8150B's own detection: 500 mA from the laptop (SDP), 1.5 A
+from a wall charger (DCP). So on the laptop cable the battery current is
+bounded by about 0.5 A minus the system load.
+
+Stop conditions for every step (the watch script enforces the first five;
+the coordinator watches the rest): gauge temp > 42.0 °C; gauge voltage
+> 4.44 V; |gauge current| > 2.1 A; USB input > 5.6 V; charger `health`
+Overvoltage/Overheat/Cold or other error; a `pm8150b-charger` kernel line
+with "overvoltage", "watchdog bark" or "charging stopped"; no
+`charging policy uses bq27411-0` within 30 s of boot; `no fuel gauge data`
+warnings after the first 30 s; on the laptop cable, battery current above
+0.6 A. Generic rollback for all steps: `echo 0 >
+/sys/class/power_supply/pm8150b-charger/charging_enabled`, unplug the cable,
+`reboot -f` (or Power+VolUp 10-30 s) → combo K3 from `boot_b`, which has no
+charger driver (P1: no charging under combo K3).
+
+| # | Step | Expect | Stop | Rollback |
+| --- | --- | --- | --- | --- |
+| P2-0 | Laptop: `sha256sum` of the image and modules tarball | `8bf4fc47b4cdcccaa00dc109665982455b7b8b17a2c99fc4881a459bb4def37e`, `19bd68eff5d3ac4f21575e6c53a3aea89d409da18dbf3c5943a0ef940c3b1e22` | mismatch | rebuild; do not boot |
+| P2-1 | Phone on combo K3: unpack the modules as P1-1 (`-C /usr/lib/modules`), `depmod 7.3.0-rc6-instantnoodlep-k3-g28bdb8d1614e`; push `tools/instantnoodlep-charge-watch` to `/root/` and `chmod +x` | new release dir only; script present | anything else changes | `rm -rf /usr/lib/modules/7.3.0-rc6-instantnoodlep-k3-g28bdb8d1614e` |
+| P2-2 | Record the starting point from combo K3: battery %, and that the phone is not hot to the touch (owner) | battery 20-97 %; phone at room temperature | phone warm, or battery outside the range | do not proceed; report |
+| P2-3 | `reboot --reboot-argument=bootloader`; `fastboot getvar current-slot` | `current-slot: b` | other slot | `fastboot reboot` |
+| **P2-4 GO** | **Owner go required.** Then `fastboot boot ~/android/build/k3-power-ram/boot-p2-charger.img` (RAM only) | `Booting OKAY`; SSH within 2 min; `uname -r` = `7.3.0-rc6-instantnoodlep-k3-g28bdb8d1614e` | `FAILED`, or no SSH in 2 min | Power+VolUp; combo K3 boots; cold-reboot to the bootloader before another `fastboot boot` |
+| P2-5 | At once over SSH: `nohup /root/instantnoodlep-charge-watch > /root/charge-watch.log 2>&1 &`; then `dmesg \| grep -E 'pm8150b-charger\|bq27'`; `ls /sys/class/power_supply/` | `bq27411-0` and `pm8150b-charger`; dmesg: `float voltage 3980000 uV`, `charging policy uses bq27411-0`, a `battery temperature zone -2 -> 4` (or the zone for the measured temp); watch log running | probe error; no policy line within 30 s; any stop condition | generic rollback |
+| P2-6 | Laptop cable, 15 min: `tail -f /root/charge-watch.log` over SSH | `usb_type` SDP, `input_current_limit` 500000, `online` 1; gauge status `Charging` or `Full`, current 0-0.6 A; vbat rising slowly, ≤ 4.44 V; temp ≤ 42 °C and not rising more than 3 °C; the charger may report `Full` and restart cycles near 96 % (D/0166 notes the last 10 % are slow) | any stop condition; watch exited with STOP | generic rollback |
+| P2-7 | Owner unplugs for 1 min, replugs (twice if the gadget does not come back, §7.3 P3 note); then read the log | while out: gauge `Discharging`, charger `online` 0; after replug: `online` 1, `Charging`/`Full`, same limits as P2-6 | charging continues with the cable out; any stop condition | generic rollback |
+| P2-8 | Optional, **separate owner go**: wall charger (DCP) for 15 min; SSH is gone while on it, the watch script still enforces the limits; afterwards back on the laptop cable, read the log | `usb_type` DCP, `input_current_limit` 1500000, battery current ≤ 1.5 A, temp ≤ 42 °C, vbat ≤ 4.44 V in the whole log | any STOP line in the log; phone hot to the touch (owner: unplug at once) | generic rollback |
+| P2-9 | `pkill -f instantnoodlep-charge-watch`; copy `/root/charge-watch.log` to `captures/<date>/power/`; `reboot` | combo K3 from `boot_b`; under combo the battery shows no charging again | anything else | Power+VolUp, then §7.2 G1 |
+
+What P2 does not cover: Type-C/PD (P3; no `power-supplies` link yet),
+charging while suspended (the driver turns charging off in suspend), and
+flashing a charger kernel to `boot_b` (only after P2-5 to P2-7 pass, behind
+its own owner go).
+
 ## 8. Open [I]s and how each resolves
 
 | ID | Open inference | Resolution gate |
 | --- | --- | --- |
 | I-P5-1 | Which path charges the battery. Updated: the PM8150B SMB5 block via D/'s out-of-tree driver (§0.5); the i2c5 part is a wireless charge pump, not a wired charger (§0.4) | P2 after P1-4. Original text: not resolved by this M5 plan. A separate charger-policy plan must identify the path, validate the unit battery profile/limits, and gate any charge test; M5 must not enable BQ25980. |
-| I-P5-2 | BQ27411 reports battery TEMP through power_supply under the name the bq27xxx driver uses | R2 `.../battery/temp` |
+| I-P5-2 | BQ27411 reports battery TEMP through power_supply under the name the bq27xxx driver uses | **Resolved [V]**: `bq27411-0/temp`, 0.1 °C (§7.3 P1 result) |
 | I-P5-3 | Exact CONFIG symbols for commit 0 (POWER_SUPPLY, BQ25980_CHARGER, BQ27XXX_BATTERY*, TYPEC_TCPM, USB_ROLE_SWITCH, QCOM_SPMI_*, QCOM_TSENS, RTC_DRV_PM8XXX) as named in L Kconfig | O2 build |
 | I-P5-4 | SS (SuperSpeed) lane polarity on usb_1_qmpphy is board-fixed; only CC/HS orientation is dynamic | R3 flipped-plug test |
 | I-P5-5 | C's charger/gauge node values (supplies, IRQ GPIO, reg) match this unit | O5 live-DT compare + R1 probe |

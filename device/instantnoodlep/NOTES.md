@@ -4,6 +4,26 @@
 Newest first. Findings that matter beyond one subsystem go here; subsystem
 detail lives in the *-PLAN.md files.
 
+## 2026-11-17 (evening): P1 gauge on the phone; P2 charger image built
+
+- [V] P1 RAM boot (`boot-p1-gauge.img`, release `...-g11fedfae5a37`), run by
+  the coordinator: `/sys/class/power_supply/bq27411-0` with status,
+  capacity, voltage_now, current_now, temp, charge_full,
+  charge_full_design, charge_now, technology (no health, no cycle_count).
+  96 %, 4.265 V, 32.3 °C, charge_full 4111000 µAh, design 4455000 µAh,
+  Li-ion. No data-memory write (no battery node).
+- [V] **The battery does not charge on K3 without a charger driver**: cable
+  in = `Not charging`, 0 mA, USB carries the system load. Cable out =
+  `Discharging`, −178 to −382 mA idle, 4.213-4.235 V.
+- [V] First re-plug: still `Discharging` −178 mA and no USB gadget; second
+  re-plug a minute later: `Not charging` 0 mA, gadget back. Matches D/0165.
+  Input for P3 (POWER-M5-PLAN §7.3).
+- [V] P2 built: D/'s PM8150B charger driver + the eight D/ patches + a core
+  `charging_enabled` property (from C/) + binding + DTS, on top of P1.
+  dtbs_check clean. RAM-boot image `boot-p2-charger.img`, runbook
+  POWER-M5-PLAN §7.4 (owner go before the first boot; it programs the
+  charger). Phone-side watch script `tools/instantnoodlep-charge-watch`.
+
 ## 2026-11-17 (afternoon): P1 fuel-gauge image built (power), not booted
 
 - [V] Kernel `~/src/l-k3p`, branch `instantnoodlep-k3-power` @

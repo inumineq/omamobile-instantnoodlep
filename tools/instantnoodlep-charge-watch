@@ -1,0 +1,77 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+#
+# instantnoodlep-charge-watch: run ON THE PHONE (as root) during the P2
+# charger test (device/instantnoodlep/POWER-M5-PLAN.md section 7.4).
+#
+# Every 5 s it prints one line with the bq27411 gauge and the PM8150B
+# charger readings. When a stop condition trips it writes 0 to the
+# charger's charging_enabled, prints STOP with the reason, and exits 1.
+# Stop conditions (coordinator's limits, stricter than the driver's own):
+#   gauge temp > 42.0 degC, gauge voltage > 4.44 V, |gauge current| > 2.1 A,
+#   USB input voltage > 5.6 V, charger health Overvoltage/Overheat/Cold
+#   or any other error (Good, Cool, Warm and Unknown are logged only),
+#   or a kernel line from the charger about over-voltage, a watchdog bark
+#   or a forced stop.
+# It reads sysfs and dmesg only; its one write is the charging switch.
+#
+# Usage: instantnoodlep-charge-watch [seconds]   (default: run until Ctrl-C)
+
+set -u
+
+G=/sys/class/power_supply/bq27411-0
+C=/sys/class/power_supply/pm8150b-charger
+MAX_TEMP=420          # 0.1 degC
+MAX_VBAT=4440000      # uV
+MAX_IBAT=2100000      # uA, either sign
+MAX_VUSB=5600000      # uV
+DURATION=${1:-0}
+
+rd() { cat "$1" 2>/dev/null || echo NA; }
+
+stop() {
+	echo 0 > "$C/charging_enabled" 2>/dev/null
+	echo "STOP $(date +%T) $1; charging_enabled=$(rd "$C/charging_enabled"). Unplug the cable."
+	exit 1
+}
+
+[ -d "$G" ] || { echo "no $G"; exit 2; }
+[ -d "$C" ] || { echo "no $C"; exit 2; }
+
+echo "time status cap% vbat_uV ibat_uA temp_dC | chg_status online usb_type vusb_uV iusb_uA icl_uA health en"
+start=$(date +%s)
+seen=$(dmesg | grep -c 'pm8150b-charger')
+
+while :; do
+	st=$(rd "$G/status"); cap=$(rd "$G/capacity")
+	v=$(rd "$G/voltage_now"); i=$(rd "$G/current_now"); t=$(rd "$G/temp")
+	cst=$(rd "$C/status"); on=$(rd "$C/online"); ut=$(rd "$C/usb_type")
+	cv=$(rd "$C/voltage_now"); ci=$(rd "$C/current_now")
+	icl=$(rd "$C/input_current_limit"); h=$(rd "$C/health")
+	en=$(rd "$C/charging_enabled")
+	echo "$(date +%T) $st $cap $v $i $t | $cst $on $ut $cv $ci $icl $h $en"
+
+	case "$t$v$i" in *NA*) stop "gauge unreadable (temp=$t v=$v i=$i)";; esac
+	[ "$t" -gt "$MAX_TEMP" ] && stop "battery temp $t > $MAX_TEMP"
+	[ "$v" -gt "$MAX_VBAT" ] && stop "battery voltage $v > $MAX_VBAT"
+	a=${i#-}
+	[ "$a" -gt "$MAX_IBAT" ] && stop "battery current $i beyond $MAX_IBAT"
+	case "$cv" in NA) ;; *) [ "$cv" -gt "$MAX_VUSB" ] && stop "USB input $cv > $MAX_VUSB";; esac
+	# Cool/Warm are the PMIC thermistor's soft zones: logged, not a stop.
+	case "$h" in Good|Cool|Warm|Unknown|NA) ;; *) stop "charger health $h";; esac
+
+	now=$(dmesg | grep 'pm8150b-charger')
+	n=$(printf '%s\n' "$now" | grep -c 'pm8150b-charger')
+	if [ "$n" -gt "$seen" ]; then
+		new=$(printf '%s\n' "$now" | tail -n $((n - seen)))
+		printf '%s\n' "$new" | sed 's/^/  dmesg: /'
+		seen=$n
+		printf '%s\n' "$new" | grep -qiE 'overvoltage|watchdog bark|charging stopped' &&
+			stop "charger reported: $(printf '%s\n' "$new" | grep -iE 'overvoltage|watchdog bark|charging stopped' | tail -n 1)"
+	fi
+
+	if [ "$DURATION" -gt 0 ] && [ $(( $(date +%s) - start )) -ge "$DURATION" ]; then
+		exit 0
+	fi
+	sleep 5
+done
