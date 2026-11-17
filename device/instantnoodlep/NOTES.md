@@ -4,6 +4,49 @@
 Newest first. Findings that matter beyond one subsystem go here; subsystem
 detail lives in the *-PLAN.md files.
 
+## 2026-11-17 (afternoon): Wi-Fi associated and BT scanning on k3-wifi2
+
+- [V] k3-wifi2 (`-gf9a20697e2ae`) RAM-booted: with the `serial1 = &uart6`
+  alias the GENI UART probes and hci0 appears, but comes up unconfigured
+  (no public address). After `btmgmt public-addr` with a locally
+  administered address (not persistent; value not recorded here) the
+  controller powers on and a scan lists dozens of devices. Persistent
+  address handling: design in progress (daily kernel worker).
+- [V] The owner joined their Wi-Fi network from the phone UI; NTP synced
+  the clock. SSH is not reachable over Wi-Fi (UFW blocks 22 on `wlp1s0`).
+- [V] UI: the owner could not leave the Wi-Fi panel with gestures (no
+  Android buttons; the edge back-swipe does not register on the curved
+  edges). Drafts for upstream in progress (worker `shell-ux`).
+
+## 2026-11-17 (evening): Wi-Fi up on a RAM boot; BT needs a serial alias
+
+- [V] k3-wifi (`-g422090919028`) RAM-booted with the linux-firmware
+  QCA6390 files on the rootfs: `PCIe Gen.2 x1 link up`, ath11k
+  `chip_id 0x0 chip_family 0xb board_id 0xff`, firmware 0x10121492, no
+  board-data error, netdev `wlp1s0`, regdomain DK, 30 APs on 2.4 and
+  5 GHz. PM8009 s2f for the PMU's vddpmu works. Details: WIFI-BT-M5-PLAN §7.3.
+- [V] Bluetooth failed: `qcom_geni_serial 998000.serial: Invalid line -19`.
+  With no `serial*` alias in the DTB the GENI UART driver cannot allocate a
+  line (code path in the plan's §3). Fixed by `serial1 = &uart6` in the
+  k3-wifi2 build (`-gf9a20697e2ae`, `~/orca/build-out/k3-wifi2/` on
+  macbookpro); not booted yet.
+- [V] `vdda`/`vddpe-3v3` dummy-regulator notes on pcie0 are expected: no
+  SM8250 board describes those supplies.
+
+## 2026-11-17 (afternoon): Wi-Fi/BT kernel built on the Mac (offline only)
+
+- [V] Branch `instantnoodlep-k3-wifi` = combo K3 + two DTS commits (PM8009
+  s2f; QCA6390 PMU, PCIe0 + `wifi@0`, UART6 + `bluetooth`). Built on
+  macbookpro in a Linux arm64 container, LLVM 23.1.6, combo `.config`:
+  release `7.3.0-rc6-instantnoodlep-k3-g422090919028`. Artefacts and
+  SHA256SUMS in `~/orca/build-out/k3-wifi/` (not in git).
+- [V] `CHECK_DTBS` on the board DTB is clean. It caught `memory-region` on
+  `wifi@0`, which would put ath11k in fixed-memory mode; dropped (learning
+  `l-8b77763d`).
+- [V] combo's `.config` already carries every Wi-Fi/BT driver as a module;
+  no config change was needed.
+- Nothing ran on the phone. RAM-boot runbook: WIFI-BT-M5-PLAN §7.
+
 ## 2026-11-17 (midday): K3 on boot_b
 
 - [V] `boot_b` now holds the combo K3 image (`boot-r3-gpu.img`, sha256
