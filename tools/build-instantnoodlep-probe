@@ -34,9 +34,12 @@ Arch on userdata, packs /etc/omamobile-ufs-rw = userdata and
 /etc/omamobile-root-label = omamobile-root, and adds systemd.watchdog_sec=20.
 It is still a RAM boot; the tool never writes the phone.
 
---boot 1 disables the UFS host. --boot 2 enables it. Both disable every
+--boot 1 disables the UFS host. --boot 2 enables it. By default both disable every
 remoteproc node and force USB peripheral mode without a role switch. The
 initramfs never contains /etc/omamobile-ufs-rw, so there is no write allowlist.
+
+--enable-adsp opts into AUDIO-M5: only the SM8250 ADSP is enabled and its
+firmware-name must equal firmware.map. Every other remoteproc stays disabled.
 
 The 64 MiB image cap is [I], a conservative limit until stage 0 records the
 IN2023 boot partition size. It is not a measured device limit. The separate
@@ -338,7 +341,11 @@ def property_present(dtb, node, prop):
     return result.returncode == 0
 
 
-def verify_probe_dtb(dtb, boot, labels):
+ADSP_NODE = "/soc@0/remoteproc@17300000"
+ADSP_FIRMWARE = "qcom/sm8250/OnePlus/instantnoodlep/adsp.mbn"
+
+
+def verify_probe_dtb(dtb, boot, labels, enable_adsp=False):
     require_identity(dtb)
     verify_overlay_sink(dtb, labels)
     if fdt_get(dtb, USB_NODE, "dr_mode") != "peripheral":
@@ -346,9 +353,17 @@ def verify_probe_dtb(dtb, boot, labels):
     if property_present(dtb, USB_NODE, "usb-role-switch"):
         raise BuildError("probe USB role switch was not removed")
     remotes = remoteproc_nodes(dtb)
+    if enable_adsp:
+        if ADSP_NODE not in remotes:
+            raise BuildError("audio probe lacks the SM8250 ADSP node")
+        if fdt_get(dtb, ADSP_NODE, "firmware-name") != ADSP_FIRMWARE:
+            raise BuildError("audio probe ADSP firmware-name differs from firmware.map")
+        if fdt_get(dtb, ADSP_NODE, "compatible") != "qcom,sm8250-adsp-pas":
+            raise BuildError("audio probe has an unexpected ADSP compatible")
     for node in remotes:
-        if fdt_get(dtb, node, "status") != "disabled":
-            raise BuildError(f"remote processor was not disabled: {node}")
+        want = "okay" if enable_adsp and node == ADSP_NODE else "disabled"
+        if fdt_get(dtb, node, "status") != want:
+            raise BuildError(f"remote processor status is not {want}: {node}")
     want = "disabled" if boot == 1 else "okay"
     if fdt_get(dtb, UFS_NODE, "status") != want:
         raise BuildError(f"probe UFS host status is not {want}")
@@ -447,20 +462,21 @@ def check_overlay_applies(ufdt_apply, dtb, overlay, work):
         raise BuildError("post-overlay DTB exceeds ABL's 2 MiB DTB window")
 
 
-def make_probe_dtb(source, output, boot, labels):
+def make_probe_dtb(source, output, boot, labels, enable_adsp=False):
     require_identity(source)
     shutil.copyfile(source, output)
     run(["fdtput", "-t", "s", output, USB_NODE, "dr_mode", "peripheral"])
     if property_present(output, USB_NODE, "usb-role-switch"):
         run(["fdtput", "-d", output, USB_NODE, "usb-role-switch"])
     for node in remoteproc_nodes(output):
-        run(["fdtput", "-t", "s", output, node, "status", "disabled"])
+        run(["fdtput", "-t", "s", output, node, "status",
+             "okay" if enable_adsp and node == ADSP_NODE else "disabled"])
     run(["fdtput", "-t", "s", output, UFS_NODE, "status",
          "disabled" if boot == 1 else "okay"])
     for name, value in PON_MODES.items():
         run(["fdtput", "-t", "u", output, PON_NODE, name, str(value)])
     add_overlay_sink(output, labels)
-    verify_probe_dtb(output, boot, labels)
+    verify_probe_dtb(output, boot, labels, enable_adsp)
 
 
 def padded(size):
@@ -672,7 +688,7 @@ def build(args):
             prefix=".instantnoodlep-probe-", dir=paths["boot"].parent) as temp:
         work = Path(temp)
         staged = {name: work / path.name for name, path in paths.items()}
-        make_probe_dtb(args.dtb, staged["dtb"], args.boot, labels)
+        make_probe_dtb(args.dtb, staged["dtb"], args.boot, labels, args.enable_adsp)
         if args.ufdt_apply is not None:
             check_overlay_applies(args.ufdt_apply, staged["dtb"],
                                   args.stock_overlay, work)
@@ -688,7 +704,7 @@ def build(args):
         info, unpacked = read_back_boot(
             staged["boot"], args.mkbootimg, args.kernel,
             staged["ramdisk"], staged["dtb"], work, args.root, cmdline)
-        verify_probe_dtb(unpacked / "dtb", args.boot, labels)
+        verify_probe_dtb(unpacked / "dtb", args.boot, labels, args.enable_adsp)
 
         outputs = {}
         for name in ("boot", "dtb", "ramdisk"):
@@ -702,6 +718,7 @@ def build(args):
             "boot": args.boot,
             "root": args.root,
             "debug_shell": args.debug_shell,
+            "enable_adsp": args.enable_adsp,
             "header": info,
             "boot_image_limit": {
                 "bytes": BOOT_IMAGE_MAX,
@@ -754,6 +771,8 @@ def main(argv=None):
                              "to Arch on userdata with an allowlist of userdata only")
     parser.add_argument("--debug-shell", action="store_true",
                         help="with --root userdata: add " + DEBUG_SHELL)
+    parser.add_argument("--enable-adsp", action="store_true",
+                        help="AUDIO-M5: enable only SM8250 ADSP with the mapped firmware; other DSPs stay disabled")
     parser.add_argument("--out", type=Path, required=True,
                         help="new boot.img path; sibling artifacts derive from its name")
     args = parser.parse_args(argv)

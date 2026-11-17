@@ -398,6 +398,28 @@ def test_full(work, private, public):
         require(probe.fdt_get(paths["dtb"], probe.UFS_NODE, "status") == expected,
                 f"boot {boot} UFS status is not {expected}")
         probe.verify_probe_dtb(paths["dtb"], boot, OVERLAY_LABELS)
+        # The audio opt-in must keep every non-ADSP remoteproc disabled,
+        # validate the mapped firmware, and survive final DTB verification.
+        audio_source = work / f"audio-source{boot}.dtb"
+        shutil.copyfile(dtb, audio_source)
+        run(["fdtput", "-cp", str(audio_source), probe.ADSP_NODE])
+        run(["fdtput", "-t", "s", str(audio_source), probe.ADSP_NODE,
+             "compatible", "qcom,sm8250-adsp-pas"])
+        run(["fdtput", "-t", "s", str(audio_source), probe.ADSP_NODE,
+             "firmware-name", probe.ADSP_FIRMWARE])
+        audio_output = work / f"audio-output{boot}.dtb"
+        probe.make_probe_dtb(audio_source, audio_output, boot, OVERLAY_LABELS, True)
+        probe.verify_probe_dtb(audio_output, boot, OVERLAY_LABELS, True)
+        for remote in probe.remoteproc_nodes(audio_output):
+            require(probe.fdt_get(audio_output, remote, "status") ==
+                    ("okay" if remote == probe.ADSP_NODE else "disabled"),
+                    "audio opt-in enabled an unrelated DSP")
+        run(["fdtput", "-t", "s", str(audio_output), probe.ADSP_NODE,
+             "firmware-name", "wrong.mbn"])
+        raises(probe.BuildError,
+               lambda: probe.verify_probe_dtb(audio_output, boot, OVERLAY_LABELS, True),
+               "firmware-name")
+
         require(probe.fdt_cells(paths["dtb"], "/", "oplus,dtsi_no") == [0x4D63],
                 "oplus,dtsi_no missing")
         require(probe.fdt_cells(paths["dtb"], probe.PON_NODE,
