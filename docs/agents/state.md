@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # State: where the port stands now
 
-Last updated: 2026-11-17 (midday, K3 on boot_b), claude on omabook.
+Last updated: 2026-11-17 (afternoon, P1 gauge image built), claude on omabook.
 
 The one page an agent reads first. Keep it short and current: it is
 overwritten, not appended to. History goes to `device/instantnoodlep/NOTES.md`
@@ -35,7 +35,9 @@ of it from `origin/main` plus the pushed branches.
 - [V] `boot_b` holds combo K3 (with the test-only kona patch, learning
   `l-48e0c482`), modules on the rootfs, B5 set: the phone boots straight
   into Hyprland on the GPU. Rollback: K2 `~/android/build/m1b/boot_b.img`.
-- [V] No power_supply devices: battery level and charging unknown [I].
+- [V] No power_supply devices under combo K3: battery level and charging
+  unknown [I]. A P1 fuel-gauge RAM-boot image is built, not yet booted
+  (POWER-M5-PLAN §7.3, `boot-p1-gauge.img`).
 - [V] Stays off only with the USB cable out (`off-mode-charge:1`;
   learning `l-838f7998`).
 - [V] Network: reverse SOCKS over SSH, clock set by hand (learning `l-5c5f509d`).
@@ -48,7 +50,8 @@ None (see `docs/agents/active/`).
 
 1. Owner: upstream proposal for freedreno in the omamobile Mesa (PR of
    `inumineq/gpu-mesa-freedreno`; draft in `~/claude/instantnoodlep/`).
-2. Power: battery gauge and charger (POWER-M5-PLAN), the daily-use blocker.
+2. Power: RAM-boot the P1 gauge image (POWER-M5-PLAN §7.3, coordinator);
+   then P2, D/'s PM8150B charger with its gauge-led policy (§0.5).
 3. A kernel-side answer to the `qcom,kona` root rewrite that upstream can
    take (DTBO-PLAN §6).
 4. M5 runbooks, in the order M5-REVIEW gives.

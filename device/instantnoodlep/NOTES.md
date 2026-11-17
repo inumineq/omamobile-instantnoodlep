@@ -4,6 +4,23 @@
 Newest first. Findings that matter beyond one subsystem go here; subsystem
 detail lives in the *-PLAN.md files.
 
+## 2026-11-17 (afternoon): P1 fuel-gauge image built (power), not booted
+
+- [V] Kernel `~/src/l-k3p`, branch `instantnoodlep-k3-power` @
+  `11fedfae5a37` (one DTS commit on combo K3: `&qupv3_id_2`, `&gpi_dma2`,
+  `&i2c16` 100 kHz, `fuel-gauge@55` `ti,bq27411`, no `monitored-battery`).
+  Release `7.3.0-rc6-instantnoodlep-k3-g11fedfae5a37`; config as combo minus
+  `CHARGER_BQ25980`. dtbs_check on the board DTB: no warnings.
+- [V] RAM-boot image `~/android/build/k3-power-ram/boot-p1-gauge.img`,
+  sha256 `b69df943…fe85b`, same builder flags and ramdisk as `boot-r3-gpu`;
+  modules tarball in `~/android/build/k3-power/`. Runbook: POWER-M5-PLAN §7.3.
+- [V] The bq27411 has RAM data memory, so a `monitored-battery` node would
+  make the driver rewrite it on every probe; the i2c5:0x66 part is a
+  wireless charge pump, not a BQ25980 (D/ patch 0076). POWER-M5-PLAN §0.4.
+- [V] D/'s charging policy (PM8150B driver, gauge-led, 2 A / 4.435 V at
+  5-45 °C, 3.98 V / 0.5 A without gauge data) matches the stock entry-16
+  charger values; P2 is staged in POWER-M5-PLAN §0.5, not built.
+
 ## 2026-11-17 (midday): K3 on boot_b
 
 - [V] `boot_b` now holds the combo K3 image (`boot-r3-gpu.img`, sha256

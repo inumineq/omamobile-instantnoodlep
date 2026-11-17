@@ -5,19 +5,22 @@ House-rule-6 gate for milestone **M5** of the wayfinder map
 ("Omarchy Mobile port for instantnoodlep (OnePlus 8 Pro IN2023)"): the power
 subsystem — battery/fuel gauge/charging, USB-C role switching and orientation,
 thermal + cpufreq/cpuidle sanity, suspend-to-idle and wake sources, and PON
-reboot/bootloader modes. This file is a plan only; no code is written here.
-Nothing in the power subsystem is touched before this plan exists with its
-gated runbook (AGENTS.md rule 6).
+reboot/bootloader modes. The kernel work lives in linux-omarchy-mobile
+branches, not here; this file stages it and gates every phone step
+(AGENTS.md rule 6).
 
-- Date: 2026-11-17. Branch: `m5-plans` (this document only).
+- Date: 2026-11-17 (first draft, branch `m5-plans`); refreshed 2026-11-17
+  evening on branch `inumineq/power` for K3 and the P1 fuel-gauge image (§0).
 - Reading order: `AGENTS.md`, `device/instantnoodlep/DTS-PORT-PLAN.md`,
   `FIRMWARE-PLAN.md`, `NOTES.md`, `DISPLAY-M3-PLAN.md` (style template).
 - Safety model unchanged: never write `super` or any `_a` partition; flash
   writes only ever name slot-B boot images and `userdata`, each behind an
   owner go. All M5 phone steps are `fastboot boot` (RAM) first; nothing in
   this plan flashes anything. Never `fastboot flash`/`erase`/`--set-active`.
-- New prerequisite: neutral DTBO installed on `dtbo_b` through a separate
-  owner-gated slot-B write plan before RAM boot. Stock entry 16 changes the
+- ~~New prerequisite: neutral DTBO on `dtbo_b`~~ **Parked** [V: DTBO-PLAN §6;
+  learning `l-48e0c482`]: ABL rejected both neutral `dtbo_b` forms, so
+  `dtbo_b` stays stock and K3 carries the test-only `qcom,kona` patch
+  instead (§0.2). The original reasoning follows. Stock entry 16 changes the
   live root compatible to `qcom,kona-mtp`, `qcom,kona`, `qcom,mtp`
   [V: NOTES.md 2026-11-17 entry]. `cpufreq-dt-platdev.c` checks the machine
   compatible blocklist before creating its generic platform device; with the
@@ -27,6 +30,150 @@ gated runbook (AGENTS.md rule 6).
   `cpufreq_dt_platdev_init`]. Nura's device package also installs an empty
   DTBO [V: <https://gitlab.com/postmarketOS/pmaports/-/raw/master/device/testing/device-oneplus-instantnoodlep/APKBUILD>, `kernel_mainline()`].
 
+## 0. State and staging (2026-11-17 evening)
+
+### 0.1 Where power stands
+
+- [V] The phone runs combo K3 from `boot_b`, release
+  `7.3.0-rc6-instantnoodlep-k3-gaa996bae0695` (kernel `~/src/l-k3`, branch
+  `instantnoodlep-k3-combo`), and `/sys/class/power_supply` is empty: no
+  gauge, no charger driver [V: NOTES.md 2026-11-17 midday].
+- [I] Whether the phone charges at all under our kernels is unknown. With
+  no charger driver the PM8150B runs on whatever the boot chain left in it.
+- [V] D/ is now read locally (`~/android/build/m3-src/D`), and the C/ files
+  that matter here were fetched at the C/ pin (`~/android/build/m3-src/C`:
+  the board DTS, `pm8150b.dtsi`, `qcom_pm8150b_charger.c`). D/'s kernel
+  patches apply to that tag [V: D/docs/patches.md:125,139, tag
+  `sm8250-7.2.0_git20261010` = C/ pin `3c5440e9`].
+
+### 0.2 The `qcom,kona` root under K3 and power
+
+`dtbo_b` stays stock, so the live root compatible is `qcom,kona-mtp`,
+`qcom,kona`, `qcom,mtp` [V: learning `l-48e0c482`]. Every table in the K3
+tree keyed on the root `qcom,sm8250` is one of three: the `cpufreq-dt-platdev`
+blocklist, `qcom_pd_mapper` and `ubwc_config` [V: `grep -rn '"qcom,sm8250"'
+drivers/` in `~/src/l-k3p`, three hits], and the combo patch adds
+`qcom,kona` to all three [V: `~/src/l-k3` commit `6ea434b7a`]. So none
+misses under K3. The power drivers in this plan (bq27xxx, qcom_pmic_typec,
+TSENS, SPMI ADC/temp-alarm, qcom-pon, rtc-pm8xxx, D/'s PM8150B charger)
+match their own nodes, not the root, and are unaffected. R5's "no duplicate
+`cpufreq-dt`" check still applies, now as a check of the kona patch.
+
+### 0.3 Stages
+
+| Stage | Content | Writes to hardware | State |
+| --- | --- | --- | --- |
+| **P1** fuel gauge | bq27411 on i2c16 @0x55, read only: capacity, voltage, current, temperature, status through `/sys/class/power_supply/bq27411-0` | none (gauge reads only, see 0.4) | **Built**, RAM-boot image ready; runbook §7.3 step P1-R1 |
+| **P2** charger | D/'s PM8150B charger driver with the gauge-led stock policy (§0.5) | PM8150B charger registers (float voltage, currents, watchdog) | **Staged, not implemented**: needs P1 readings from this unit first (0.5) |
+| **P3** USB-C | PM8150B Type-C/PD + dwc3 role switch (old commit 1 in §6) | Type-C/VBUS block | Not started; changes the USB link we SSH over, so it runs after P2 |
+
+### 0.4 P1: what the image contains
+
+- Kernel branch `instantnoodlep-k3-power` in worktree `~/src/l-k3p`, one
+  commit on `instantnoodlep-k3-combo`: `arm64: dts: qcom: instantnoodlep: Add
+  the battery fuel gauge` (`&qupv3_id_2`, `&gpi_dma2`, `&i2c16` at 100 kHz,
+  `fuel-gauge@55` `ti,bq27411`). Node values: C:639-647, unchanged by any
+  D/ patch [V: `grep -l 'i2c16\|smart_battery\|bq27' D/kernel-patches/*`
+  hits only 0076/0166/0167, none of which touches the node]. Stock agrees:
+  E/ fragment@80 targets `qupv3_se16_i2c` with `qcom,clk-freq-out =
+  <0x186a0>` (100 kHz) and `bq27541-battery@55` [V: E/ lines 12085-12098].
+- **No `monitored-battery`, no `simple-battery` node.** The bq27411 is a
+  RAM data-memory part: `BQ27XXX_DATA(bq27411, ..., BQ27XXX_O_RAM)` [V:
+  L/drivers/power/supply/bq27xxx_battery.c:1048], and for `O_RAM` chips
+  `bq27xxx_battery_update_dm_block()` writes design values from the DT
+  regardless of `CONFIG_BATTERY_BQ27XXX_DT_UPDATES_NVM` [V: same file
+  :1339-1358]; `bq27xxx_battery_settings()` triggers that whenever the
+  battery node has both design capacities or a min voltage [V: :1561-1564].
+  C/D's `battery` node has both (C:274-280), so D/ rewrites the gauge's
+  design capacity on every boot. Without the node,
+  `power_supply_get_battery_info()` fails and the driver returns before any
+  write [V: :1521-1522]. The binding does not require `monitored-battery`
+  [V: L/Documentation/devicetree/bindings/power/supply/bq27xxx.yaml,
+  `required` lists only `compatible` and `reg`]; this corrects §3.2's
+  "requires `monitored-battery`".
+- Config: identical to combo K3 except `CONFIG_CHARGER_BQ25980` dropped
+  (was `=m`). `POWER_SUPPLY`, `BATTERY_BQ27XXX`, `BATTERY_BQ27XXX_I2C` were
+  already `=y`; `BATTERY_BQ27XXX_DT_UPDATES_NVM` stays unset. All pinned in
+  `device/instantnoodlep/kernel.config`.
+- Correction to §2/§3.1: the part at i2c5:0x66 is a **BQ2597x wireless
+  charge pump, not a BQ25980** [V: D/kernel-patches/0076, commit message:
+  the stock overlay identifies it as BQ2597x; "the BQ25980 driver has a
+  different register layout"]. Never bind `ti,bq25980` there; the driver is
+  now out of the build.
+
+### 0.5 P2: D/'s safe charging policy, staged
+
+The overvoltage: D/ images up to v2026.11.10 charged the cell to 4.76 V
+instead of 4.35 V [V: D/README.md:10-13]. Cause: the float-voltage register
+counts from 3.6 V in 10 mV steps, and the old formula (3.4875 V base,
+7.5 mV steps) wrote 0x74, which selects 4.76 V [V: D/kernel-patches/0068,
+commit message]. The fixed encoding is `(fv_uv - 3600000) / 10000`,
+bounded to 3.6-4.79 V [V: C/ driver + D/ series, `FLOAT_VOLTAGE_*` :86-90,
+:844-849].
+
+The later policy (v2026.11.15, D/kernel-patches/0165-0167): the PM8150B
+charges, the bq27411 decides. Limits [V: D/docs/charging.md:16-41; driver
+table `smb5_zones[]` :315-321 and `POLICY_*` :334-336 after the D/ series]:
+
+| Battery temperature | Charge current | Float voltage |
+| --- | --- | --- |
+| below −2 °C | none | |
+| −2 to 0 °C | 0.3 A | 3.98 V |
+| 0 to 5 °C | 1.2 A | 4.435 V |
+| 5 to 45 °C | 2 A | 4.435 V |
+| 45 to 50 °C | 1.1 A | 4.13 V |
+| above 50 °C | none | |
+
+Plus: full at > 4.385 V with < 230 mA, or gauge full, or resting > 4.35 V;
+recharge below 4.235 V; hard stop at 4.46 V; **3.98 V / 0.5 A until the
+first valid gauge reading and whenever gauge data is invalid**; charger
+watchdog on (only the policy work pets it, so a dead kernel stops
+charging); input 5 V only, ≤ 3 A from PD, 500 mA SDP / 1.5 A DCP [V:
+D/docs/charging.md:3-7,26-41].
+
+These match the stock charger properties in E/ fragment@2 [V: E/ lines
+645-711]: `qcom,iterm_ma` 230, `temp_normal_fastchg_current_ma` 2000,
+`temp_normal_vfloat_mv` 4435, `temp_warm_vfloat_mv` 4130,
+`temp_warm_fastchg_current_ma` 1100, `warm_bat_decidegc` 450,
+`hot_bat_decidegc` 500, `normal_vfloat_sw_limit` 4385,
+`normal_vfloat_over_sw_limit` 4445, `vfloat_step_mv` 8. D/ restarts
+200 mV below the float voltage where stock's `recharge-mv` is 100 (D/ is
+the stricter one). The stock fast-charge MCU node carries
+`qcom,oplus_batt_4400mv` [V: E/ line 12105], i.e. a 4.4 V-class cell, which
+is why a 4.435 V float at the charger (measured behind the charge path)
+and a 4.385 V cell "full" are stock.
+
+Why P2 is staged and not built in this pass:
+
+1. D/'s policy is only as safe as the gauge data it reads; P1 has not yet
+   shown plausible bq27411 readings on this unit (P1-R1).
+2. The driver is out of tree: `qcom_pm8150b_charger.c` (C/, GPL-2.0-only,
+   Teguh Sobirin, 964 lines) plus eight D/ patches (0068, 0073, 0082-0085,
+   0165, 0166; 1739 lines after them [V: applied in
+   `~/android/build/m3-src/C-applied`, all eight apply cleanly]). There is
+   no `qcom,pm8150b-charger` binding in L, and L's `pm8150b.dtsi` has no
+   `charger@1000` node (C/pm8150b.dtsi:109-126 + D/0086 add it).
+3. It needs `pm8150b.dtsi` included, whose second `pon@800` must stay
+   disabled (K1 `-EEXIST`, §3.7), and the PM8150B ADC for USB-in telemetry.
+
+P2 port, when P1-R1 passes (kernel branch on top of P1, author of each
+patch kept, Assisted-by on our own):
+
+| # | Commit | Source |
+| --- | --- | --- |
+| P2.1 | `power: supply: Add the Qualcomm PM8150B charger driver` (author Teguh Sobirin) + Kconfig/Makefile | C/drivers/power/supply/qcom_pm8150b_charger.c at the C/ pin |
+| P2.2-P2.9 | D/ 0068, 0073, 0082, 0083, 0084, 0085, 0165, 0166 with `git am`, authors kept | D/kernel-patches |
+| P2.10 | `dt-bindings: power: supply: Add qcom,pm8150b-charger` | new, ours (needed for dtbs_check) |
+| P2.11 | `arm64: dts: qcom: pm8150b: Add the charger` (+ D/0086 source-change IRQ) | C/pm8150b.dtsi:109-126, D/0086 |
+| P2.12 | board: include `pm8150b.dtsi`, keep `&pm8150b` `pon@800` disabled; `battery` node; `&pm8150b_charger` okay with `monitored-battery`, `qcom,fuel-gauge = <&fuel_gauge>` (D/0167); no `power-supplies` until P3 (the driver then uses its own APSD detection [V: driver :1512 `has_tcpm` is optional]) | C:274-280, D/0087, D/0167 |
+
+P2.12 has an open safety question to settle before it is written: the
+charger needs `monitored-battery` (voltage-max 4.35 V, 2 A limit from
+D/0087), but the gauge must not get one (0.4). Give the charger its own
+`battery` node and leave the gauge without; do not copy C/'s design
+capacity/energy into any node the gauge sees. Config: the charger `=y`
+(boot-critical for charge safety), `QCOM_SPMI_ADC5=y`.
+
 ## 1. Source pins
 
 - `L/` = `~/src/l`, branch `instantnoodlep-k2` @ `a28aaf1a09db`
@@ -34,9 +181,13 @@ gated runbook (AGENTS.md rule 6).
   [V: NOTES.md 2026-11-16 "R7, K2 passes R1-R5"]. Line refs below are valid
   in that tree (K2 = the board file `L/arch/arm64/boot/dts/qcom/sm8250-oneplus-instantnoodlep.dts`).
 - `C/` = community SM8250 kernel, `gitlab.nura.eco/soc/qualcomm-sm8250/linux`,
-  tag `7.2.0-dev`, commit `3c5440e9dd3c3e3b5735ad8f1b22bdfd02c707d9` (pin as
-  in DTS-PORT-PLAN §1). I could not open the remote from this environment;
-  C/ facts are cited through DTS-PORT-PLAN's quoted line ranges.
+  tag `7.2.0-dev` = `sm8250-7.2.0_git20261010`, commit
+  `3c5440e9dd3c3e3b5735ad8f1b22bdfd02c707d9` (pin as in DTS-PORT-PLAN §1).
+  Since 2026-11-17 evening the board DTS, `pm8150b.dtsi` and
+  `drivers/power/supply/qcom_pm8150b_charger.c` at that pin are in
+  `~/android/build/m3-src/C` (raw file fetches; a shallow clone timed out),
+  and the same files with D/'s charger patches applied are in
+  `~/android/build/m3-src/C-applied`. `C:<line>` refers to the board DTS.
 - `E/` = `~/android/build/p3/entry16.dts`, decompiled stock dtbo **entry 16**
   of `IN2023_13.1.0.591(EX01)` (15974 lines; cited by fragment number).
   Facts only — GPIOs, rails, addresses, compatible strings; no vendor code is
@@ -46,10 +197,9 @@ gated runbook (AGENTS.md rule 6).
   (DISPLAY-M3-PLAN pin). `D/` = public Nura/OnePlus 8 Pro repository at
   <https://github.com/darknagel/oneplus-instantnoodlep-nura-unofficial>,
   including README and `docs/charging.md` (checked during review).
-- `D/` = public Nura/OnePlus 8 Pro repository
-  <https://github.com/darknagel/oneplus-instantnoodlep-nura-unofficial>;
-  its charging docs report the earlier overvoltage and the BQ27411-based
-  policy used in the newer image [V: README and docs/charging.md].
+- Local copy of D/: `~/android/build/m3-src/D` (README, docs/charging.md,
+  `kernel-patches/` 0001-0167 against the C/ tag [V: D/docs/patches.md:139]).
+  `D/0068` etc. name `D/kernel-patches/0068-*.patch`.
 
 ## 2. Hardware identification
 
@@ -57,8 +207,8 @@ gated runbook (AGENTS.md rule 6).
 | --- | --- | --- |
 | PMIC stack | PM8150 x2 (USID 0,1), PM8150B x2 (USID 2,3), PM8150L x2 (4,5), PM8009 x2 (a,b), PMX55 (8,9) on SPMI | [V: NOTES.md 2026-11-16 stage-0 D5 live-DT list]; generic nodes: L/pm8150.dtsi:47-143, L/pm8150b.dtsi:46-179, L/pm8150l.dtsi |
 | Stock wired charger | PM8150B (USID 2) SMB5 block, stock compatible `qcom,qpnp-smb5`, carries VOOC/Warp props (`qcom,vooc_project`, `qcom,input_current_vooc_ma_*`, `qcom,oplus-pps-usbpd-detection`, `qcom,wireless_support`), `qcom,external_gauge`, `qcom,batt_capacity_mah = <0x119e>` (4502 mAh) | [V: E/ fragment@2, `pm8150b_charger: qcom,qpnp-smb5` block] |
-| External charger IC | TI **BQ25980** on `i2c5` @ `0x66` | [V: DTS-PORT-PLAN §2.3 quoting C:626-637 `&i2c5` + `charger@66`] |
-| Fuel gauge | TI **BQ27411** on `i2c16` @ `0x55`; stock PM8150B FG (`qcom,fg-gen4`) is `status = "disabled"` with `qcom,external_gauge` | [V: DTS-PORT-PLAN §2.3 quoting C:639-647; E/ fragment@2 `pm8150b_fg` disabled] |
+| i2c5 @ `0x66` | **BQ2597x wireless charge pump**, not the BQ25980 C/ names (C:626-637); D/ renames it `ti,bq2597x-standalone` and disables it | [V: D/0076 commit message and diff]. Not a wired charger; never bind `ti,bq25980` to it |
+| Fuel gauge | TI **BQ27411** on `i2c16` @ `0x55` (stock: `oplus,bq27541-battery`, 100 kHz); stock PM8150B FG (`qcom,fg-gen4`) is `status = "disabled"` with `qcom,external_gauge` | [V: C:639-647; E/ fragment@80, lines 12085-12098; E/ fragment@2 `pm8150b_fg` disabled] |
 | Battery | single pack; the draft cites different capacities for the SMB5 and batterydata profiles | [I-P5-11: reconcile the owner's actual battery ID/profile before using any capacity or voltage value; the referenced entry16 source was not independently available in this review]. Do not choose a `simple-battery` capacity or charge limit from either value until the live profile is reconciled. |
 | USB-C controller | PM8150B (USID 2) `typec@1500` + `pdphy@1700`; stock sink PDOs 5 V/3 A, 9 V/3 A, 12 V/2.25 A; VBUS reg `0x1100`; stock wires `extcon = <&pm8150b_pdphy>` on usb0 and the QMP DP PHY | [V: E/ fragment@2 `pm8150b_pdphy qcom,default-sink-caps = <0x1388 0xbb8 0x2328 0xbb8 0x2ee0 0x8ca>`; E/ fragments 9-11] |
 | Wireless charging | IDT receiver behind OnePlus-specific pinctrl: pm8150 gpio10 `idt_en`, gpio1 `usbin_int` (`op_wlchg_pm8250_gpio`); pm8150l gpio8 `wrx_en`, gpio11 `wrx_otg` (`op_wlchg_pm8150a_gpio`) | [V: E/ fragment@0 `op_wlchg_pm8250_gpio`; E/ fragment@4 `op_wlchg_pm8150a_gpio`] |
@@ -76,7 +226,7 @@ gated runbook (AGENTS.md rule 6).
 | PM8150B SMB5 charger (`qcom,qpnp-smb5`, stock wired/VOOC path) | **no driver, no binding** in L: power/supply bindings list has no smb5; `qcom_smbx.c` matches only `qcom,pmi8998-charger` / `qcom,pm660-charger` | none [V: L/Documentation/devicetree/bindings/power/supply listing; L/drivers/power/supply/qcom_smbx.c:1036-1039] | node doesn't even exist (K2 does not include pm8150b.dtsi) [V: K2 dts includes] | nothing — deliberately not ported; VOOC/Warp is downstream-only (see verdict below) |
 | PMIC glink battery manager | exists but is an auxiliary `pmic_glink.power-supply` service for newer SoCs | `qcom_battmgr.c` id `pmic_glink.power-supply` [V: L/qcom_battmgr.c:1716-1720] | n/a | not used: this phone has a local I2C gauge (stock `qcom,external_gauge`, FG disabled) [V: E/ fragment@2] |
 | Direct SMBx driver | covers pmi8998/pm660 only, not PM8150B | `qcom_smbx.c` [V: :1036-1039] | n/a | not applicable to PM8150B |
-| TI BQ25980 on i2c5@0x66 | driver + binding exist, but probing registers a charger supply and programs current/voltage limits during init [V: L/drivers/power/supply/bq25980_charger.c, `bq25980_hw_init`/`bq25980_set_input_*`] | `ti,bq25980` [V: :1271-1275]; binding requires `compatible`, `reg`, `monitored-battery` [V: L/.../bq25980.yaml:66-70] | node absent; i2c5/qupv3_id_0 disabled [V: L/sm8250.dtsi:1430-1910 i2c5 under qupv3_id_0, `status = "disabled"`; K2 dts enables only qupv3_id_1] | **Do not enable this node in M5** until a separate gated plan validates the exact unit battery profile and safe charger policy. A generic BQ25980 node is not proof it can safely replace the unsupported SMB5 control path. |
+| ~~TI BQ25980~~ BQ2597x on i2c5@0x66 (see §0.4) | driver + binding exist, but probing registers a charger supply and programs current/voltage limits during init [V: L/drivers/power/supply/bq25980_charger.c, `bq25980_hw_init`/`bq25980_set_input_*`] | `ti,bq25980` [V: :1271-1275]; binding requires `compatible`, `reg`, `monitored-battery` [V: L/.../bq25980.yaml:66-70] | node absent; i2c5/qupv3_id_0 disabled [V: L/sm8250.dtsi:1430-1910 i2c5 under qupv3_id_0, `status = "disabled"`; K2 dts enables only qupv3_id_1] | **Do not enable this node in M5** until a separate gated plan validates the exact unit battery profile and safe charger policy. A generic BQ25980 node is not proof it can safely replace the unsupported SMB5 control path. |
 | USB-PD sink negotiation | present | PM8150B typec + pdphy via `tcpm/qcom/qcom_pmic_typec.c` [V: :136-146] | typec node absent (no pm8150b.dtsi include) | see 3.3 |
 
 **Warp/VOOC verdict.** Stock runs Warp/VOOC on the PM8150B SMB5 with a large
@@ -98,7 +248,7 @@ it makes no charger property writes and requests no charging/high-voltage PD.
 
 | Piece | Mainline status | Driver / binding | K2 today | Missing for M5 |
 | --- | --- | --- | --- | --- |
-| Fuel gauge BQ27411 @ i2c16:0x55 | present | `bq27xxx_battery_i2c.c` of_match includes `ti,bq27411` [V: L/bq27xxx_battery_i2c.c:273]; binding `bq27xxx.yaml` enum includes `ti,bq27411`, requires `monitored-battery`, and forbids `interrupts` for it [V: L/.../bq27xxx.yaml:40, 76-96] | node absent; i2c16/qupv3_id_2 disabled [V: L/sm8250.dtsi:1000-1430 i2c16 under qupv3_id_2] | DTS commit: i2c16 + fuel-gauge@55 from C:639-647 ([I] values), qupv3_id_2 okay, pinctrl `qup_i2c16_default` (gpio48/49) [V: L/sm8250.dtsi:5310-5605] |
+| Fuel gauge BQ27411 @ i2c16:0x55 | present | `bq27xxx_battery_i2c.c` of_match includes `ti,bq27411` [V: L/bq27xxx_battery_i2c.c:273]; binding `bq27xxx.yaml` enum includes `ti,bq27411` and forbids `interrupts` for it; `monitored-battery` is optional [V: L/.../bq27xxx.yaml, corrected 2026-11-17 evening, §0.4] | **P1 done** in the K3 power branch (§0.4) | nothing for P1; never give the gauge a `monitored-battery` (RAM data memory, §0.4) |
 | Battery node | `simple-battery` binding present (`battery.yaml`) | community DTS includes static design data [V: DTS-PORT-PLAN §2.1 C:274-280] | absent | fuel-gauge node only for M5 telemetry; add `simple-battery` only after the exact unit battery ID/profile is reconciled. Do not port static capacity/voltage values from C or infer them from the conflicting draft evidence. |
 | Battery temperature | gauge reports TEMP via power_supply [I-P5-2: confirm prop name at R2]; PM8150B VADC `chg_temp@9` exists [V: L/pm8150b.dtsi:130-133]; adc-tm `skin_therm@4d`/`conn_therm@4f` exist but `pm8150b_adc_tm` is disabled [V: L/pm8150b.dtsi:135-141]; stock zones: skin-therm trips 46/47/49/50 °C, conn-therm 125 °C, all `wake-capable-sensor` [V: E/ fragment@76] | `qcom,spmi-adc5` / `qcom,spmi-adc-tm5` / `qcom,spmi-temp-alarm` drivers in L [V: L/drivers/iio/adc/qcom-spmi-adc5.c, qcom-spmi-adc-tm5.c; L/drivers/thermal/qcom/qcom-spmi-temp-alarm.c] | pm8150b.dtsi not included; pm8150 adc/temp exist but unused | enable pm8150b temp-alarm + adc; optionally adc-tm + 2 board zones with stock trips (commit 4) |
 
@@ -188,7 +338,7 @@ PON part of commit 5; the rest of those commits stays with their owners.
 | --- | --- | --- |
 | 0 | (repo, not kernel) `device/instantnoodlep/kernel.config` additions | POWER_SUPPLY, BQ27XXX battery+I2C, TYPEC_TCPM, USB_ROLE_SWITCH, QCOM_SPMI_ADC5, QCOM_SPMI_ADC_TM5, QCOM_SPMI_TEMP_ALARM, QCOM_TSENS, RTC_DRV_PM8XXX; do **not** enable BQ25980 until its separate safe-charge plan passes; verify `BATTERY_BQ27XXX_DT_UPDATES_NVM` is unset because that option writes gauge NVM [V: L/drivers/power/supply/Kconfig, option help]. Verify QCOM_CPUFREQ_HW/THERMAL/CPU_IDLE already set. Exact symbols [I-P5-3] checked against L Kconfigs at O2 |
 | 1 | `arm64: dts: qcom: instantnoodlep: Add PM8150B Type-C, VBUS and USB role switch` | include pm8150b.dtsi; `&pm8150b_typec` okay + vdd-pdphy-supply + connector graph; `&pm8150b_vbus` okay; `&usb_1_dwc3` otg + usb-role-switch + HS endpoint (DTS-PORT-PLAN commit 8; C:751-793, 916-918) |
-| 2 | `arm64: dts: qcom: instantnoodlep: Add battery and fuel-gauge telemetry` | `simple-battery` only after the unit's battery ID/profile is reconciled; `&qupv3_id_2`/`&i2c16` + `fuel-gauge@55` (ti,bq27411, monitored-battery); pinctrl `qup_i2c16_default` (DTS-PORT-PLAN commit 6; C:274-280, 639-647). Do not enable `&i2c5`/BQ25980 in this series; require a separate charger-policy plan first. |
+| 2 | `arm64: dts: qcom: instantnoodlep: Add battery and fuel-gauge telemetry` | **Done as P1 (§0.4), without any battery node.** Original: `simple-battery` only after the unit's battery ID/profile is reconciled; `&qupv3_id_2`/`&i2c16` + `fuel-gauge@55` (ti,bq27411, monitored-battery); pinctrl `qup_i2c16_default` (DTS-PORT-PLAN commit 6; C:274-280, 639-647). Do not enable `&i2c5`/BQ25980 in this series; require a separate charger-policy plan first. |
 | 3 | `arm64: dts: qcom: instantnoodlep: Enable PON keys and reboot modes` | `&pon` (pm8150@0) okay, `&pon_pwrkey`/`&pon_resin` okay, `mode-bootloader = <2>`, `mode-recovery = <1>`; pm8150b `pon@800` stays disabled |
 | 4 | `arm64: dts: qcom: instantnoodlep: Enable PM8150B thermal ADC and skin/conn zones` | `&pm8150b_temp`/`&pm8150b_adc` active via include; `&pm8150b_adc_tm` okay + board thermal-zones skin-therm/conn-therm with stock trips [V: E/ fragment@76] |
 
@@ -253,11 +403,46 @@ serial (private, never pasted). Captures go to `captures/<date>/m5/`
 | R6 | over SSH: `reboot --reboot-argument=bootloader`; expect fastboot in <10 s [V: NOTES B4 precedent]. Optional, owner only: `reboot --reboot-argument=recovery` lands in stock recovery — do NOT choose wipe | fastboot reached; slot flags unchanged afterwards | not in fastboot in 30 s | hold Power 30 s; slot-B boots |
 | R7 | `fastboot -s {{SERIAL}} getvar all` (filtered); boot slot-B Linux once normally | slot flags equal G1; nothing written by any step | any flag changed | stop; record; ask on #808 before further boots |
 
+### 7.3 P1 fuel-gauge RAM boot (K3 power image)
+
+Read-only on the battery; nothing is flashed; `boot_b` keeps combo K3. The
+coordinator runs the phone, the owner does button combos. Captures go to
+`captures/<date>/power/` (gitignored); never paste serials.
+
+Inputs [V: built 2026-11-17 evening, §0.4]:
+
+- Kernel `~/src/l-k3p` @ `11fedfae5a37` (branch `instantnoodlep-k3-power`),
+  build dir `~/android/build/k3-power`, release
+  `7.3.0-rc6-instantnoodlep-k3-g11fedfae5a37`.
+- Image `~/android/build/k3-power-ram/boot-p1-gauge.img`, sha256
+  `b69df9433a17d736524d8138965679968224dde1aa964b334752435c35ffe85b`; manifest
+  `~/android/build/k3-power-ram/boot-p1-gauge.manifest.json`; builder flags as
+  combo `boot-r3-gpu` (`--boot 2 --root userdata --debug-shell`, stock
+  entry-16 overlay); the manifests differ only in kernel/DTB size and
+  hashes, the ramdisk sha256 is the same (`86340898…a1`). `dtbs_check` on
+  the board DTB: no warnings (`~/android/build/k3-power/dtbs_check.log`).
+- Modules `~/android/build/k3-power/modules-7.3.0-rc6-instantnoodlep-k3-g11fedfae5a37.tar.zst`
+  (one top-level `<release>/` dir, 1801 modules: combo's 1802 minus `bq25980_charger`), sha256 `6d92d5c458a06c490ad723e91eb743086b57d36a464b1af02f9848128baf60af`.
+
+| # | Step | Expect | Stop | Rollback |
+| --- | --- | --- | --- | --- |
+| P1-0 | Laptop: `sha256sum ~/android/build/k3-power-ram/boot-p1-gauge.img` | `b69df9433a17d736524d8138965679968224dde1aa964b334752435c35ffe85b` | mismatch | rebuild; do not boot |
+| P1-1 | Phone on combo K3 (flash), over adb/ssh: push the modules tarball and unpack it as root with `tar --zstd -xf modules-7.3.0-rc6-instantnoodlep-k3-g11fedfae5a37.tar.zst -C /usr/lib/modules`, then `depmod 7.3.0-rc6-instantnoodlep-k3-g11fedfae5a37` | new `/usr/lib/modules/7.3.0-rc6-instantnoodlep-k3-g11fedfae5a37/` only; the combo release dir untouched | unpack touches anything outside that dir | `rm -rf /usr/lib/modules/7.3.0-rc6-instantnoodlep-k3-g11fedfae5a37` |
+| P1-2 | `adb reboot bootloader` (or `reboot --reboot-argument=bootloader`); `fastboot getvar current-slot` | `current-slot: b` | other slot | `fastboot reboot` |
+| P1-3 | `fastboot boot ~/android/build/k3-power-ram/boot-p1-gauge.img` (RAM only) | `Booting OKAY`; K3 comes up to SSH/Hyprland as combo does; `uname -r` = `7.3.0-rc6-instantnoodlep-k3-g11fedfae5a37` | `FAILED (remote: ...)`, or no SSH within 2 min | owner holds Power+VolUp 10-30 s; the phone boots combo K3 from `boot_b`. After a refused RAM boot, cold-reboot to the bootloader before another `fastboot boot` |
+| P1-4 | Read only: `dmesg \| grep -iE 'bq27\|i2c16\|geni\|888000'`; `ls /sys/class/power_supply/`; `cat /sys/class/power_supply/bq27411-0/{status,capacity,voltage_now,current_now,temp,health,charge_full,charge_full_design,charge_now,cycle_count,technology}`; read twice, 30 s apart; once on the cable, once with the owner unplugging it for a minute | `bq27411-0` present [I: name from the driver's `%s-%d` pattern]; no `update ... to` and no `cfgupdate` lines in dmesg (proof of no data-memory write); `voltage_now` 3.4-4.45 V (µV); `temp` 150-450 (0.1 °C); `capacity` 0-100 and in line with Android's last reading; `current_now` changes sign or size when the cable comes out | no `bq27411-0` (i2c16 timeout/NACK); any `update`/`cfgupdate`/`data memory` line; voltage > 4.45 V; temp > 45 °C | `reboot -f` → combo K3 from flash. A voltage above 4.45 V or temp above 45 °C: unplug, stop, report |
+| P1-5 | `reboot` | combo K3 from `boot_b`, as before | anything else | Power+VolUp, then §7.2 G1 |
+
+P1-4 tells P2 three things: whether the gauge reads plausibly on this unit
+(D/'s policy relies on it), whether the battery charges at all on combo K3
+without a charger driver (the cable test), and the gauge's own
+`charge_full_design` (the stock value it keeps, since we write none).
+
 ## 8. Open [I]s and how each resolves
 
 | ID | Open inference | Resolution gate |
 | --- | --- | --- |
-| I-P5-1 | Which path charges the battery and whether the BQ25980 can safely operate without the unsupported SMB5 policy | Not resolved by this M5 plan. A separate charger-policy plan must identify the path, validate the unit battery profile/limits, and gate any charge test; M5 must not enable BQ25980. |
+| I-P5-1 | Which path charges the battery. Updated: the PM8150B SMB5 block via D/'s out-of-tree driver (§0.5); the i2c5 part is a wireless charge pump, not a wired charger (§0.4) | P2 after P1-4. Original text: not resolved by this M5 plan. A separate charger-policy plan must identify the path, validate the unit battery profile/limits, and gate any charge test; M5 must not enable BQ25980. |
 | I-P5-2 | BQ27411 reports battery TEMP through power_supply under the name the bq27xxx driver uses | R2 `.../battery/temp` |
 | I-P5-3 | Exact CONFIG symbols for commit 0 (POWER_SUPPLY, BQ25980_CHARGER, BQ27XXX_BATTERY*, TYPEC_TCPM, USB_ROLE_SWITCH, QCOM_SPMI_*, QCOM_TSENS, RTC_DRV_PM8XXX) as named in L Kconfig | O2 build |
 | I-P5-4 | SS (SuperSpeed) lane polarity on usb_1_qmpphy is board-fixed; only CC/HS orientation is dynamic | R3 flipped-plug test |
@@ -267,7 +452,7 @@ serial (private, never pasted). Captures go to `captures/<date>/m5/`
 | I-P5-8 | Arch Linux ARM package names (upower, rtcwake) as listed in §5 | O6 image build |
 | I-P5-9 | `mode-recovery = <1>` lands in stock recovery without touching data (only bootloader mode is proven) | R6 optional owner step; Stop = do not wipe |
 | I-P5-10 | Whether host (source) mode with VBUS boost works for OTG accessories | R3; if not, keep `dr_mode="otg"` but document sink-only in practice |
-| I-P5-11 | A safe charging policy for this unit's exact battery profile; a public Nura release reported an overvoltage before a BQ27411 policy fix [V: D/README; D/docs/charging.md] | separate gated charge-policy plan; no charger test or BQ25980 enablement in this plan |
+| I-P5-11 | A safe charging policy for this unit's exact battery profile; a public Nura release reported an overvoltage before a BQ27411 policy fix [V: D/README; D/docs/charging.md]. Updated: D/'s policy is cited and matches stock E/ values (§0.5); still open is whether it holds on this unit's gauge readings | separate gated charge-policy plan; no charger test or BQ25980 enablement in this plan |
 
 ## 9. Definition of done for M5 power
 
