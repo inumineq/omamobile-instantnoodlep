@@ -1,0 +1,17 @@
+// SPDX-License-Identifier: GPL-2.0-only OR MIT
+/*
+ * Neutral dtbo entry for OnePlus 8 Pro (instantnoodlep, IN2023).
+ * Carries only the ids stock ABL matches on (board-id, oplus,dtsi_no,
+ * oplus,pcb_range, as in stock dtbo entry 16) and the mainline root
+ * identity, and no fragments, so ABL applies nothing to the mainline DTB.
+ */
+/dts-v1/;
+/plugin/;
+
+/ {
+	model = "OnePlus 8 Pro";
+	compatible = "oneplus,instantnoodlep", "qcom,sm8250";
+	qcom,board-id = <0x10008 0>;
+	oplus,dtsi_no = <0x4d63>;
+	oplus,pcb_range = <0 0x38>;
+};
