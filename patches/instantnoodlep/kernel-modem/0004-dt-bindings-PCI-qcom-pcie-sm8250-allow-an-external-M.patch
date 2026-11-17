@@ -1,0 +1,35 @@
+From e9ff58528f8b3366dd1c2e9ad5db63d434c25578 Mon Sep 17 00:00:00 2001
+From: Mikkel Inumineq <6770514+inumineq@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 13:55:28 +0100
+Subject: [PATCH 4/4] dt-bindings: PCI: qcom,pcie-sm8250: allow an external MSI
+ parent
+
+DesignWare host setup already honours msi-parent by turning off the
+internal MSI receiver, and the SM8250 controller can route endpoint MSI
+writes to the GICv3 MBI range instead. Describe the property so a board
+DTS that uses that route passes the schema.
+
+Assisted-by: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ Documentation/devicetree/bindings/pci/qcom,pcie-sm8250.yaml | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/Documentation/devicetree/bindings/pci/qcom,pcie-sm8250.yaml b/Documentation/devicetree/bindings/pci/qcom,pcie-sm8250.yaml
+index adbeaa8f2..1ccacdff6 100644
+--- a/Documentation/devicetree/bindings/pci/qcom,pcie-sm8250.yaml
++++ b/Documentation/devicetree/bindings/pci/qcom,pcie-sm8250.yaml
+@@ -76,6 +76,11 @@ properties:
+       - const: msi7
+       - const: global
+ 
++  msi-parent:
++    maxItems: 1
++    description:
++      External MSI controller when endpoint writes bypass the internal MSI receiver.
++
+   resets:
+     maxItems: 1
+ 
+-- 
+2.55.0
+
