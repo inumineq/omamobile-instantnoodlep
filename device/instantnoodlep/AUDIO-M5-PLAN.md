@@ -93,7 +93,7 @@ wiring, use this correction and the phase-specific runbook instead.
 | APR/q6 | classic q6core/AFE/ASM/ADM and audio_pd; frontend DAIs 0–7, WCD RX/TX and VA backend DAIs | tertiary MI2S RX backend | [V: K3 `sm8250.dtsi` ADSP glink edge; commit `229413b9e`] |
 | WCD9385 | GPIO32, S4A/BOB supplies, 1.8/2.7/1.8/1.8 V micbias, RX/TX SDW slaves | unchanged | [V: D 0005; kernel `0f34833c2`] |
 | LPASS | RX/TX and swr1/swr2 enabled; VA DMIC01/23, BOB, 2.4 MHz | unchanged | [V: D 0005; kernel `f9e85f5de`] |
-| Speakers | two factual TFA9874 nodes disabled; i2c15 disabled; **no speaker link** | checked TFA987x module, QUP/i2c15 enabled, speaker link | [V: D 0005; phase-1 kernel `35e0d094d`; I: phase-2 runtime] |
+| Speakers | two factual TFA9874 nodes disabled; i2c15 disabled; **no speaker link**; binding `nxp,tfa987x.yaml` documents the nodes | checked TFA987x module, QUP/i2c15 enabled, speaker link | [V: D 0005; phase-1 kernel `35e0d094d`, binding `edc18c3cd`; I: phase-2 runtime] |
 | WSA/swr0, CDSP, SLPI | disabled | disabled | [V: K3 dtsi defaults; no overrides in phase-1 DTS] |
 | USB-C analog | no SBU/FSA4480/Type-C changes | unchanged | [V: phase-1 DTS diff; I: physical WCD headset route unavailable until separate USB work] |
 
@@ -128,6 +128,12 @@ questions; no claim of working phone-call audio is made here.
    Stop for any new audio warning. Classify unrelated inherited board warnings
    separately. Phase 2 additionally runs `dt_binding_check
    DT_SCHEMA_FILES=sound/nxp,tfa987x.yaml` and `checkpatch.pl --strict`.
+   [V] One new warning is expected and accepted in phase 1, and only this one:
+   `nxp,tfa9874` has no binding until phase 2, so dt-validate and checkpatch
+   both report the two disabled amplifier nodes as un-documented. The nodes
+   carry no DAI link and stay `disabled`, so the warning is a phase-2
+   bookkeeping item, not a wiring defect. Any other new audio warning stops
+   the phase.
 5. [I] DT inspection: mapped ADSP path, WCD9385 + RX `<1 2 3 4 5>` /
    TX `<2 2 3 4>`, correct sound links and phase-specific amp status.
    Every non-ADSP remote processor disabled in the **packaged** probe DTB;
@@ -156,6 +162,36 @@ tools/build-instantnoodlep-probe \
 Expect: successful offline overlay apply, boot payload readback, manifest and
 SHA256SUMS, ADSP-only DTB, `UFS_RW=userdata` only. Stop: any failure or stale
 output name. Rollback: discard only that candidate; no phone was contacted.
+
+### Phase 1 build record (2026-11-17, omabook)
+
+[V] Built offline from `~/src/l-k3-audio` (branch `instantnoodlep-k3-audio`,
+HEAD `edc18c3cd`, base combo `aa996bae0`) in a fresh
+`~/android/build/k3-audio-p1`, `ARCH=arm64 LLVM=1`, `nice -n 19`, `-j6`.
+Kernel release from `include/config/kernel.release`:
+`7.3.0-rc6-instantnoodlep-k3-gedc18c3cd5c4`.
+
+| Artefact | Path | Bytes | sha256 |
+| --- | --- | --- | --- |
+| kernel | `~/android/build/k3-audio-p1/arch/arm64/boot/Image.gz` | 16120307 | see `REPORT.md` |
+| board DTB | `~/android/build/k3-audio-p1/arch/arm64/boot/dts/qcom/sm8250-oneplus-instantnoodlep.dtb` | 122762 | see `REPORT.md` |
+| modules | `~/android/build/k3-audio-p1-modules.tar.zst` | 21937880 | `ee4599682e887eca87ab6392045c1dd2782d20c93177b2e8058b11c652d11a8b` |
+| RAM image | `~/android/build/k3-audio-p1-ram/boot.img` | 24137728 | `c4f706ef0919c8fec009cdd1f7bd2f11f030ca2ffc2e14c9c32008325bb42dfd` |
+
+[V] Gates that passed: `CHECK_DTBS=y qcom/sm8250-oneplus-instantnoodlep.dtb`
+with dtschema 2026.9 (no output, exit 0); `dt_binding_check
+DT_SCHEMA_FILES=sound/nxp,tfa987x.yaml` (CHKDT, LINT, DTEX, DTC [C], no
+warnings); `checkpatch.pl --strict` on the final DTS (0 errors, 0 warnings,
+0 checks); `tests/instantnoodlep-probe` (0 skipped). The series still has
+cosmetic checkpatch checks in the intermediate commits (blank lines fixed by
+the last DTS commit, one over-long commit-message line); the final file is
+clean.
+
+[V] Probe DTB read back from the packed image: ADSP `okay` with
+`firmware-name = "qcom/sm8250/OnePlus/instantnoodlep/adsp.mbn"`, CDSP and
+SLPI `disabled`, `qcom,sm8250-sndcard` with 11 DAI links, WCD9385
+`reset-gpios = <&tlmm 32 GPIO_ACTIVE_LOW>`, swr1/swr2 codecs present, i2c15
+and both TFA9874 nodes `disabled`, stock overlay applied (156 labels).
 
 ## 4. Firmware contract
 
@@ -206,6 +242,104 @@ redacted runtime results are recorded in NOTES.md by the coordinator.
 - [I] PipeWire/WirePlumber should consume the verified UCM profile with
   `omamobile-audio` dependencies. No bring-up service writes mixer settings
   automatically; autoload matching kernel modules through udev/depmod first.
+
+### Files the device package installs (paths only)
+
+| Path on the phone | Source | State |
+| --- | --- | --- |
+| `/usr/lib/firmware/qcom/sm8250/OnePlus/instantnoodlep/adsp.mbn` | owner's OTA, `firmware.map` ADSP row, reassembled with pil-squasher | required before the RAM boot |
+| `/usr/lib/modules/<release>/` | the phase-1 modules tarball from §3.3 | required, release must equal `uname -r` |
+| `/usr/share/alsa/ucm2/OnePlus/instantnoodlep/instantnoodlep.conf` | new, `Syntax 6` | draft only, after the card name is observed |
+| `/usr/share/alsa/ucm2/OnePlus/instantnoodlep/HiFi.conf` | new | draft only, after `amixer contents` is recorded |
+| `/usr/share/alsa/ucm2/conf.d/sm8250/OnePlus 8 Pro.conf` | new redirect, `Syntax 6` | draft only, filename must match the observed card long name |
+
+- [I] Module autoload order is udev/depmod's, not a script's:
+  `qcom_q6v5_pas` (ADSP), `qcom_pd_mapper`, `soundwire_qcom`, `snd_soc_wcd938x_sdw`,
+  `snd_soc_lpass_va_macro`, `snd_soc_sm8250`. `modprobe snd_soc_sm8250` last
+  pulls the card in; the runbook does this explicitly so a missing module is
+  visible instead of silent.
+- [V] No firmware file is added to git by this phase, and no UCM file is
+  installed by the worker: both are owner/coordinator steps after the runtime
+  names are known (rule 8, and §6's "no automatic mixer writes").
+
+### UCM draft (not installed; every value confirmed at runtime)
+
+[V] Upstream `alsa-ucm-conf` already ships the VA-macro control names this
+board needs, so the draft reuses them instead of inventing strings:
+`/usr/share/alsa/ucm2/codecs/qcom-lpass/va-macro/DMIC0EnableSeq.conf` sets
+`VA DEC0 MUX`, `VA DMIC MUX0`, `VA_AIF1_CAP Mixer DEC0` and `VA_DEC0 Volume`,
+and `/usr/share/alsa/ucm2/Qualcomm/sm8250/HiFi.conf` wires
+`MultiMedia3 Mixer VA_CODEC_DMA_TX_0` to the `VA Capture` frontend. Those are
+the same names §8's candidate sequence uses. [V: local alsa-ucm-conf read
+2026-11-17; `codecs/qcom-lpass/va-macro/DMIC0EnableSeq.conf`,
+`Qualcomm/sm8250/HiFi.conf`, `conf.d/sm8250/Qualcomm-RB5-WSA8815-Speakers-DMIC0.conf`]
+
+[I] The card long name, the PCM index and the DMIC pair are this board's, not
+RB5's, so the values below stay placeholders until §7 records them. The
+redirect uses an absolute `File` path, as the sm8250 RB5 redirect does.
+
+`/usr/share/alsa/ucm2/OnePlus/instantnoodlep/instantnoodlep.conf`:
+
+```
+Syntax 6
+
+SectionUseCase."HiFi" {
+	File "HiFi.conf"
+	Comment "Default"
+}
+```
+
+`/usr/share/alsa/ucm2/OnePlus/instantnoodlep/HiFi.conf`:
+
+```
+# instantnoodlep phase 1: capture only. No Speaker device before phase 2.
+SectionVerb {
+	EnableSequence [
+		cset "name='MultiMedia3 Mixer VA_CODEC_DMA_TX_0' 1"
+	]
+	DisableSequence [
+		cset "name='MultiMedia3 Mixer VA_CODEC_DMA_TX_0' 0"
+	]
+	Value {
+		TQ "HiFi"
+	}
+}
+
+SectionDevice."Mic" {
+	Comment "Microphone"
+	Include.lpassvae.File "/codecs/qcom-lpass/va-macro/DMIC0EnableSeq.conf"
+	Include.lpassvad.File "/codecs/qcom-lpass/va-macro/DMIC0DisableSeq.conf"
+	Value {
+		CapturePriority 100
+		CapturePCM "hw:${CardId},2"
+	}
+}
+```
+
+`/usr/share/alsa/ucm2/conf.d/sm8250/OnePlus 8 Pro.conf`:
+
+```
+Syntax 6
+
+SectionUseCase."HiFi" {
+	File "/OnePlus/instantnoodlep/HiFi.conf"
+	Comment "Default"
+}
+```
+
+- [I] `CapturePCM "hw:${CardId},2"` is RB5's MultiMedia3 index. §7 must confirm
+  the index from `arecord -l` before the file is installed; a different index
+  means a different `MultiMediaN` mixer name in `SectionVerb` too.
+- [I] The redirect filename must equal the observed card long name, which is
+  the DTS `model` property (`OnePlus 8 Pro`). `cat /proc/asound/cards` decides
+  it; if the observed name differs, rename the file rather than editing the
+  DTS to match a guess.
+- [V] `DMIC0EnableSeq.conf` sets `VA_DEC0 Volume` to 100, which is +16 dB:
+  `SOC_SINGLE_S8_TLV` exposes 0..124 and writes `value - 84` to the register,
+  so 84 is 0 dB and 100 is +16 dB. [V: `sound/soc/codecs/lpass-va-macro.c:1312`,
+  `sound/soc/soc-ops.c:136-162`] [I] If the include is used unchanged, record
+  +16 dB as the reviewed first-capture level instead of editing the shared
+  upstream file; the plan's own candidate sequence uses 84 (0 dB).
 
 ## 7. Phase 1 coordinator runbook
 
@@ -263,7 +397,8 @@ rollback; reboot returns to it. [V: docs/agents/state.md]
   route, play a separately attenuated test file with `aplay -D "hw:$CARD,$PCM"
   /tmp/quiet-headset.wav`. Expect [I]: quiet headset-only output. Stop
   immediately on unexpected sound, distortion or route. Rollback: stop aplay,
-  restore mixer, reboot. **No speaker test in phase 1.**
+  restore mixer, reboot. **No speaker test in phase 1**; the only speaker
+  gate is §9 (phase 2, separate image and separate owner go).
 - Owner go to `systemctl reboot`; expect installed combo release and the same
   B-successful slot flags afterwards. Stop on any slot difference; no automatic
   slot writes or stock boot. Rollback/recovery belongs to the coordinator.
@@ -349,3 +484,98 @@ without playing it through a speaker. Stop: any missing control, invalid enum,
 write/capture error, ADSP crash, or silence. Rollback: trap restores the saved
 mixer state; delete `/tmp/audio-mic.wav` after analysis and reboot to installed
 combo with the owner's go. No unreviewed persistent UCM profile is installed.
+
+## 9. Phase 2 gated runbook: first speaker sound
+
+[I] Phase 1 has no speaker DAI link and no amplifier driver, so a speaker test
+is impossible there and is not part of §7. This section is the only place a
+speaker is allowed to make sound, and it needs its own RAM image, its own
+modules and a separate explicit owner go. Nothing here is executed by a
+worker.
+
+Preconditions, all [I] until the coordinator confirms them on the device:
+
+- the phase-2 RAM image (i2c15 + QUP wrapper enabled, both TFA9874 nodes
+  `okay`, tertiary-MI2S speaker DAI link present) is the one booted, and
+  `uname -r` matches the phase-2 modules staged on the rootfs;
+- `modprobe snd_soc_tfa987x` binds both amplifiers: `ls -l
+  /sys/bus/i2c/devices/15-0034 /sys/bus/i2c/devices/15-0035` shows a bound
+  driver, and `dmesg` shows the revision line for each;
+- the card is registered and `aplay -l` lists the speaker frontend.
+
+### Step 1: read-only amplifier state (no owner go needed)
+
+```sh
+ssh root@172.16.42.1 'uname -r; ls -l /sys/bus/i2c/devices/15-0034/driver \
+  /sys/bus/i2c/devices/15-0035/driver; dmesg | grep -i tfa987; \
+  cat /proc/asound/cards; aplay -l'
+```
+
+Expect [I]: both amplifiers bound, one revision line each, the card present,
+the speaker frontend listed. Stop: an amplifier unbound, a revision mismatch,
+an i2c error, or no card. Rollback: nothing was written; reboot to the
+installed combo with the owner's go.
+
+### Step 2: prepare a quiet test signal on the laptop (offline)
+
+```sh
+sox -n -r 48000 -c 2 -b 16 /tmp/quiet-speaker.wav synth 2 sine 1000 \
+  vol -60d
+scp /tmp/quiet-speaker.wav root@172.16.42.1:/tmp/quiet-speaker.wav
+```
+
+Expect: a two-second 1 kHz stereo file at -60 dBFS. Stop: any other level;
+never substitute `speaker-test`, a music file or a full-scale tone.
+
+### Step 3: one speaker, muted by default (owner go required)
+
+The amplifier is muted at probe and stays muted until all three of DAPM
+power, the user switch and an unmuted playback stream agree. Set the raw gain
+to 0 and leave boost off; this board supplies no boost properties.
+
+```sh
+ssh root@172.16.42.1 'amixer -c 0 cget "name=Top Speaker Playback Switch"; \
+  amixer -c 0 cget "name=Top Speaker Playback Volume"'
+```
+
+Expect [I]: the switch reads 0 (off) and the volume reads 0. Stop: a missing
+control, a nonzero switch, or a nonzero volume. Rollback: nothing was written.
+
+Owner go, then exactly one speaker. The gate is a script so the rollback
+trap cannot be lost to shell quoting:
+
+```sh
+cat > /tmp/speaker-gate.sh <<'SH'
+#!/bin/sh
+set -e
+alsactl -f /tmp/audio-before.state store 0
+trap 'amixer -c 0 cset "name=Top Speaker Playback Switch" 0;
+      alsactl -f /tmp/audio-before.state restore 0' EXIT
+amixer -c 0 cset "name=Top Speaker Playback Switch" 1
+aplay -D "hw:0,0" /tmp/quiet-speaker.wav
+SH
+scp /tmp/speaker-gate.sh root@172.16.42.1:/tmp/speaker-gate.sh
+ssh root@172.16.42.1 'sh /tmp/speaker-gate.sh'
+```
+
+Expect [I]: a faint 1 kHz tone from the top speaker only, no pop, no
+distortion, no other speaker. Stop immediately on any loud sound, a click or
+pop, distortion, the wrong speaker, an i2c/ADSP error in `dmesg`, or any
+smell or heat from the phone. Rollback: the trap switches the amplifier off
+and restores the saved mixer state; then reboot to the installed combo.
+
+### Step 4: bottom speaker, separate owner go
+
+Repeat step 3 with `Bottom Speaker` and the same file. Never enable both
+amplifiers at once in this gate, and never raise the raw gain or the file
+level inside the same session.
+
+### Step 5: return to the installed system
+
+Owner go to `systemctl reboot`. Expect the installed combo release and the
+same B-successful slot flags. Stop on any slot difference; no automatic slot
+writes and no stock boot. Rollback/recovery belongs to the coordinator.
+
+[I] A successful step 3 establishes only that one amplifier can reproduce a
+quiet tone. Loudness, speaker protection, thermal behaviour and call audio
+remain unverified and are not claimed by this plan.
