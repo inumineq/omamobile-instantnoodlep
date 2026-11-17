@@ -1,0 +1,152 @@
+From 70d0761d1c12233875db4a47aebbaab8f1847574 Mon Sep 17 00:00:00 2001
+From: Mikkel Inumineq <6770514+inumineq@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 13:29:31 +0100
+Subject: [PATCH] arm64: dts: qcom: instantnoodlep: Enable the front camera
+
+Connect the fixed-focus IMX471 on CCI1 master 1 to CSIPHY3 using
+four D-PHY lanes. Supply AVDD through the GPIO24 BOB-fed regulator,
+DVDD through PM8009 L3 and I/O through PM8009 L7. Use MCLK3 at
+19.2 MHz and GPIO78 reset. Inherit CAMSS resources from sm8250.dtsi.
+
+Keep CCI0 and the unused CCI1 master disabled. This combo-based board
+is a RAM-test candidate: retain the upstream 1928x1088 RAW10 mode
+and its 200 MHz link frequency, rather than the community mode set.
+
+Link: https://github.com/darknagel/oneplus-instantnoodlep-nura-unofficial/blob/main/kernel-patches/0012-arm64-dts-qcom-sm8250-oneplus-instantnoodlep-Add-fro.patch
+
+Assisted-by: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Mikkel Inumineq <6770514+inumineq@users.noreply.github.com>
+---
+ .../qcom/sm8250-oneplus-instantnoodlep.dts    | 99 +++++++++++++++++++
+ 1 file changed, 99 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8250-oneplus-instantnoodlep.dts b/arch/arm64/boot/dts/qcom/sm8250-oneplus-instantnoodlep.dts
+index 0d14a19ff..8db175f6e 100644
+--- a/arch/arm64/boot/dts/qcom/sm8250-oneplus-instantnoodlep.dts
++++ b/arch/arm64/boot/dts/qcom/sm8250-oneplus-instantnoodlep.dts
+@@ -94,6 +94,19 @@ key-vol-down {
+ 		};
+ 	};
+ 
++	vreg_cam_front_avdd: regulator-cam-front-avdd {
++		compatible = "regulator-fixed";
++		regulator-name = "cam_front_avdd";
++		regulator-min-microvolt = <2800000>;
++		regulator-max-microvolt = <2800000>;
++		startup-delay-us = <2000>;
++		gpio = <&tlmm 24 GPIO_ACTIVE_HIGH>;
++		enable-active-high;
++		vin-supply = <&vreg_bob>;
++		pinctrl-0 = <&cam_front_avdd_en>;
++		pinctrl-names = "default";
++	};
++
+ 	reserved-memory {
+ 		removed_mem: memory@80b00000 {
+ 			reg = <0x0 0x80b00000 0x0 0xcd00000>;
+@@ -343,9 +356,81 @@ vreg_s8c_1p3: smps8 {
+ 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+ 		};
+ 	};
++	regulators-3 {
++		compatible = "qcom,pm8009-rpmh-regulators";
++		qcom,pmic-id = "f";
++		vdd-l7-supply = <&vreg_s4a_1p8>;
++
++		vreg_l3f_1p05: ldo3 {
++			regulator-name = "vreg_l3f_1p05";
++			regulator-min-microvolt = <1056000>;
++			regulator-max-microvolt = <1056000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l7f_1p8: ldo7 {
++			regulator-name = "vreg_l7f_1p8";
++			regulator-min-microvolt = <1800000>;
++			regulator-max-microvolt = <1800000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++	};
++
+ };
+ 
+ 
++&camss {
++	vdda-phy-supply = <&vreg_l5a_0p88>;
++	vdda-pll-supply = <&vreg_l9a_1p2>;
++	status = "okay";
++
++	ports {
++		port@3 {
++			csiphy3_ep: endpoint {
++				clock-lanes = <7>;
++				data-lanes = <0 1 2 3>;
++				remote-endpoint = <&cam_front_ep>;
++			};
++		};
++	};
++};
++
++&cci1 {
++	pinctrl-0 = <&cci1_i2c1_default>;
++	pinctrl-1 = <&cci1_i2c1_sleep>;
++	status = "okay";
++};
++
++&cci1_i2c0 {
++	status = "disabled";
++};
++
++&cci1_i2c1 {
++	camera@10 {
++		compatible = "sony,imx471";
++		reg = <0x10>;
++		clocks = <&camcc CAM_CC_MCLK3_CLK>;
++		assigned-clocks = <&camcc CAM_CC_MCLK3_CLK>;
++		assigned-clock-rates = <19200000>;
++		reset-gpios = <&tlmm 78 GPIO_ACTIVE_LOW>;
++		avdd-supply = <&vreg_cam_front_avdd>;
++		dvdd-supply = <&vreg_l3f_1p05>;
++		dovdd-supply = <&vreg_l7f_1p8>;
++		pinctrl-0 = <&cam_mclk3_default>, <&cam_front_reset>;
++		pinctrl-names = "default";
++		orientation = <0>;
++		rotation = <90>;
++
++		port {
++			cam_front_ep: endpoint {
++				data-lanes = <1 2 3 4>;
++				link-frequencies = /bits/ 64 <200000000>;
++				remote-endpoint = <&csiphy3_ep>;
++			};
++		};
++	};
++};
++
+ &gmu {
+ 	status = "okay";
+ };
+@@ -453,6 +538,20 @@ &qupv3_id_1 {
+ &tlmm {
+ 	gpio-reserved-ranges = <28 4>, <40 4>;
+ 
++	cam_front_avdd_en: cam-front-avdd-en-state {
++		pins = "gpio24";
++		function = "gpio";
++		drive-strength = <2>;
++		bias-disable;
++	};
++
++	cam_front_reset: cam-front-reset-state {
++		pins = "gpio78";
++		function = "gpio";
++		drive-strength = <2>;
++		bias-disable;
++	};
++
+ 	ts_int_default: ts-int-default-state {
+ 		pins = "gpio39";
+ 		function = "gpio";
+-- 
+2.55.0
+
