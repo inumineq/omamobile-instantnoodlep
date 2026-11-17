@@ -4,6 +4,23 @@
 Newest first. Findings that matter beyond one subsystem go here; subsystem
 detail lives in the *-PLAN.md files.
 
+## 2026-11-17 (midday): K3 on boot_b
+
+- [V] `boot_b` now holds the combo K3 image (`boot-r3-gpu.img`, sha256
+  `0b3413fa…264a`; same builder flags and ramdisk as the K2 `boot_b`, per
+  the two manifests), with its 1802 modules installed on the rootfs
+  (`/usr/lib/modules/7.3.0-rc6-instantnoodlep-k3-gaa996bae0695`). The flash
+  cleared `successful:b` (retry count 7); B5 redone, then
+  `slot-successful:b: yes`, `unbootable: no`. K3 boots from flash:
+  `systemctl is-system-running` = `running`, 55 modules loaded, Hyprland on
+  the GPU. Rollback image: `~/android/build/m1b/boot_b.img` (K2).
+- [V] Early in every K3 boot: `DSI PLL(0) lock failed` and
+  `simple-framebuffer ... failed to enable clock 7: -110`; the owner saw a
+  garbled panel during boot that cleared once msm took over.
+- [V] No `/sys/class/power_supply` devices under K3 (none under K2
+  either): no battery level, no charger control. Whether the phone charges
+  at all under our kernels is [I]. POWER-M5-PLAN is the next priority.
+
 ## 2026-11-17 (day): M0 on the screen, two dtbo_b attempts rejected, hardware GL
 
 - [V] M0, combo K3 RAM boot: the owner saw the lock screen at 1440x3168;
