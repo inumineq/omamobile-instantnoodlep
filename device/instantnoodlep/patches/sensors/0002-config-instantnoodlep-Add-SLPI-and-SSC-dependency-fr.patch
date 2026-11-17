@@ -1,0 +1,38 @@
+From 9709631a3f6169c05d10ae9653ecf1b3792cc160 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Mikkel=20Inumineq=20J=C3=B8rgensen?=
+ <6770514+inumineq@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 13:23:43 +0100
+Subject: [PATCH 2/2] config: instantnoodlep: Add SLPI and SSC dependency
+ fragment
+
+Keep PAS, PD mapper, GLINK, FastRPC and QRTR/QMI/PDR ready before the SLPI auto-boot. Userspace consumes SSC over QRTR; the FastRPC daemon serves sensor libraries and configuration.
+
+Assisted-by: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ kernel/configs/instantnoodlep-sensors.config | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+ create mode 100644 kernel/configs/instantnoodlep-sensors.config
+
+diff --git a/kernel/configs/instantnoodlep-sensors.config b/kernel/configs/instantnoodlep-sensors.config
+new file mode 100644
+index 000000000..448a713ab
+--- /dev/null
++++ b/kernel/configs/instantnoodlep-sensors.config
+@@ -0,0 +1,17 @@
++# SPDX-License-Identifier: GPL-2.0-only
++# Merge after the arm64 defconfig and the instantnoodlep K3 configuration.
++# Built-in dependencies allow SLPI service discovery without rootfs modules.
++CONFIG_QCOM_Q6V5_PAS=y
++CONFIG_QCOM_SYSMON=y
++CONFIG_QCOM_FASTRPC=y
++CONFIG_QCOM_PD_MAPPER=y
++CONFIG_QRTR=y
++CONFIG_QRTR_SMD=y
++CONFIG_QCOM_QMI_HELPERS=y
++CONFIG_QCOM_PDR_HELPERS=y
++CONFIG_QCOM_PDR_MSG=y
++CONFIG_RPMSG_QCOM_GLINK=y
++CONFIG_RPMSG_QCOM_GLINK_SMEM=y
++CONFIG_IIO=y
++CONFIG_IIO_BUFFER=y
++CONFIG_IIO_TRIGGERED_BUFFER=y

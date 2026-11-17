@@ -76,7 +76,7 @@ touched before this plan exists with its gated runbook (AGENTS.md rule 6).
 | SLPI load data | present | `qcom_q6v5_pas.c`: `qcom,sm8250-slpi-pas` → `sdm845_slpi_resource_init`: firmware `slpi.mdt`, pas_id 12, auto_boot, proxy PDs lcx/lmx, sysmon `slpi` [V: L/drivers/remoteproc/qcom_q6v5_pas.c:1382-1396, 1893] | driver built as module [V: device kernel.config:70 `CONFIG_QCOM_Q6V5_PAS=m`]; defconfig also =m [V: L/arch/arm64/configs/defconfig:1629] | nothing new; module load at boot or =y in device config |
 | SLPI reserved memory | generic `slpi_mem` 0x88c00000/21 MiB [V: L/sm8250.dtsi:848-851]; community uses 0x90600000/21 MiB [V: DTS-PORT-PLAN §2.1, C:195-198] | reserved-memory binding | K2 already carries the community region [V: DTS-PORT-PLAN §3.2 item 4] | nothing |
 | GLINK edge + IPCC + SMP2P | present, generic: `glink-edge` under `&slpi` with `qcom,remote-pid = <3>`, IPCC mboxes [V: L/sm8250.dtsi:3119-3127]; `ipcc` @0x408000 [V: :976]; `smp2p-slpi` [V: :931-948]; `aoss_qmp` [V: :5103]; `rpmhpd` LCX/LMX (SM8250_LCX=4, LMX=5) [V: :6231; L/include/dt-bindings/power/qcom,rpmhpd.h:171-172] | `RPMSG_QCOM_GLINK` (qcom_glink.o includes `qcom_glink_native.o`) selected via `RPMSG_QCOM_GLINK_RPM=y` in defconfig [V: L/drivers/rpmsg/Makefile:8-9, Kconfig:43-49; L/arch/arm64/configs/defconfig:1637-1638]; `QCOM_IPCC=y`, `QCOM_SMP2P=y`, `QCOM_SMEM=y`, `REMOTEPROC=y` [V: defconfig:1615,1663,1661,1624] | nodes exist, unused (slpi disabled) | verify `CONFIG_RPMSG_QCOM_GLINK=y` and `CONFIG_QCOM_PD_MAPPER` + QRTR/QMI/PDR dependencies at O2; PDM mapper needs the neutral root compatible to register SM8250 service domains |
-| FastRPC on SLPI | present, generic: `fastrpc` child `compatible = "qcom,fastrpc"`, channel `fastrpcglink-apps-dsp`, `label = "sdsp"`, `qcom,non-secure-domain`, 3 `compute-cb` with iommus `apps_smmu 0x541-0x543` [V: L/sm8250.dtsi:3129-3155; apps_smmu @ L/sm8250.dtsi:5902] | binding [V: L/Documentation/devicetree/bindings/misc/qcom,fastrpc.yaml:20-60 — label enum includes `sdsp` (:33-44), `qcom,non-secure-domain` (:58-60)]; driver creates misc device `fastrpc-<label>` (+ `-secure` if secure) [V: L/drivers/misc/fastrpc.c:2468-2469], domain id from label [V: :2484-2498], `qcom,non-secure-domain` clears secure [V: :2599] → `/dev/fastrpc-SDSP` non-secure | node exists (disabled with slpi); `QCOM_FASTRPC=m` in defconfig [V: defconfig:312] | enable with slpi; config `=y` or module loaded by service; sensor service needs the `dsp_<slot>/sdsp` libraries, a separate source from `modem`'s SLPI image [V: D/firmware/dsp-firmware.sh] |
+| FastRPC on SLPI | present, generic: `fastrpc` child `compatible = "qcom,fastrpc"`, channel `fastrpcglink-apps-dsp`, `label = "sdsp"`, `qcom,non-secure-domain`, 3 `compute-cb` with iommus `apps_smmu 0x541-0x543` [V: L/sm8250.dtsi:3129-3155; apps_smmu @ L/sm8250.dtsi:5902] | binding [V: L/Documentation/devicetree/bindings/misc/qcom,fastrpc.yaml:20-60 — label enum includes `sdsp` (:33-44), `qcom,non-secure-domain` (:58-60)]; driver creates misc device `fastrpc-<label>` (+ `-secure` if secure) [V: L/drivers/misc/fastrpc.c:2468-2469], domain id from label [V: :2484-2498], `qcom,non-secure-domain` clears secure [V: :2599] → `/dev/fastrpc-sdsp` non-secure | node exists (disabled with slpi); `QCOM_FASTRPC=m` in defconfig [V: defconfig:312] | enable with slpi; config `=y` or module loaded by service; sensor service needs the `dsp_<slot>/sdsp` libraries, a separate source from `modem`'s SLPI image [V: D/firmware/dsp-firmware.sh] |
 | Kernel IIO for SLPI sensors | **absent**: no qcom/slpi/sns entry in `drivers/iio` Kconfig, `drivers/iio/common/`, prox/mag/light listings, and no `slpi` in L/Documentation [V: greps over L/drivers/iio and L/Documentation, empty] | none in kernel; sensors are consumed over FastRPC in userspace | n/a | userspace stack (§5); the exact IIO bridge iio-sensor-proxy reads is [I-S5-1] |
 
 ### 3.2 Hall sensors (AP-wired)
@@ -123,10 +123,10 @@ never committed (AGENTS.md rule 8; FIRMWARE-PLAN §4).
 
 | Need | Plan | Evidence |
 | --- | --- | --- |
-| FastRPC daemon + sensor protocol | `hexagonrpcd` + `libssc` in the device package; systemd unit runs it after `remoteproc` brings `slpi` up; opens `/dev/fastrpc-SDSP` | device node name [V: L/fastrpc.c:2468-2469 + sm8250.dtsi label `sdsp` :3132]; hexagonrpc documents FastRPC/HexagonFS and the sensor config/registry paths [V: <https://github.com/linux-msm/hexagonrpc>, README]; libssc documents its Sensor Core client and supported sensor classes [V: <https://codeberg.org/agx/libssc>, README/docs]; no package pins selected yet (must be pinned at implementation). Keep mutable registry/cache under `/run` (tmpfs); persistent writes under `/var/lib` on `userdata` require a separately owner-gated decision and rollback. |
+| FastRPC daemon + sensor protocol | `hexagonrpcd` + `libssc` in the device package; systemd unit runs it after `remoteproc` brings `slpi` up; opens `/dev/fastrpc-sdsp` | device node name [V: L/fastrpc.c:2468-2469 + sm8250.dtsi label `sdsp` :3132]; hexagonrpc documents FastRPC/HexagonFS and the sensor config/registry paths [V: <https://github.com/linux-msm/hexagonrpc>, README]; libssc documents its Sensor Core client and supported sensor classes [V: <https://codeberg.org/agx/libssc>, README/docs]; no package pins selected yet (must be pinned at implementation). Keep mutable registry/cache under `/run` (tmpfs); persistent writes under `/var/lib` on `userdata` require a separately owner-gated decision and rollback. |
 | IIO consumers | `iio-sensor-proxy` + D-Bus `net.hadess.SensorProxy` for rotation/ALS. The Nura device documentation confirms the `hexagonrpcd` + `libssc` + `iio-sensor-proxy` stack on instantnoodlep [V: D/docs/sensors.md, “What the image does” and “Setting up…”]; exact bridge/library packaging in our Arch image is still [I-S5-1]. **Do not install `omamobile-sensors`**: its PKGBUILD is Pixel-7-Pro-AoC-specific and conflicts/provides `iio-sensor-proxy` [V: U/packages/omamobile-sensors/PKGBUILD:6-13] | Arch Linux ARM package availability remains [I-S5-8] |
 | Rotation / brightness consumers | wlroots/Hyprland read iio-sensor-proxy over D-Bus for auto-rotate; brightness from the ALS channel; which omamobile shell control drives brightness is [I-S5-9], check at R6 against the running shell | [I-S5-9] |
-| Permissions | udev rule: `MODE="0666"` (or group `sensors`) on `/dev/fastrpc-SDSP` so the service runs non-root | device node [V: L/fastrpc.c:2468-2469]; rule content [I] |
+| Permissions | udev rule: `MODE="0666"` (or group `sensors`) on `/dev/fastrpc-sdsp` so the service runs non-root | device node [V: L/fastrpc.c:2468-2469]; rule content [I] |
 | Hall events | gpio-keys → `/dev/input/event*` `SW_LID`; consumed by logind (lid) | [V: L/input-event-codes.h:935] |
 | Vibrator | AW86927-family driver exposes input force-feedback `FF_RUMBLE`; inspect events with `evtest` and exercise force feedback with `fftest` (there is no `evtest --play` mode) | driver [V: L/drivers/input/misc/aw86927.c, input_ff_create_memless and FF_RUMBLE] |
 
@@ -203,8 +203,8 @@ to `captures/<date>/m5/` (gitignored).
 | --- | --- | --- | --- | --- |
 | G1 | `fastboot -s {{SERIAL}} devices`; `getvar current-slot` + slot flags, recorded | one device; flags equal to the last NOTES.md capture (slot B active, successful) [V: NOTES.md 2026-11-17 B5] | flags differ | `fastboot -s {{SERIAL}} reboot`; record |
 | R1 | `fastboot -s {{SERIAL}} boot {{K5_IMG}}`; then `ssh root@172.16.42.1` [V: NOTES.md 2026-11-17, usb0 172.16.42.1], read `/sys/firmware/devicetree/base/compatible`, and `dmesg` | `Booting OKAY`; live root is `oneplus,instantnoodlep` + `qcom,sm8250`; SSH; `qcom_q6v5_pas` loads `slpi` firmware with no firmware error; glink edge `slpi` up; `fastrpc` probe creates a device; PDM mapper selects SM8250 service domains | wrong live root; firmware-load error; no SSH after 2 min | cold-reboot to bootloader first (a refused RAM boot can swap slots [V: NOTES.md 2026-11-16 R1 lesson]), then stop and return to the neutral-DTBO gate |
-| R2 | over SSH: `for r in /sys/class/remoteproc/remoteproc*; do cat "$r/name" "$r/state"; done`; `ls -l /dev/fastrpc*` | `slpi` in `running`; `/dev/fastrpc-SDSP` exists (non-secure) | remoteproc in `offline`/`error`, or no fastrpc node | `reboot -f`; fix commit 1/O2 |
-| R3 | over SSH: start `hexagonrpcd` (unit or foreground), verify its mutable registry/cache is under `/run`, inspect `dmesg`, then `ssccli --sensor accelerometer --timeout 3` if packaged and list sensor interfaces | daemon opens `/dev/fastrpc-SDSP`, SLPI SNS service answers; the public Nura stack uses `hexagonrpcd` + `libssc` + `iio-sensor-proxy` [V: D/docs/sensors.md], but this build's IIO bridge must be identified at O6/R3; no persistent registry write occurs | daemon fails to open/invoke, writes into `userdata` without a separate owner go, or no sensor interface is exposed | `reboot -f`; record; resolve bridge/packaging and remove any test state before retry |
+| R2 | over SSH: `for r in /sys/class/remoteproc/remoteproc*; do cat "$r/name" "$r/state"; done`; `ls -l /dev/fastrpc*` | `slpi` in `running`; `/dev/fastrpc-sdsp` exists (non-secure) | remoteproc in `offline`/`error`, or no fastrpc node | `reboot -f`; fix commit 1/O2 |
+| R3 | over SSH: start `hexagonrpcd` (unit or foreground), verify its mutable registry/cache is under `/run`, inspect `dmesg`, then `ssccli --sensor accelerometer --timeout 3` if packaged and list sensor interfaces | daemon opens `/dev/fastrpc-sdsp`, SLPI SNS service answers; the public Nura stack uses `hexagonrpcd` + `libssc` + `iio-sensor-proxy` [V: D/docs/sensors.md], but this build's IIO bridge must be identified at O6/R3; no persistent registry write occurs | daemon fails to open/invoke, writes into `userdata` without a separate owner go, or no sensor interface is exposed | `reboot -f`; record; resolve bridge/packaging and remove any test state before retry |
 | R4 | over SSH: verify the concrete bridge selected at O6/R3; query `iio-sensor-proxy` over D-Bus (`busctl`/`gdbus` call `net.hadess.SensorProxy`) only if the libssc integration is installed; otherwise query the bridge's documented test client. Read accel + ALS while moving the phone/covering the light sensor. Do not test proximity calibration from `persist` in this plan. | accelerometer and ALS values change with orientation/light; proximity reports discovery only, not calibrated near/far | no sensor data or a test requires reading/copying per-unit calibration | `reboot -f`; resolve [I-S5-1]/[I-S5-6] before retry |
 | R5 | over SSH: `evtest` on the hall event node; cover/uncover with a magnet | `SW_LID` events toggle | no events | `reboot -f` |
 | R6 | boot the installed slot-B system; in Hyprland: rotate the phone, watch `hyprctl monitors` orientation; change ambient light, watch panel brightness via `/sys/class/backlight` + iio-sensor-proxy ALS | rotation follows accel; brightness follows ALS | no rotation/brightness response | reboot; record; fix consumer [I-S5-9] |
@@ -230,10 +230,102 @@ to `captures/<date>/m5/` (gitignored).
 O0-O7 pass; G1, R1-R8 pass with pasted (redacted) output; SLPI runs
 `slpi.mbn` from the owner-extracted file (firmware.map row), the vetted sensor
 libraries are sourced from the owner's image without mapping `persist`
-calibration, `/dev/fastrpc-SDSP` exists, accel/ALS data are exposed through
+calibration, `/dev/fastrpc-sdsp` exists, accel/ALS data are exposed through
 the verified bridge, Hyprland auto-rotates/auto-brightens, hall reports
 `SW_LID`, and the vibrator plays; slot flags unchanged; results appended to
 NOTES.md with dates. Proximity near/far remains gated on a separate
 privacy-safe calibration plan. Commits 1-5 exist in a linux-omarchy-mobile
 branch with gates rerun. Fingerprint remains documented-only (no open driver
 ported, AGENTS.md rule 5).
+
+
+## 10. Phase 1 implementation: isolated combo candidate (2026-11-17)
+
+[V] This section supersedes the neutral-DTBO prerequisite and the full-M5
+completion gates **for phase 1 only**. Neutral DTBO was rejected by ABL;
+stock `dtbo_b` stays installed (learning `l-48e0c482`). The combo base
+`aa996bae0695` has a test-only `qcom,kona` PDM-table entry
+(`drivers/soc/qcom/qcom_pd_mapper.c:661`), selecting `sm8250_domains`,
+including `slpi_root_pd` and `slpi_sensor_pd` (:579-585). Live root compatible
+is therefore expected to remain `qcom,kona-mtp`, `qcom,kona`, `qcom,mtp`,
+not the built DTB identity. This inherited workaround must never go upstream.
+No DTBO change, hall, vibrator, fingerprint, charger, or other remoteproc
+enable is part of phase 1. [I] SLPI runtime and SSC sensors remain untested.
+
+### 10.1 Reproducible kernel inputs
+
+[V] Worktree `~/src/l-k3-sensors`, branch `instantnoodlep-k3-sensors`, based
+on combo `aa996bae0695`. The two portable patches are in
+`device/instantnoodlep/patches/sensors/`; apply only to that base with
+`git am`. Commit 1 enables `&slpi` with the exact firmware.map destination;
+commit 2 records `kernel/configs/instantnoodlep-sensors.config`.
+The existing SM8250 SLPI GLINK/FastRPC nodes and context banks need no new
+DTS definitions (`arch/arm64/boot/dts/qcom/sm8250.dtsi:3129-3155`).
+[V] The device-node name is **lowercase** `/dev/fastrpc-sdsp`: the driver
+formats the literal DT label (`drivers/misc/fastrpc.c:2468-2469`), which is
+`sdsp` (`sm8250.dtsi:3132`). Earlier uppercase references were corrected.
+
+[V] Fresh output root: `~/android/build/k3-sensors-20261117/`.
+Build inputs: the verified combo output `.config`, with the sensors fragment
+settings and `CONFIG_LOCALVERSION="-instantnoodlep-k3-sensors"`.
+The build started with `nice -n 10`; the coordinator subsequently set
+non-critical builds to nice 15 due to laptop contention. It uses
+`ARCH=arm64 LLVM=1 -j4`, targets `Image.gz`,
+`qcom/sm8250-oneplus-instantnoodlep.dtb`, `modules`.
+All driver settings in the fragment survived `olddefconfig` as `=y`.
+The sensor client uses QRTR/QMI; enabling IIO does not create an SSC IIO
+kernel driver. Userspace integration is documented in
+[SENSORS-PACKAGING.md](SENSORS-PACKAGING.md).
+
+### 10.2 Coordinator-only gates
+
+[I] No phone command below has been run by this worker. Each gate requires
+coordinator/owner review and must stop independently on failure. Captures
+stay private in gitignored `captures/`; do not paste identifiers or raw
+sensor registries into issues. There is no partition write command here.
+Use the owner's pinned private transport selector without publishing it.
+
+| Gate | Command / action | Expect | Stop | Rollback |
+| --- | --- | --- | --- | --- |
+| S0 offline | Verify artifact hashes and release in §10.3; inspect final boot DTB; independently confirm known-good slot-B boot and private rollback assets | Same Image.gz/DTB/module release; only SLPI newly enabled; no battery/charger change | Any hash/config mismatch or insufficient power for test | Discard candidate; keep combo boot |
+| S1 firmware prerequisites | Over the coordinator's existing private SSH transport, `test -r /lib/firmware/qcom/sm8250/OnePlus/instantnoodlep/slpi.mbn`; confirm the FIRMWARE-PLAN owner-OTA provenance/hash privately; review names-only sensor config + DSP-library allowlist | Joined SLPI firmware at exact path; libraries/config audited without persist | Missing firmware, unaudited library/config provenance, any need to copy persist | Stop; no boot or provisioning; return to F2/F3 |
+| S2 boot construction | Use `tools/build-instantnoodlep-probe --help` and the working M3/combo flags, fresh `--out`, the Image.gz/DTB below, `--boot 2 --root userdata`; perform SLPI restoration described below and unpack-check the final image | Final boot image uses same kernel, DTB SLPI okay, GPU state retained; all other remoteprocs remain disabled; no partition allowlist except userdata | Generic probe still disables SLPI, new output already exists, size or overlay check fails | Delete only the fresh candidate outputs; keep combo image |
+| S3 preflight | Coordinator: `fastboot getvar current-slot`; `fastboot getvar slot-successful:b`; `fastboot getvar slot-unbootable:b` (private selector on each command) | b active, successful yes, unbootable no | Any mismatch | Stop in bootloader; ask owner; no slot change |
+| S4 RAM boot | `fastboot boot /absolute/path/to/reviewed-fresh-sensors.img`; connect by existing SSH transport within 2 minutes; `tr '\0' ' ' < /sys/firmware/devicetree/base/compatible`; `uname -r` | Booting OKAY; combo live kona root; exact sensors release | Boot rejection, hang/no SSH, unexpected release/root | Owner returns to bootloader with buttons; verify S3 before rebooting installed combo; no automatic stock fallback or slot repair |
+| S5 SLPI/FastRPC | `for r in /sys/class/remoteproc/remoteproc*; do printf '%s: ' "$r"; cat "$r/name" "$r/state" "$r/firmware"; done`; `ls -l /dev/fastrpc*`; `dmesg | grep -Ei 'slpi|fastrpc|pdr|pd.mapper|firmware'` | SLPI running with mapped firmware; `/dev/fastrpc-sdsp`; no crash/restart/firmware error | SLPI offline/crashing, missing node, SMMU fault | Reboot to bootloader, verify S3, reboot installed combo; do not retry until logs reviewed |
+| S6 ephemeral userspace | Follow packaging note's reviewed `/run` layout and foreground service command; inspect daemon output and `dmesg`; `ssccli --sensor accelerometer --timeout 3`; `ssccli --sensor light --timeout 3` | SNS service responds; changing acceleration and light readings; no persistent state write | Missing vetted userspace/config/libs, DSP crash, daemon failure, any persistent calibration dependency | Stop daemon; reboot installed combo after S3; /run state disappears |
+| S7 D-Bus | With reviewed SSC-enabled proxy and temporary udev properties: `timeout 20 monitor-sensor`; `timeout 10 monitor-sensor --proximity`; rotate phone and cover light sensor (owner actions) | Orientation and ALS update; proximity discovery/value if available without factory calibration | No readings, incorrect orientation, calibration access required | Stop proxy/daemon, undo only temporary udev/runtime overrides, reboot installed combo after S3 |
+| S8 restore check | Stop foreground services; `reboot bootloader`; repeat S3; `fastboot reboot` only with unchanged flags | Known-good installed combo boots; no partition changed | Slot flag changed or unexpected fallback | Stop in bootloader and ask owner; flash/slot-repair are outside this runbook |
+
+[V] Builder caveat: `make_probe_dtb()` disables every remoteproc
+(`tools/build-instantnoodlep-probe:456-457`). Its intermediate
+`OUT.probe.dtb` must be copied to a **new** staging path, then only
+`/soc@0/remoteproc@5c00000/status` set to `okay` with `fdtput -t s`.
+The coordinator must repack with the same known-good mkbootimg arguments
+and fresh output, preserving the builder's overlay sink, initramfs,
+command line, load addresses and size checks; inspect the unpacked final
+DTB and verify its SLPI firmware-name before S4. Do not merely edit the
+sidecar DTB and boot the unchanged `.img`. [I] This repack is a pending
+coordinator gate; the raw kernel artifacts alone are not a boot image.
+
+[I] S7 proximity is observation only: no persist extraction, factory
+calibration import, calibrated near/far acceptance claim, or shell rotation /
+auto-brightness acceptance is included in phase 1. Failure to expose sensors
+without calibration stays a recorded blocker; it does not authorize a
+calibration import. Hall/vibrator and full M5 gates remain future work.
+
+[V] Built-in PAS requests firmware asynchronously before userspace may have
+mounted the root filesystem (`drivers/remoteproc/remoteproc_core.c:1685-1700`).
+[I] An early missing-file failure can therefore require one explicit SLPI
+start after rootfs firmware availability is confirmed. Coordinator gate S5a:
+identify exactly the remoteproc whose `firmware` equals the mapped SLPI name;
+if and only if its state is `offline` and the only failure was early firmware
+availability, run `printf start > "$SLPI/state"` once. Expect running and
+`/dev/fastrpc-sdsp`; stop on crash, authentication/SMMU error, or failure to
+reach running; rollback via S8. Never guess the remoteproc number or start
+another DSP. This is a volatile sysfs action, not a partition write.
+
+### 10.3 Build result
+
+[I] Build and schema validation are in progress; final artifact manifest
+will be recorded here before review.
