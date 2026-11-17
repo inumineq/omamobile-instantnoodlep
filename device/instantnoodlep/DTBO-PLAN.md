@@ -81,3 +81,27 @@ force restart, hold VolUp+VolDown, then plug in);
 1. ABL selects the single neutral entry and boots (D3).
 2. ABL tolerates a dtbo without AVB footer on an unlocked device (D3).
 3. Flashing `dtbo_b` leaves the `boot_b` GPT attributes alone (D2).
+
+## 6. Result 2026-11-17: both images rejected; plan parked [V]
+
+| Try | Image | ABL | Recovery |
+|---|---|---|---|
+| v1 | §2 table, one entry, sha256 `2549b79d…562a98` | slot B unbootable, current slot a, stock recovery | D-R, `--set-active=b`, B5 |
+| v2 | raw FDT (`dtc -O dtb`, magic `d00dfeed`, root `qcom,msm-id = <356 0x10000>`, `qcom,board-id = <8 0>`), padded, sha256 `a65db199…ca5fbd0` | same | same |
+
+- D2 held both times: flashing `dtbo_b` left `slot-successful:b` and the
+  retry count alone; ABL itself set `unbootable` on the failed boot.
+- Public Qualcomm ABL skips the overlay when the dtbo magic is wrong
+  (`LoadAndValidateDtboImg()` returns FALSE, the appended-DTB path runs)
+  and fails the boot with `Board Dtbo blob not found` when a valid table has
+  no matching entry [V: DTBO-ABL-RESEARCH.md]. The phone rejected both, so
+  OnePlus' ABL differs from that source [I]; the open [I]s of §5 (1, 2)
+  are answered "no" for these two images, and 3 is answered "yes".
+- Not tried: the stock table with entry 16's fragments removed (keeps
+  OnePlus' own table and ids); a dtbo with the stock AVB footer (`avbtool
+  add_hash_footer`, unsigned key). Each costs a slot-A fallback and the
+  recovery above, and the second needs the userdata risk re-checked.
+- Decision: parked. K3 keeps the test-only `qcom,kona` patch as a local
+  layer. The kernel-side alternative is to make the three affected tables
+  (UBWC, pd-mapper, cpufreq-dt-platdev) match this phone some other way
+  that upstream accepts [I: not designed yet].
