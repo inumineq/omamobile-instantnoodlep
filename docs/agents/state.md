@@ -57,3 +57,10 @@ See `docs/agents/active/` (power P2b, daily, kona on omabook; audio on macbookpr
 5. Power P2b (charger as a module), then P3 Type-C.
 6. Audio phase 1 (worker on macbookpro), kona upstream series (worker `kona`), modem/GNSS delta and UI issue drafts (workers on obsidian).
 7. Backlog: disk encryption + boot passphrase / lock-screen PIN (issue #70).
+
+## Offline UI proposals
+
+- [V] Shell edge geometry and Wi-Fi BackLink patch proposals plus three unposted
+  issue drafts are in `patches/` and `docs/upstream/`; host applicability/model
+  checks passed (details: `docs/upstream/README.md`). [I] Phone verification
+  remains pending under `device/instantnoodlep/SHELL-UX-PLAN.md`.
