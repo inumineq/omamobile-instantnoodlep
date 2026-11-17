@@ -4,6 +4,57 @@
 Newest first. Findings that matter beyond one subsystem go here; subsystem
 detail lives in the *-PLAN.md files.
 
+## 2026-11-17 (night): P2b built offline — charger as a module, hang evidence armed
+
+- [V] Kernel `~/src/l-k3p` @ `8c252b516245` (branch `instantnoodlep-k3-power`),
+  build dir `~/android/build/k3-power-p2b`, release
+  `7.3.0-rc6-instantnoodlep-k3-g8c252b516245`, `build.rc` 0, Image.gz
+  16,128,111 bytes. `.config` [V: `~/android/build/k3-power-p2b/.config`]:
+  `CONFIG_CHARGER_QCOM_SMB5=m`, `CONFIG_QCOM_SPMI_ADC5=m`, plus
+  `SOFTLOCKUP_DETECTOR`/`HARDLOCKUP_DETECTOR`/`DETECT_HUNG_TASK` (120 s)
+  with `BOOTPARAM_*_PANIC=1`, `PANIC_ON_OOPS=y`, `PANIC_TIMEOUT=10`;
+  `PSTORE_RAM`/`PSTORE_PMSG` on and ramoops `pmsg-size` 0x40000 (commit
+  `b0e1e8f0e`). The charger module has no OF alias (`modinfo`: 0 aliases
+  [V: modinst copy]), so udev never autoloads it.
+- [V] Modules
+  `~/android/build/k3-power-p2b/modules-7.3.0-rc6-instantnoodlep-k3-g8c252b516245.tar.zst`
+  (top-level `<release>/`, 1802 `.ko`, stripped like P1/P2, zstd -19),
+  sha256 `08dc9c8e895e18d46c9d32cdf17bcdd8f28d649d62062390d66509c3117e8cd9`.
+  On the phone: `tar --zstd -xf … -C /usr/lib/modules`, then
+  `depmod 7.3.0-rc6-instantnoodlep-k3-g8c252b516245`.
+- [V] RAM image `~/android/build/k3-power-ram/boot-p2b-charger-m`
+  (24,145,920 bytes), sha256
+  `c13717473cd76ef789f81e477b1491c7fe6f6168000b31c20170c29fee867202`;
+  manifest next to it: `--boot 2 --root userdata --debug-shell`, stock
+  entry-16 overlay applied and checked; the ramdisk differs from P1/P2
+  only in `root/.ssh/authorized_keys` (the laptop's `id_ed25519.pub`
+  changed since P2).
+- [V] Runbook: POWER-M5-PLAN §7.5 — boot, then watch +
+  `dmesg -w > /root/p2b-dmesg.log` with a periodic `sync` loop, owner GO,
+  `modprobe qcom_pm8150b_charger`, monitor, §7.4 stop conditions, rollback.
+  The watch script is stopped by its PID file (`kill "$(cat
+  /root/charge-watch.pid)"`), never `pkill -f` over ssh (P2-9 fix,
+  `tools/instantnoodlep-charge-watch`). Hang analysis of the P2 delta with
+  file:line: §7.5.
+- Nothing ran on the phone; no partition was written.
+
+## 2026-11-17 (afternoon): P2 charger image hangs before userspace; P2b
+
+- [V] P2 (charger and ADC5 built in) RAM-booted with `Booting OKAY`, then
+  nothing on USB for over 3 min. The screen froze on the fastboot image
+  with a coloured band at the top, there was no self-reset, and the phone
+  was not warm. Power+VolUp brought back combo K3; no journal of the P2
+  boot and pstore empty (POWER-M5-PLAN §7.4).
+- [I] Leading theory: the built-in charger defers on its ADC channels
+  (`power/` links before `iio/`), probes from the deferred-probe worker,
+  and something in that probe blocks; `deferred_probe_initcall()` flushes
+  that worker, so `kernel_init` never reaches userspace. No unbounded wait
+  was found in the driver or ADC5; the review with file:line is in §7.4.
+- P2b (§7.5): the charger is a module that only loads by hand, the
+  pm8150b GPIOs and temperature alarm are off, and hung-task/lockup
+  detectors with panic-on plus a ramoops pmsg area should leave a dump in
+  pstore if it hangs again.
+
 ## 2026-11-17 (afternoon): Wi-Fi associated and BT scanning on k3-wifi2
 
 - [V] k3-wifi2 (`-gf9a20697e2ae`) RAM-booted: with the `serial1 = &uart6`

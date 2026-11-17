@@ -533,12 +533,200 @@ charger driver (P1: no charging under combo K3).
 | P2-6 | Laptop cable, 15 min: `tail -f /root/charge-watch.log` over SSH | `usb_type` SDP, `input_current_limit` 500000, `online` 1; gauge status `Charging` or `Full`, current 0-0.6 A; vbat rising slowly, ≤ 4.44 V; temp ≤ 42 °C and not rising more than 3 °C; the charger may report `Full` and restart cycles near 96 % (D/0166 notes the last 10 % are slow) | any stop condition; watch exited with STOP | generic rollback |
 | P2-7 | Owner unplugs for 1 min, replugs (twice if the gadget does not come back, §7.3 P3 note); then read the log | while out: gauge `Discharging`, charger `online` 0; after replug: `online` 1, `Charging`/`Full`, same limits as P2-6 | charging continues with the cable out; any stop condition | generic rollback |
 | P2-8 | Optional, **separate owner go**: wall charger (DCP) for 15 min; SSH is gone while on it, the watch script still enforces the limits; afterwards back on the laptop cable, read the log | `usb_type` DCP, `input_current_limit` 1500000, battery current ≤ 1.5 A, temp ≤ 42 °C, vbat ≤ 4.44 V in the whole log | any STOP line in the log; phone hot to the touch (owner: unplug at once) | generic rollback |
-| P2-9 | `pkill -f instantnoodlep-charge-watch`; copy `/root/charge-watch.log` to `captures/<date>/power/`; `reboot` | combo K3 from `boot_b`; under combo the battery shows no charging again | anything else | Power+VolUp, then §7.2 G1 |
+| P2-9 | `kill "$(cat /root/charge-watch.pid)"` (by PID: `pkill -f` over ssh also matches the ssh shell running it and kills the session); copy `/root/charge-watch.log` to `captures/<date>/power/`; `reboot` | combo K3 from `boot_b`; under combo the battery shows no charging again | anything else | Power+VolUp, then §7.2 G1 |
 
 What P2 does not cover: Type-C/PD (P3; no `power-supplies` link yet),
 charging while suspended (the driver turns charging off in suspend), and
 flashing a charger kernel to `boot_b` (only after P2-5 to P2-7 pass, behind
 its own owner go).
+
+#### P2 result (2026-11-17 12:49, run by the coordinator): froze before userspace
+
+- [V] `fastboot boot boot-p2-charger.img` (sha256 `8bf4fc47…`): `Booting
+  OKAY`, the fastboot device left at 12:49:31, then nothing on the laptop's
+  USB for more than 3 min (no gadget, no NCM netdev, no QUSB/ramdump
+  device). The screen stayed on the bootloader's fastboot screen with a
+  coloured glitch band at the top and no self-reset. Owner forced a reboot
+  with Power+VolUp at about 12:55; the phone was not warm; combo K3 came
+  back from `boot_b`.
+- [V] `journalctl --list-boots` on the rootfs has no boot for
+  `-g28bdb8d1614e`, so P2 never mounted the root. `/sys/fs/pstore` is empty
+  after the forced reboot.
+- [V] P1 (same builder, ramdisk and overlay, no charger) reached SSH, so the
+  P2 delta is the suspect.
+- The command line carries `panic=10` (`boot-p2-charger.manifest.json`), so
+  a panic would have rebooted the phone by itself; it did not. The kernel
+  started (the glitch band is the early-K3 `DSI PLL(0) lock failed` /
+  simple-framebuffer phase, NOTES 2026-11-17 midday [I]) and then stopped
+  progressing without a panic.
+
+#### Review of the P2 delta (offline, 2026-11-17)
+
+What changed between the P1 and P2 probe DTBs [V: `dtc -s` of both
+`*.probe.dtb`, diff]: the `battery` node, `pmic@2` (adc@3100 with two new
+channels, charger@1000, gpio@c000, temp-alarm@2400; typec, vbus, pon,
+adc-tm disabled), `pmic@3` (pwm disabled), and the `pm8150b-thermal` zone.
+No reserved-memory, iommu or carveout change; everything else is phandle
+renumbering. The Image grew from 44,591,616 to 44,657,152 bytes, far inside
+the ABL kernel region (about 84 MiB; mainline kernels of 48-49 MB boot
+there) [V: docs/research/abl-kernel-size.md:65-70,95-106].
+
+The leading explanation [I], which fits every observation: **the built-in
+charger was probed from the deferred-probe worker and that probe, or
+another probe it unblocked, never returned.** The chain:
+
+1. Link order puts `power/` before `watchdog/` before `iio/` [V:
+   L/drivers/Makefile:120,123,169]. At its own initcall the charger cannot
+   get its ADC channels (`devm_iio_channel_get`,
+   L/drivers/power/supply/qcom_pm8150b_charger.c:1525-1534) and defers.
+2. ADC5, now built in (it was `=m` in P1), binds at the `iio/` initcall and
+   triggers deferred probing, so the charger's probe runs in
+   `deferred_probe_work`.
+3. `deferred_probe_initcall()` flushes that work twice before initcalls end
+   [V: L/drivers/base/dd.c:340-359]. If the work never finishes,
+   `kernel_init` never reaches the initramfs: no gadget (set up by the
+   init), no msm takeover (msm binds through the same deferred list), no
+   journal.
+4. `qcom_wdt` is built in and registered before that point (`watchdog/`
+   precedes `iio/`), and with `WATCHDOG_HANDLE_BOOT_ENABLED=y` the kernel
+   itself pings it [V: kernel.config], so a blocked probe does not bite.
+   Without hung-task or lockup detectors in the config [V: P1/P2 `.config`],
+   nothing turns the hang into a panic, so `panic=10` never fires and
+   ramoops gets no dump.
+
+I could not find the line that blocks. Every wait on the probe path is
+bounded: the SMB5 init sequence is plain regmap writes
+(`qcom_pm8150b_charger.c:1401-1474`), the IRQ setup is
+`devm_request_threaded_irq` (:1476-1490, :1625-1655), the only sleep is
+`msleep(100)` in the policy work (:1095), the work items re-arm with
+`mod_delayed_work` (status work at most `APSD_MAX_RETRIES` times, :776-781,
+:815-816), and ADC5 conversions time out (`qcom-spmi-adc5.c:197-213,
+328-339`). Other candidates, all [I] and all new in P2 whether the driver
+is built in or a module:
+
+- the PM8150B charger hardware writes at probe while the USB cable is in:
+  `USBIN_CMD_IL` unsuspend, ICL 500 mA with AICL and
+  `SUSPEND_ON_COLLAPSE_USBIN`, `TYPE_C_CFG.BC1P2_START_ON_CC = 0` and an
+  APSD rerun (BC1.2 detection drives D+/D-) with no TCPM present (:1401-1456,
+  :806-813). This can explain a lost gadget but not a frozen kernel;
+- new SPMI clients at SID 2/3: the `qcom,spmi-pmic` MFD, `pinctrl-spmi-gpio`
+  for `gpio@c000` (built in), the pm8150b ADC instance and its EOC
+  interrupt, and the charger's five PMIC interrupts (`usbin-plugin` and
+  `bat-ov` both-edge). An interrupt the bootloader left pending on a newly
+  mapped PMIC line is possible but unproven;
+- the core `charging_enabled` property shifts the power_supply property
+  enum (P2.0); every user was rebuilt with it, so no mismatch is expected.
+
+P2b is built to tell these apart and to leave evidence (§7.5).
+
+### 7.5 P2b: charger as a module, loaded by hand
+
+Inputs [V: built 2026-11-17 night on omabook; `build.rc` 0; Image.gz 16,128,111 bytes]:
+
+- Kernel `~/src/l-k3p` @ `8c252b516245` (P2 + two commits: a 256 KiB
+  ramoops `pmsg-size`, and `DO NOT UPSTREAM: ... load only by hand`, which
+  drops the driver's `MODULE_DEVICE_TABLE` so udev never autoloads it and
+  disables `&pm8150b_gpios` and `&pm8150b_temp`), build dir
+  `~/android/build/k3-power-p2b`, release `7.3.0-rc6-instantnoodlep-k3-g8c252b516245`.
+- Config vs P1: `CHARGER_QCOM_SMB5=m`, `QCOM_SPMI_ADC5=m` (as P1), plus
+  `SOFTLOCKUP_DETECTOR`, `HARDLOCKUP_DETECTOR` (buddy),
+  `DETECT_HUNG_TASK` (120 s), each with its panic-on option,
+  `PANIC_ON_OOPS=y` and `PANIC_TIMEOUT=10`. A hang longer than 120 s in a
+  blocked task, a soft lockup or a hard lockup now panics; the panic dump
+  goes to ramoops and the phone reboots into combo K3 after 10 s, where
+  `/sys/fs/pstore` shows it. The builder has no option for extra kernel
+  arguments (`tools/build-instantnoodlep-probe --help`), so these are
+  Kconfig defaults rather than command-line flags.
+- Image `~/android/build/k3-power-ram/boot-p2b-charger-m` (24,145,920 bytes),
+  sha256 `c13717473cd76ef789f81e477b1491c7fe6f6168000b31c20170c29fee867202`, manifest next to it; same builder flags as P1/P2
+  (`--boot 2 --root userdata --debug-shell`, stock entry-16 overlay,
+  `apply_checked`); the ramdisk differs from P1/P2 only in
+  `root/.ssh/authorized_keys` [V: identical cpio file list; the laptop's
+  `id_ed25519.pub` changed since P2].
+- Modules `~/android/build/k3-power-p2b/modules-7.3.0-rc6-instantnoodlep-k3-g8c252b516245.tar.zst`
+  (one top-level `<release>/` dir, 1802 `.ko` — P1's 1801 plus the charger,
+  ADC5 back as a module as in P1; stripped like P1/P2; unpack on the phone
+  with `tar --zstd -xf … -C /usr/lib/modules`, then `depmod <release>`),
+  sha256 `08dc9c8e895e18d46c9d32cdf17bcdd8f28d649d62062390d66509c3117e8cd9`.
+
+What still binds at boot that P1 did not have: the `qcom,spmi-pmic` MFD for
+SID 2 and 3 (built in, needed by pm8150; it only reads the PMIC revision)
+and the pm8150b ADC instance (ADC5 is autoloaded for pm8150/pm8150l as in
+P1, and the same module then binds pm8150b's ADC too). Keeping the pm8150b
+ADC off would leave the charger nothing to read. If P2b does not reach SSH,
+those two are the suspects. The charger itself, the pm8150b GPIOs and its
+temperature alarm stay off until the modprobe.
+
+#### Hang analysis of the P2 delta, with file:line (l-k3p @ `8c252b516245`)
+
+The P1→P2 delta is 9 files, +1899 lines [V: `git diff --stat 11fedfae5a37
+28bdb8d1614e`]: the new `drivers/power/supply/qcom_pm8150b_charger.c` (1739
+lines), one line each in `drivers/power/supply/power_supply_sysfs.c` and
+`include/linux/power_supply.h` (the `charging_enabled` property), the
+Kconfig/Makefile entries, `pm8150b.dtsi` (+34), the board DTS, and two
+bindings. The P2b tip adds only the ramoops `pmsg-size` and the
+no-autoload / gpios-off commit [V: `git diff --stat 28bdb8d1614e
+8c252b516245`].
+
+What can hang at probe, read in this tree:
+
+- Link order puts `power/` before `watchdog/` before `iio/`
+  (`drivers/Makefile:120,123,169`), so a built-in charger cannot get its
+  ADC channels and defers: `devm_iio_channel_get` at
+  `drivers/power/supply/qcom_pm8150b_charger.c:1525-1534`.
+  `deferred_probe_initcall()` then flushes `deferred_probe_work` twice
+  before initcalls end (`drivers/base/dd.c:340`, flush at `:348,:359`), so
+  a probe that never returns blocks `kernel_init` before the initramfs:
+  no gadget, no journal, no pstore — exactly the P2 symptom (§7.4).
+- Every wait inside `smb5_probe` (`qcom_pm8150b_charger.c:1498-1670`) is
+  bounded: hardware init is plain regmap writes (`smb5_init_hw`
+  `:1458-1473` over `smb5_init_seq` `:1401-1455`); the battery-info read
+  `:1559` touches only the battery node's DT properties; IRQ setup is
+  `platform_get_irq_byname` + `devm_request_threaded_irq`
+  (`smb5_init_irq` `:1476-1495`, called at `:1625,:1629,:1634,:1651` and
+  optionally `:1639-1647`); the only sleep is `msleep(100)` in the policy
+  work `:1095`; works re-arm via `mod_delayed_work`
+  (`:639,:816,:836,:1114,:1282,:1333-1335`) and APSD retries are capped
+  by `APSD_MAX_RETRIES` 3 (`:277,:779`). ADC5 conversions time out:
+  `ADC5_CONV_TIMEOUT` 100 ms (`drivers/iio/adc/qcom-spmi-adc5.c:80`),
+  `wait_for_completion_timeout` `:335-336` with the polling fallback
+  `adc5_poll_wait_eoc` `:197-213` (400 × ~264 µs), ADC7 10 ms `:371`. No
+  unbounded wait was found in the driver or ADC5 [I: the blocking line is
+  still unidentified].
+- New in P2 whether built in or a module, so still live candidates: the
+  charger's probe-time hardware writes with the cable in (`USBIN_CMD_IL`
+  unsuspend `:1409`, ICL 500 mA `:1410-1411`, `BC1P2_START_ON_CC=0` `:1414`,
+  AICL with `SUSPEND_ON_COLLAPSE_USBIN` `:1451-1454`, applied through
+  `smb5_init_hw` at probe `:1536`) — BC1.2 detection drives D+/D- with no
+  TCPM present and can lose the USB gadget, but not freeze the kernel; and
+  the new SPMI clients on SID 2/3: the `qcom,spmi-pmic` MFD revision reads
+  (`drivers/mfd/qcom-spmi-pmic.c:169-195`), `pinctrl-spmi-gpio` for
+  `gpio@c000`, the pm8150b ADC instance with its EOC interrupt, and the
+  charger's five PMIC interrupts — a bootloader-pending interrupt on a
+  newly mapped line could storm.
+- In P2b the charger node has no driver at boot (no `MODULE_DEVICE_TABLE`;
+  `modinfo` on the module shows 0 aliases [V: `modinst` copy of
+  `qcom_pm8150b_charger.ko`]) and `&pm8150b_gpios` / `&pm8150b_temp` are
+  disabled (commit `8c252b516`), so the only probes new at boot vs P1 are
+  the SPMI MFD and ADC5 (ADC5 autoloads for pm8150/pm8150l as in P1 and then
+  binds pm8150b's ADC too). If P2b hangs before SSH, those two are the
+  suspects, in that order. The armed detectors turn any hang into a panic —
+  hung task > 120 s, soft or hard lockup, or an oops
+  (`DETECT_HUNG_TASK`, `SOFTLOCKUP_DETECTOR`, `HARDLOCKUP_DETECTOR` with
+  `BOOTPARAM_*_PANIC=1`, `PANIC_ON_OOPS=y`, `PANIC_TIMEOUT=10` [V: P2b
+  `.config`]) — the dump lands in ramoops (`pmsg-size` 0x40000, commit
+  `b0e1e8f0e`) and the phone self-reboots to combo K3 after 10 s, where
+  `/sys/fs/pstore` shows it.
+
+| # | Step | Expect | Stop | Rollback |
+| --- | --- | --- | --- | --- |
+| P2b-0 | Laptop: `sha256sum` image and modules tarball | `c13717473cd76ef789f81e477b1491c7fe6f6168000b31c20170c29fee867202`, `08dc9c8e895e18d46c9d32cdf17bcdd8f28d649d62062390d66509c3117e8cd9` | mismatch | rebuild |
+| P2b-1 | Phone on combo K3: unpack modules `-C /usr/lib/modules`, `depmod 7.3.0-rc6-instantnoodlep-k3-g8c252b516245`; push the current `tools/instantnoodlep-charge-watch` to `/root/` (it now waits for the charger and writes `/root/charge-watch.pid`); `ls /sys/fs/pstore` (should be empty) | new release dir only | anything else changes | `rm -rf /usr/lib/modules/7.3.0-rc6-instantnoodlep-k3-g8c252b516245` |
+| P2b-2 | `reboot --reboot-argument=bootloader`; `fastboot getvar current-slot`; `fastboot boot ~/android/build/k3-power-ram/boot-p2b-charger-m` (RAM only; programs nothing) | `Booting OKAY`; SSH within 2 min like P1; `uname -r` = `7.3.0-rc6-instantnoodlep-k3-g8c252b516245`; `lsmod \| grep qcom_pm8150b` empty; `/sys/class/power_supply` = `bq27411-0` only | no SSH in 3 min | wait for a hung-task panic (≤ 130 s after the hang) and the self-reboot; if none by 5 min, Power+VolUp. Then on combo K3 read `/sys/fs/pstore/*` and `journalctl -b -1` |
+| P2b-3 | Over SSH, before the go: `nohup sh -c 'dmesg -w > /root/p2b-dmesg.log' >/dev/null 2>&1 &`; `nohup /root/instantnoodlep-charge-watch > /root/charge-watch.log 2>&1 &`; `nohup sh -c 'while sleep 2; do sync /root/p2b-dmesg.log /root/charge-watch.log; done' >/dev/null 2>&1 &`; check both logs grow | both logs growing; watch prints gauge lines with charger fields NA | logs not growing | kill the three by PID |
+| **P2b-4 GO** | **Owner go required** (this programs the charger). Then `echo "P2b modprobe $(date)" > /dev/pmsg0; modprobe qcom_pm8150b_charger` | modprobe returns within seconds; dmesg: `float voltage 3980000 uV`, then `charging policy uses bq27411-0` and a temperature zone line; `pm8150b-charger` appears and the watch fills its fields | modprobe does not return in 30 s; SSH or gadget drops and does not return in 2 min; any §7.4 stop condition | if SSH lives: `echo 0 > .../pm8150b-charger/charging_enabled`, unplug, `reboot -f`. If not: wait for the hung-task panic (self-reboot to combo K3 ≤ 3 min), else Power+VolUp; then read pstore, `/root/p2b-dmesg.log`, `/root/charge-watch.log` under combo K3 |
+| P2b-5 | Continue with §7.4 P2-6 to P2-8 (laptop cable 15 min, unplug/replug, optional wall charger with its own go) | as §7.4 | as §7.4 | as §7.4 |
+| P2b-6 | `kill "$(cat /root/charge-watch.pid)"`; stop the dmesg and sync loops by their PIDs (`pgrep -f 'dmesg -w'`, then `kill <pid>`; never `pkill -f` from the ssh shell); copy the logs to `captures/<date>/power/`; `reboot` | combo K3 from `boot_b` | anything else | Power+VolUp, then §7.2 G1 |
 
 ## 8. Open [I]s and how each resolves
 

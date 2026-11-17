@@ -15,7 +15,10 @@
 #   or a forced stop.
 # It reads sysfs and dmesg only; its one write is the charging switch.
 #
-# Usage: instantnoodlep-charge-watch [seconds]   (default: run until Ctrl-C)
+# Usage: instantnoodlep-charge-watch [seconds]   (default: run until stopped)
+# Start it before loading the charger module; stop it by its PID
+# (kill "$(cat /root/charge-watch.pid)"), never with pkill -f over ssh,
+# which also matches the ssh shell that runs the pkill.
 
 set -u
 
@@ -36,7 +39,11 @@ stop() {
 }
 
 [ -d "$G" ] || { echo "no $G"; exit 2; }
-[ -d "$C" ] || { echo "no $C"; exit 2; }
+# The charger may be loaded later (modprobe); until then its fields read NA.
+[ -d "$C" ] || echo "no $C yet; logging the gauge alone until it appears"
+
+PIDFILE=${CHARGE_WATCH_PIDFILE:-/root/charge-watch.pid}
+echo $$ > "$PIDFILE" 2>/dev/null || echo "cannot write $PIDFILE"
 
 echo "time status cap% vbat_uV ibat_uA temp_dC | chg_status online usb_type vusb_uV iusb_uA icl_uA health en"
 start=$(date +%s)
