@@ -26,6 +26,7 @@ of it from `origin/main` plus the pushed branches.
 | M5 Wi-Fi/BT | Works on a RAM boot of k3-wifi2: Wi-Fi associated (owner's network, NTP synced), BT scan finds devices after `btmgmt public-addr` [V: NOTES 2026-11-17 afternoon]; not on `boot_b` yet (daily kernel) |
 | M5 modem/GNSS | Source-cited DTS/config/userspace delta prepared; flashless Sahara profile and private EFS/DDR policy block first boot [V: `device/instantnoodlep/MODEM-M5-DELTA.md` §1-6]. No kernel built or handset test. |
 | M5 power | P1 gauge works on a RAM boot; P2 charger image hangs early at boot (P2b in progress); no charging under any of our kernels [V: POWER-M5-PLAN §7.3-7.4] |
+| M5 camera (M-CAM1 front IMX471) | Kernel series built and offline-verified: release `7.3.0-rc6-instantnoodlep-k3-camera-g70d0761d1`, clean checkpatch/dt_binding_check/dtbs_check, one IMX471 on CCI1 master 1 to CSIPHY3 in the DTB [V: CAMERA-PLAN §9.4]. No RAM boot or frame yet; coordinator gates C0-C5 pending. |
 
 ## The phone right now
 
