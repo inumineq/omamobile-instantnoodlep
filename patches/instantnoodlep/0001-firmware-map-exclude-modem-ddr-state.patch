@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: MIT
+# Candidate only: remove DDR-training state from the ordinary firmware map.
+# Evidence: MODEM-M5-DELTA.md section 5; D/modem/install.sh:24-35.
+# No private backing replacement is provided or authorized by this patch.
+--- a/device/instantnoodlep/firmware.map
++++ b/device/instantnoodlep/firmware.map
+@@ -14,7 +14,7 @@
+ # prefix extends it because this phone keeps its firmware in three images.
+ #
+ # Never mapped: per-unit identity or calibration data (modem:/image/sdx55m/efs*.bin,
+-# modem:/image/sdx55m/modemr.jsn, vendor:/firmware/wlan/qca_cld/qca6390/wlan_mac.bin).
++# modem:/image/sdx55m/mdmddr.mbn, modem:/image/sdx55m/modemr.jsn, vendor:/firmware/wlan/qca_cld/qca6390/wlan_mac.bin).
+ 
+ # GPU zap shader, vendor-signed (M3). Path as in D kernel patch 0004.
+ vendor:/firmware/a650_zap.mdt|qcom/sm8250/OnePlus/instantnoodlep/a650_zap.mbn
+@@ -34,7 +34,6 @@
+ modem:/image/sdx55m/apps.mbn|qcom/sdx55m/apps.mbn
+ modem:/image/sdx55m/devcfg.mbn|qcom/sdx55m/devcfg.mbn
+ modem:/image/sdx55m/hyp.mbn|qcom/sdx55m/hyp.mbn
+-modem:/image/sdx55m/mdmddr.mbn|qcom/sdx55m/mdmddr.mbn
+ modem:/image/sdx55m/multi_image.mbn|qcom/sdx55m/multi_image.mbn
+ modem:/image/sdx55m/multi_image_qti.mbn|qcom/sdx55m/multi_image_qti.mbn
+ modem:/image/sdx55m/qdsp6sw.mbn|qcom/sdx55m/qdsp6sw.mbn

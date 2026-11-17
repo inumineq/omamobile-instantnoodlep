@@ -1,6 +1,16 @@
 <!-- SPDX-License-Identifier: MIT -->
 # MODEM-M5-PLAN: SDX55, MHI/QRTR, and telephony on instantnoodlep
 
+> 2026-11-17 implementation addendum: read [MODEM-M5-DELTA.md](MODEM-M5-DELTA.md)
+> first. [V: D/K17:7-10,33-87 in that delta] The public device uses a
+> flashless-specific MHI profile and Sahara host loader, not generic SDX55
+> support alone. Its endpoint DTS, MBI route, exact candidate config,
+> packages, firmware exclusions and first RAM-boot gate are specified there.
+> [I] That first gate stops at ports and `mmcli -L`; SIM, registration,
+> GNSS tracking and all later tests below need a separate owner go.
+> Private-state provenance blocks release until resolved; no build or
+> phone test was performed for this addendum.
+
 House-rule-6 gate for the **modem** subsystem of milestone **M5** of the
 wayfinder map ("wayfinder:map — Omarchy Mobile port for instantnoodlep
 (OnePlus 8 Pro IN2023), M1-M5"; M5 includes mobile data/SMS, sensors and
@@ -11,7 +21,7 @@ documentation only. No kernel or userspace implementation is included.
 - Reading order: `AGENTS.md`, `device/instantnoodlep/DTS-PORT-PLAN.md`,
   `device/instantnoodlep/FIRMWARE-PLAN.md` + `firmware.map`,
   `device/instantnoodlep/DISPLAY-M3-PLAN.md` (template), `NOTES.md`.
-- Scope: the external SDX55 modem on PCIe/MHI (not the SM8250 integrated
+- Scope: the external flashless SDX55 modem on PCIe/MHI (not the SM8250 integrated
   MPSS `qcom_q6v5_mss` remoteproc), modem firmware and QRTR/RFS services,
   ModemManager, SIM, SMS and mobile data. Calls are a gated follow-on whose
   audio path depends on the separate AUDIO-M5-PLAN and its ADSP/PDM stack.
@@ -76,7 +86,7 @@ the port confirmed by the device-specific public DTS and owner-run checks.
 | --- | --- | --- | --- | --- |
 | PCIe2 host @ `0x1c10000` | present, generic, disabled [V: sm8250.dtsi:2388-2483] | `qcom,pcie-sm8250`; `drivers/pci/controller/dwc/pcie-qcom.c` (match table, scanned :2470-2499); binding `qcom,pcie-sm8250.yaml`; `CONFIG_PCIE_QCOM=y` [V: L/arch/arm64/configs/defconfig:245]; clocks/resets/GDSC/iommu-map all in the generic node [V: :2433-2461] | not referenced | enable `&pcie2`; check `&apps_smmu` (iommu-map `0x1d00/0x1d01` [V: :2455-2456]) [I-M5-7] |
 | PCIe2 PHY @ `0x1c16000` | present, generic, disabled [V: sm8250.dtsi:2485-2512] | `qcom,sm8250-qmp-modem-pcie-phy`; `drivers/phy/qualcomm/phy-qcom-qmp-pcie.c` match (scanned :6460-6461); `CONFIG_PHY_QCOM_QMP=m` [V: defconfig:1780, full-file scan] | not referenced | enable `&pcie2_phy` + PHY supplies from C:718-726 [V: DTS-PORT-PLAN §2.3 row "&pcie2 + &pcie2_phy, C:718-726"]; rail names [I-M5-2] |
-| MHI over PCIe (`pci_generic`) | present; `CONFIG_MHI_BUS_PCI_GENERIC=m` [V: defconfig:262] | `L/drivers/bus/mhi/host/pci_generic.c`: `mhi_qcom_sdx55_info` :405-415 — `.fw = "qcom/sdx55m/sbl1.mbn"` :407, `.edl = "qcom/sdx55m/edl.mbn"` :408, `.edl_trigger = true` :409, config `modem_qcom_v1_mhiv_config` :410, mru 32768 :413; pure PCI-ID driver, no DT node/of_match [V: id table :988-989; no `qcom,sdx55` compatible exists — full-file scan] | module only; no DT needed | pin `=y` in `device/instantnoodlep/kernel.config`; no DTS node for the modem itself |
+| MHI over PCIe (`pci_generic`) | present; `CONFIG_MHI_BUS_PCI_GENERIC=m` [V: defconfig:262] | `L/drivers/bus/mhi/host/pci_generic.c`: `mhi_qcom_sdx55_info` :405-415 — `.fw = "qcom/sdx55m/sbl1.mbn"` :407, `.edl = "qcom/sdx55m/edl.mbn"` :408, `.edl_trigger = true` :409, config `modem_qcom_v1_mhiv_config` :410, mru 32768 :413; pure PCI-ID driver, no DT node/of_match [V: id table :988-989; no `qcom,sdx55` compatible exists — full-file scan] | generic module only; board needs flashless profile [V: MODEM-M5-DELTA §1] | pin `=y` in `device/instantnoodlep/kernel.config`; flashless endpoint/profile required [V: MODEM-M5-DELTA §2-3] |
 | MHI channels (SDX55) | present | `modem_qcom_v1_mhi_channels[]` :314-329 — DIAG 4/5, MBIM 12/13, QMI 14/15, IPCR 20/21, FIREHOSE 34/35, IP_SW0 46/47, **IP_HW0 100/101**; events :331-342; controller config :363-370; probe powers up explicitly at probe [V: L `pci_generic.c`] | not tested | channel table is descriptor-defined |
 | Firmware load | present | `drivers/bus/mhi/host/boot.c` uses the EDL image only in EDL state, otherwise the normal firmware image; `pci_generic` names the SBL path and EDL trigger [V: L `boot.c`, `init.c`, `pci_generic.c`] | M5 firmware not tested | verify exact `FW/` members by name in O5; do not infer OTA absence of EDL |
 | QMI/QRTR control | Mainline has MHI QMI WWAN-control and optional QRTR-MHI drivers; generic SDX55 provides QMI (14/15) and IPCR (20/21) | `mhi_wwan_ctrl.c` maps `QMI` to a WWAN control port; `net/qrtr/mhi.c` binds IPCR [V: L files]. Public reference uses QMI over QRTR; its udev rule ignores unresponsive MHI QMI/MBIM ports [V: D `pmaports-patches/0019`, `modem/78-mm-sdx55-qrtr.rules`, `ModemManager-sdx55.conf`, `sdx55-gnss.py`] | K3 has no modem test | enable QRTR/MHI and audit MM probing; do not treat a created WWAN QMI node as proof QRTR LOC works |
@@ -124,7 +134,7 @@ omarchy-mobile. Keep implementation commits scoped.
 | # | Work item | Content |
 | --- | --- | --- |
 | 1 | Confirm modem connection | Use public instantnoodlep pcie2/MHI wiring as candidate; owner checks stock base DTB for port, PERST/wake and rails before enabling. No `mpss`/`qcom_q6v5_mss` node for SDX55. |
-| 2 | Kernel DTS | Enable confirmed PCIe controller/PHY, supplies, pinctrl and IOMMU mapping only after step 1. No modem child node: `pci_generic` matches its PCI ID. |
+| 2 | Kernel DTS | Enable confirmed PCIe controller/PHY, supplies, pinctrl and IOMMU mapping only after step 1. The flashless endpoint/profile delta is in MODEM-M5-DELTA §2-3 [V: D/K17-K18]. |
 | 3 | Kernel config | Build in `MHI_BUS`, `MHI_BUS_PCI_GENERIC`, `WWAN`, `MHI_WWAN_CTRL`, `MHI_NET`, `QRTR`, `QRTR_MHI`; retain PCIe/QMP config. Add no q6v5 mss or host IPA solely for SDX55. |
 | 4 | Modem services | Owner-approved firmware mapping; QRTR name service; safe per-device RFS backing and service before ModemManager; prevent `tqftpserv` conflict. Never access modem/NV/persist partitions in the runbook. |
 | 5 | ModemManager | Audit Arch ModemManager/libqmi/NM build for QMI over QRTR, raw `mhi_net`, SIM unlock and SMS. LOC is covered in GNSS-M5-PLAN. |
