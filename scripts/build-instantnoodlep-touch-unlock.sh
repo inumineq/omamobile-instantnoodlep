@@ -17,7 +17,8 @@ command -v "$cc" >/dev/null 2>&1 || {
     exit 1
 }
 mkdir -p "$(dirname -- "$out")"
+target=$("$cc" -dumpmachine)
 "$cc" -std=c11 -Os -static -s -Wall -Wextra -Werror \
     "$repo/device/instantnoodlep/initramfs/cryptroot-touch-unlock.c" \
     -o "$out"
-file "$out"
+printf 'Built static %s executable for %s\n' "$out" "$target"
