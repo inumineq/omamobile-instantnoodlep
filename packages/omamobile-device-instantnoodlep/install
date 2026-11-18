@@ -9,6 +9,7 @@ destination=${1:?Usage: ./install DESTDIR}
 
 install -Dm644 device.conf "$destination/usr/share/omamobile/device.conf"
 install -Dm644 firmware.map "$destination/usr/share/omamobile/firmware.map"
+install -Dm644 device-ui.conf "$destination/usr/share/omamobile/device-ui.conf"
 install -Dm644 version "$destination/usr/share/omamobile/device-instantnoodlep/version"
 install -Dm644 LICENSE "$destination/usr/share/licenses/omamobile-device-instantnoodlep/LICENSE"
 install -Dm644 etc/omamobile-mirrorlist "$destination/etc/pacman.d/omamobile-mirrorlist"
