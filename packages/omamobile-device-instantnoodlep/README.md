@@ -32,3 +32,17 @@ descriptor and firmware map are data files; no device or firmware is needed
 to build the package. On x86, run `test/all` for Bash syntax checks,
 ShellCheck, `makepkg --printsrcinfo`, package staging checks, and the fake
 Bluetooth management tests; this does not build the ARM package.
+
+Package release 0.0.4-2 adds an [I] Chromium/mobile-app profile. Its user
+service runs after Omarchy's `omamobile-setup-user.service`, then updates
+`~/.config/chromium-flags.conf` without adding duplicate scale, UA or IME
+switches. It wraps the listed PWA and Electron launchers only when their
+desktop files exist; per-app scale defaults to `inherit`, Ozone to `auto`,
+and overlay scrollbars, touch events and pinch stay at Chromium's defaults.
+Every device-specific value remains provisional until the morning survey.
+
+Revert with
+`omamobile-instantnoodlep-mobile-profile reset`; it restores Chromium flags
+and launchers only when they have not changed since setup, then disables the
+profile for that user. `... disable` stops future application while preserving
+the current files; `... enable` re-applies the profile.

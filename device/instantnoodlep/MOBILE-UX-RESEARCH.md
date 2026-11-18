@@ -80,16 +80,30 @@ It reports Chromium auto-selects Wayland in its current packaging context;
 the scale factor is a specific workaround for a 480 px logical panel and
 500 px minimum layout width (`:350-353`).
 
+[V] Package release 0.0.4-2 installs a user service after upstream's
+`omamobile-setup-user.service`. Its profile merge replaces only the Pixel 7 Pro
+UA, keeps one scale/IME/text-input switch, and preserves unrelated user flags.
+A managed desktop launcher wrapper adds app-specific scale or Ozone flags only
+when its per-app profile sets them. `reset` restores original files if they
+have not changed since setup; `disable` prevents later login application.
+
 [I] Concrete starting profile for OnePlus test (use one setting per line;
-quoted UA is needed because the launcher splits on spaces):
+the quoted UA is needed because the launcher splits on spaces):
 
 ```text
 --no-first-run
 --enable-wayland-ime
 --wayland-text-input-version=3
 --force-device-scale-factor=0.83
-"--user-agent=Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/<matching-major>.0.0.0 Mobile Safari/537.36"
+"--user-agent=Mozilla/5.0 (Linux; Android 13; OnePlus 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/<installed-major>.0.0.0 Mobile Safari/537.36"
 ```
+
+The package does not add `--no-first-run` a second time. It preserves
+upstream's IME/text-input flags when present and adds them only when absent;
+its candidate scale is the upstream 0.83 seed. The Android version, model
+string, factor and mobile UA remain [I] until the phone survey. Per-app scale
+defaults to `inherit`; overlay scrollbars, touch events, pinch and Ozone
+Wayland default to `auto`, leaving Chromium's build defaults in control.
 
 [I] First verify native Wayland through `WAYLAND_DEBUG`/window protocol or
 `hyprctl clients`; add `--ozone-platform=wayland` only if it otherwise uses
@@ -106,6 +120,34 @@ selection handles, password manager prompts and PWA display modes.
 zoom controls, then the app's supported scale setting. Chromium flags do not
 automatically control Electron. Avoid blanket Electron flags until each
 runtime is identified.
+
+## Morning phone survey matrix
+
+All rows are [I] until the owner runs them on the unlocked phone. Start with
+the package profile as staged, record its package version and Chromium/app
+versions, and change one candidate at a time. Use the installed desktop IDs
+from `tools/instantnoodlep-ui-survey`; keep screenshots in `/tmp/ui-survey`
+and out of git.
+
+| Surface | Site/app to launch | Check on phone | Record before changing a profile value |
+|---|---|---|---|
+| Chromium browser | `chromium` | Right/left viewport clipping; responsive mobile layout; UA-dependent content; text field opens Squeekboard; keyboard resize and selection handles; touch scroll; pinch; scrollbar hit area; Wayland vs XWayland. | Panel mode and Hyprland scale, Chromium major, observed UA, native Wayland selection, and which control fails at the current 0.83 factor. |
+| PWA/web app | HEY | Standalone window and login page fit; text entry and keyboard viewport; touch scroll/pinch; primary navigation is reachable. | Desktop ID/Exec, clipped edge and smallest usable controls. Keep account/content screenshots private. |
+| PWA/web app | WhatsApp | Conversation list and composer fit; text entry, keyboard resize, touch scroll/pinch; navigation remains visible with keyboard open. | Desktop ID/Exec and per-app scale only for a distinct layout problem. Do not send a message. |
+| PWA/web app | YouTube | Home/search/player controls fit; touch scroll and pinch; search field/keyboard; landscape behavior if used. | Desktop ID/Exec, viewport dimensions and controls that require a scale exception. Do not play or upload private content. |
+| PWA/web app | X | Timeline/navigation fit; composer opens with keyboard; touch scroll/pinch; buttons are reachable without accidental edge-back. | Desktop ID/Exec and measured scale/zoom issue. Do not post or interact with private messages. |
+| PWA/web app | Basecamp | Project list and task/detail views fit; forms and keyboard; scroll/pinch; narrow controls are not clipped. | Desktop ID/Exec and smallest usable per-app scale. Do not create or edit project content. |
+| Electron | Obsidian | Note list/editor and toolbar fit; touch scroll/selection; text input and keyboard; record native Wayland or XWayland. | Desktop ID/Exec, Electron version, current app zoom and clipping; only then choose scale or Ozone override. Do not edit vault content. |
+| Electron | Discord | Server/channel layout fits; text composer and keyboard; touch targets; record native Wayland or XWayland. | Desktop ID/Exec, Electron version, current zoom and overflow. Do not send messages or join voice. |
+| Electron | LocalSend | Main window and receive/send controls fit; touch targets and dialogs; record native Wayland or XWayland. | Desktop ID/Exec, Electron version and any scale exception. Inspect UI only; do not start a transfer. |
+
+At each app, first test the inherited global profile. Use the site's or app's
+own zoom control to separate zoom from device scale; only then set a per-app
+`scale_factor` in `chromium/apps.conf` if a persistent exception is needed.
+Keep `ozone_platform=auto` unless the runtime check shows XWayland and that
+app accepts `--ozone-platform=wayland`. Test overlay scrollbars, pinch and
+touch-event flags separately; do not enable global touch emulation. If a test
+would expose private account data, record the result without copying the screen.
 
 ## 1Password recommendation
 
@@ -168,7 +210,7 @@ app sweep cannot exercise gestures, lock UI, OSK, OSD or quick settings.
 
 - [V] Upstream repository: <https://github.com/derekross/omarchy-mobile>
 - [V] Upstream setup script (Chromium, monitor/GDK scale, Foot):
-  <https://github.com/derekross/omarchy-mobile/blob/main/packages/omamobile-shell/bin/omamobile-setup-user>
+  <https://github.com/derekross/omarchy-mobile/blob/c4623572be1c141d602cf99a83ae0bf9e3eea09c/packages/omamobile-shell/bin/omamobile-setup-user>
 - [V] Upstream shell README (file dialogs and window behavior):
   <https://github.com/derekross/omarchy-mobile/blob/main/packages/omamobile-shell/README.md>
 - [V] Hyprland layer rules documentation: <https://wiki.hypr.land/Configuring/Workspace-and-Monitor/>
