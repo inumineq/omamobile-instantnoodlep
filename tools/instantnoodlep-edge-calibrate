@@ -32,7 +32,7 @@ declare -a candidates=()
 declare -A details=()
 for event in /dev/input/event*; do
   [[ -c $event ]] || continue
-  info=$(timeout 2 evtest --info "$event" 2>&1 || true)
+  info=$(timeout 2 evtest "$event" 2>&1 || true)
   if [[ $info == *ABS_MT_POSITION_X* && $info == *ABS_MT_POSITION_Y* ]]; then
     candidates+=("$event")
     details[$event]=$info
@@ -47,7 +47,7 @@ echo
 echo "Touchscreen ABS_MT_POSITION_X/Y range information:"
 for event in "${candidates[@]}"; do
   echo "--- $event ---"
-  # evtest --info reports each axis with its value, minimum and maximum.
+  # evtest prints each axis with its value, minimum and maximum.
   awk '/ABS_MT_POSITION_[XY]/ { show=1; n=0 } show { print; n++ } n >= 6 { show=0 }' <<<"${details[$event]}"
 done
 
@@ -62,7 +62,8 @@ echo
 echo "The selected event device will be read without --grab; normal touch delivery continues."
 echo "Tap only the LEFT physical edge repeatedly while each prompt is active."
 echo "No touch coordinates are saved; only min/max values are summarized."
-python3 - "$selected" <<'PY'
+# The program comes on fd 3 so that stdin stays free for the Enter prompts.
+python3 /dev/fd/3 "$selected" 3<<'PY'
 import re
 import subprocess
 import sys
