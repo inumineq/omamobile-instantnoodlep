@@ -1,0 +1,258 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Create and maintain a tiny signed pacman repo for instantnoodlep overrides.
+set -euo pipefail
+umask 077
+
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+manifest=$script_dir/omamobile-localrepo-packages.tsv
+repo_root=${OMAMOBILE_LOCALREPO_ROOT:-${XDG_DATA_HOME:-$HOME/.local/share}/omamobile-localrepo}
+repo_arch=${OMAMOBILE_LOCALREPO_ARCH:-aarch64}
+repo_dir=$repo_root/$repo_arch
+db=$repo_dir/omamobile-local.db.tar.zst
+gpg_home=${OMAMOBILE_LOCALREPO_GNUPGHOME:-${XDG_DATA_HOME:-$HOME/.local/share}/omamobile-localrepo/gnupg}
+key=${OMAMOBILE_LOCALREPO_KEY:-}
+gpg_bin=${OMAMOBILE_LOCALREPO_GPG:-gpg}
+repo_add_bin=${OMAMOBILE_LOCALREPO_REPO_ADD:-repo-add}
+repo_remove_bin=${OMAMOBILE_LOCALREPO_REPO_REMOVE:-repo-remove}
+bsdtar_bin=${OMAMOBILE_LOCALREPO_BSDTAR:-bsdtar}
+
+usage() {
+  cat <<'USAGE'
+Usage: tools/omamobile-localrepo COMMAND [ARGS]
+
+Commands:
+  init                           Create the configured aarch64 repo directory.
+  keygen                         Interactively create a dedicated GPG key.
+  export-key FINGERPRINT [FILE]  Export only the public key outside git.
+  add PACKAGE...                 Sign and add allowlisted package archives.
+  remove PKGNAME...              Remove allowlisted package entries and files.
+  verify                         Verify the signed database and all listed packages.
+  pacman-conf                    Print the phone's local repository section.
+  test                           Run the disposable x86 signing/repo-add test.
+
+Configuration:
+  OMAMOBILE_LOCALREPO_ROOT       Workstation repo root (default: XDG data dir).
+  OMAMOBILE_LOCALREPO_GNUPGHOME  Dedicated signing-key home (default: XDG data dir).
+  OMAMOBILE_LOCALREPO_KEY        Signing key fingerprint for add/remove.
+USAGE
+}
+
+fail() { printf 'omamobile-localrepo: %s\n' "$*" >&2; exit 1; }
+log() { printf 'omamobile-localrepo: %s\n' "$*" >&2; }
+need() { command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"; }
+
+repo_checkout() {
+  git -C "$script_dir/.." rev-parse --show-toplevel 2>/dev/null || true
+}
+
+assert_outside_checkout() {
+  local candidate=$1 checkout
+  checkout=$(repo_checkout)
+  [[ -z $checkout ]] && return 0
+  checkout=$(cd -- "$checkout" && pwd -P)
+  mkdir -p -- "$candidate"
+  candidate=$(cd -- "$candidate" && pwd -P)
+  [[ $candidate != "$checkout" && $candidate != "$checkout"/* ]] ||
+    fail "generated repository/key material must stay outside the git checkout: $candidate"
+}
+
+run_gpg() { "$gpg_bin" --homedir "$gpg_home" "$@"; }
+run_repo_add() { GNUPGHOME="$gpg_home" GPGKEY="$key" "$repo_add_bin" "$@"; }
+run_repo_remove() { GNUPGHOME="$gpg_home" GPGKEY="$key" "$repo_remove_bin" "$@"; }
+
+catalog_row() {
+  awk -F'|' -v wanted="$1" '$1 == wanted { print $2 "|" $3 "|" $4; found=1 } END { if (!found) exit 1 }' "$manifest"
+}
+
+metadata() {
+  local pkg=$1 info
+  info=$("$bsdtar_bin" -xOf "$pkg" .PKGINFO) || fail "cannot read .PKGINFO from $pkg"
+  META_NAME=$(awk -F' = ' '$1 == "pkgname" { print $2; exit }' <<<"$info")
+  META_VERSION=$(awk -F' = ' '$1 == "pkgver" { print $2; exit }' <<<"$info")
+  META_ARCH=$(awk -F' = ' '$1 == "arch" { print $2; exit }' <<<"$info")
+  [[ -n $META_NAME && -n $META_VERSION && -n $META_ARCH ]] || fail "incomplete .PKGINFO in $pkg"
+}
+
+validate_package() {
+  local pkg=$1 row expected_arch expected_version
+  [[ -f $pkg ]] || fail "package archive not found: $pkg"
+  [[ $pkg =~ \.pkg\.tar(\.[[:alnum:]]+)?$ ]] || fail "not a pacman package archive: $pkg"
+  metadata "$pkg"
+  row=$(catalog_row "$META_NAME") || fail "package is not allowlisted: $META_NAME"
+  IFS='|' read -r expected_arch expected_version _ <<<"$row"
+  [[ $META_ARCH == "$expected_arch" ]] || fail "$META_NAME has arch=$META_ARCH; expected $expected_arch"
+  [[ $META_VERSION == "$expected_version" ]] ||
+    fail "$META_NAME has version $META_VERSION; update the version contract before adding a new build (expected $expected_version)"
+}
+
+package_entry_names() {
+  "$bsdtar_bin" -tf "$1" | awk '/\/desc$/ { sub(/\/desc$/, ""); print }'
+}
+
+remove_signature_sidecars() {
+  local name=$1 signature
+  shopt -s nullglob
+  for signature in "$repo_dir/$name"-*.pkg.tar*.sig; do
+    rm -f -- "$signature"
+  done
+}
+
+db_has_package() {
+  local wanted=$1 expected_version=${2:-} entry info found version
+  [[ -f $db ]] || return 1
+  while IFS= read -r entry; do
+    [[ -n $entry ]] || continue
+    info=$("$bsdtar_bin" -xOf "$db" "$entry") || continue
+    found=$(awk '/^%NAME%$/ { getline; print; exit }' <<<"$info")
+    version=$(awk '/^%VERSION%$/ { getline; print; exit }' <<<"$info")
+    [[ $found == "$wanted" ]] || continue
+    [[ -z $expected_version || $version == "$expected_version" ]] && return 0
+  done < <(package_entry_names "$db")
+  return 1
+}
+
+require_key() {
+  need "$gpg_bin"
+  [[ -n $key ]] || fail 'set OMAMOBILE_LOCALREPO_KEY to the dedicated signing key fingerprint'
+  [[ -d $gpg_home ]] || fail "GPG home does not exist: $gpg_home"
+  run_gpg --list-secret-keys --with-colons "$key" 2>/dev/null | grep -q '^fpr:' ||
+    fail "signing secret key not found in $gpg_home: $key"
+  need "$repo_add_bin"
+  need "$repo_remove_bin"
+  need "$bsdtar_bin"
+}
+
+cmd=${1:-}
+[[ -n $cmd ]] || { usage; exit 2; }
+shift
+case $cmd in
+  init)
+    [[ $# == 0 ]] || { usage >&2; exit 2; }
+    assert_outside_checkout "$repo_root"
+    mkdir -p -- "$repo_dir"
+    chmod 755 "$repo_root" "$repo_dir"
+    log "initialized $repo_dir"
+    ;;
+  keygen)
+    [[ $# == 0 ]] || { usage >&2; exit 2; }
+    need "$gpg_bin"
+    mkdir -p -- "$gpg_home"
+    chmod 700 "$gpg_home"
+    assert_outside_checkout "$gpg_home"
+    if run_gpg --list-secret-keys --with-colons 2>/dev/null | grep -q '^fpr:'; then
+      fail "GPG home already contains secret keys; use a fresh dedicated home: $gpg_home"
+    fi
+    printf '%s\n' 'Generate a dedicated signing key; choose a passphrase and a sign-only key.'
+    run_gpg --full-generate-key
+    fingerprint=$(run_gpg --list-secret-keys --with-colons | awk -F: '$1 == "fpr" { print $10; exit }')
+    [[ -n $fingerprint ]] || fail 'key generation completed but no fingerprint was found'
+    printf 'Signing key fingerprint: %s\n' "$fingerprint"
+    printf 'Export its public part with: tools/omamobile-localrepo export-key %s /tmp/omamobile-localrepo.pub\n' "$fingerprint"
+    ;;
+  export-key)
+    [[ $# -ge 1 && $# -le 2 ]] || { usage >&2; exit 2; }
+    need "$gpg_bin"
+    fingerprint=$1
+    output=${2:-${XDG_DATA_HOME:-$HOME/.local/share}/omamobile-localrepo/omamobile-localrepo.pub}
+    parent=$(dirname -- "$output")
+    mkdir -p -- "$parent"
+    assert_outside_checkout "$parent"
+    run_gpg --armor --export "$fingerprint" > "$output"
+    [[ -s $output ]] || fail "no public key exported for $fingerprint"
+    chmod 644 "$output"
+    log "exported public key to $output (no private key was exported)"
+    ;;
+  add)
+    (($# > 0)) || { usage >&2; exit 2; }
+    need "$gpg_bin"
+    require_key
+    assert_outside_checkout "$repo_root"
+    mkdir -p -- "$repo_dir"
+    chmod 755 "$repo_root" "$repo_dir"
+    if [[ -e $db ]]; then
+      [[ -s $db.sig ]] || fail "existing repo database is unsigned: $db"
+      run_gpg --verify "$db.sig" "$db" >/dev/null || fail 'existing repository database signature is invalid'
+    fi
+    seen_names=()
+    for pkg in "$@"; do
+      validate_package "$pkg"
+      for seen_name in "${seen_names[@]}"; do
+        [[ $seen_name != "$META_NAME" ]] || fail "duplicate input package name: $META_NAME"
+      done
+      seen_names+=("$META_NAME")
+      src=$(cd -- "$(dirname -- "$pkg")" && pwd -P)/$(basename -- "$pkg")
+      dest=$repo_dir/$(basename -- "$pkg")
+      if [[ -e $dest ]]; then
+        cmp -s -- "$src" "$dest" || fail "different archive already uses $dest; bump the package version and clean the repo explicitly"
+      fi
+      if db_has_package "$META_NAME" "$META_VERSION" &&
+          [[ -f $dest && -s $dest.sig ]] && cmp -s -- "$src" "$dest" &&
+          run_gpg --verify "$dest.sig" "$dest" >/dev/null 2>&1; then
+        log "$META_NAME $META_VERSION already present; unchanged"
+        continue
+      fi
+      if db_has_package "$META_NAME"; then
+        run_repo_remove --remove --sign --key "$key" "$db" "$META_NAME"
+        remove_signature_sidecars "$META_NAME"
+      fi
+      if [[ ! -e $dest ]]; then cp -- "$src" "$dest"; chmod 644 "$dest"; fi
+      run_gpg --yes --detach-sign --local-user "$key" --output "$dest.sig" "$dest"
+      run_repo_add --sign --include-sigs --key "$key" "$db" "$dest"
+      log "added $META_NAME $META_VERSION ($META_ARCH)"
+    done
+    ;;
+  remove)
+    (($# > 0)) || { usage >&2; exit 2; }
+    require_key
+    assert_outside_checkout "$repo_root"
+    [[ -e $db && -s $db.sig ]] || fail "signed repository database not found: $db"
+    run_gpg --verify "$db.sig" "$db" >/dev/null || fail 'repository database signature is invalid'
+    for name in "$@"; do
+      catalog_row "$name" >/dev/null || fail "package is not allowlisted: $name"
+      db_has_package "$name" || fail "$name is not present in the repository database"
+    done
+    run_repo_remove --remove --sign --key "$key" "$db" "$@"
+    for name in "$@"; do remove_signature_sidecars "$name"; done
+    log "removed $* from the repository"
+    ;;
+  verify)
+    require_key
+    [[ -e $db && -s $db.sig ]] || fail "signed repository database not found: $db"
+    run_gpg --verify "$db.sig" "$db"
+    entries=0
+    while IFS= read -r entry; do
+      [[ -n $entry ]] || continue
+      info=$("$bsdtar_bin" -xOf "$db" "$entry") || fail "cannot read repository entry $entry"
+      name=$(awk '/^%NAME%$/ { getline; print; exit }' <<<"$info")
+      filename=$(awk '/^%FILENAME%$/ { getline; print; exit }' <<<"$info")
+      embedded_signature=$(awk '/^%PGPSIG%$/ { getline; print; exit }' <<<"$info")
+      [[ -n $name && -n $filename && $filename == "$(basename -- "$filename")" ]] || fail "invalid repository entry in $entry"
+      [[ -n $embedded_signature ]] || fail "repository entry has no embedded package signature: $name"
+      catalog_row "$name" >/dev/null || fail "unallowlisted package in repository: $name"
+      pkg=$repo_dir/$filename
+      [[ -f $pkg && -s $pkg.sig ]] || fail "package or signature missing: $filename"
+      run_gpg --verify "$pkg.sig" "$pkg" || fail "invalid package signature: $filename"
+      validate_package "$pkg"
+      [[ $META_NAME == "$name" ]] || fail "database name does not match archive: $filename"
+      entries=$((entries + 1))
+    done < <(package_entry_names "$db")
+    ((entries > 0)) || fail 'repository database contains no packages'
+    log "verified signed database and $entries allowlisted package archives"
+    ;;
+  pacman-conf)
+    [[ $# == 0 ]] || { usage >&2; exit 2; }
+    cat "$script_dir/../device/instantnoodlep/pacman/omamobile-local.conf"
+    ;;
+  test)
+    [[ $# == 0 ]] || { usage >&2; exit 2; }
+    exec "$script_dir/../tests/localrepo.sh"
+    ;;
+  -h|--help|help)
+    usage
+    ;;
+  *)
+    usage >&2
+    fail "unknown command: $cmd"
+    ;;
+esac

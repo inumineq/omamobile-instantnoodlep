@@ -15,6 +15,7 @@ sed -i 's/^#\?MAKEFLAGS=.*/MAKEFLAGS="-j'"$(nproc)"'"/' /etc/makepkg.conf
 cd /work/mesa
 chown -R builder: /work /srcdest /out
 deps=$(su builder -c "makepkg --printsrcinfo" | awk -F' = ' '/^\t(make)?depends = /{print $2}' | sort -u)
+# shellcheck disable=SC2086 # Split .SRCINFO dependencies into separate arguments.
 pacman -S --noconfirm --needed $deps >/dev/null
 pacman -Q mesa llvm clang meson glslang libdrm spirv-tools 2>/dev/null || true
 su builder -c "gpg -q --batch --import /work/pgp.asc"
