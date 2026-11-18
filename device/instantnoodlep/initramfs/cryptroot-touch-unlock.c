@@ -16,6 +16,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include "cryptroot-touch-layout.h"
 
 #define MAX_SECRET 256
 #define COLOR_BG 0x101820u
@@ -109,7 +110,6 @@ static void key(int x, int y, int w, int h, const char *label, uint32_t color) {
 }
 
 static int draw(void) {
-    const char *rows[] = {"1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm"};
     rect(0, 0, width, height, COLOR_BG);
     text(width / 24, height / 24, "UNLOCK ENCRYPTED ROOT", width / 150 > 0 ? width / 150 : 1);
     int box_y = height / 8, box_h = height / 9;
@@ -117,11 +117,11 @@ static int draw(void) {
     for (size_t i = 0; i < secret_len && i < 30; i++)
         rect(width / 16 + (int)i * width / 36, box_y + box_h / 2,
              width / 80, width / 80, COLOR_INK);
-    int top = height * 3 / 8, kh = height / 10;
-    for (int r = 0; r < 4; r++) {
-        int n = (int)strlen(rows[r]), cell = width / n;
+    int top = TOUCH_LAYOUT_TOP(height), kh = TOUCH_LAYOUT_ROW_HEIGHT(height);
+    for (int r = 0; r < TOUCH_LAYOUT_ROW_COUNT; r++) {
+        int n = (int)strlen(touch_layout_rows[r]), cell = width / n;
         for (int c = 0; c < n; c++) {
-            char label[2] = {rows[r][c], 0};
+            char label[2] = {touch_layout_rows[r][c], 0};
             if (shifted) label[0] = (char)(label[0] - 'a' + 'A');
             key(c * cell, top + r * kh, cell, kh, label, COLOR_KEY);
         }
@@ -133,7 +133,7 @@ static int draw(void) {
     key(xs[1], y, widths[1], kh, "BKSP", COLOR_KEY);
     key(xs[2], y, widths[2], kh, "SPACE", COLOR_KEY);
     key(xs[3], y, widths[3], kh, "ENTER", COLOR_ENTER);
-    return msync(fbfd, (size_t)fix.smem_len, MS_SYNC);
+    return msync(pixels, (size_t)fix.smem_len, MS_SYNC);
 }
 
 static int find_touch(int *fd, struct input_absinfo *ax, struct input_absinfo *ay) {
@@ -202,28 +202,26 @@ static int append(char c) {
 }
 
 static int hit(int x, int y, const char *device, const char *mapper) {
-    const char *rows[] = {"1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm"};
-    int top = height * 3 / 8, kh = height / 10;
-    for (int r = 0; r < 4; r++) {
-        if (y < top + r * kh || y >= top + (r + 1) * kh) continue;
-        int n = (int)strlen(rows[r]), c = x * n / width;
-        if (c >= n) c = n - 1;
-        char ch = rows[r][c];
-        if (shifted && ch >= 'a' && ch <= 'z') ch = (char)(ch - 'a' + 'A');
-        append(ch); shifted = 0; return 0;
-    }
-    if (y >= top + 4 * kh && y < top + 5 * kh) {
-        if (x < width / 5) shifted = !shifted;
-        else if (x < width * 2 / 5) { if (secret_len) secret[--secret_len] = 0; }
-        else if (x < width * 3 / 5) append(' ');
-        else {
-            int status = unlock_disk(device, mapper);
-            if (status == 0) { puts("TOUCH_UNLOCK_PASS"); return 1; }
-            puts("TOUCH_UNLOCK_RETRY");
-        }
+    struct touch_key key = touch_layout_hit(x, y, width, height, shifted);
+    switch (key.action) {
+    case TOUCH_KEY_CHARACTER:
+        append(key.character); shifted = 0; return 0;
+    case TOUCH_KEY_SHIFT:
+        shifted = !shifted; return 0;
+    case TOUCH_KEY_BACKSPACE:
+        if (secret_len) secret[--secret_len] = 0;
+        return 0;
+    case TOUCH_KEY_SPACE:
+        append(' '); return 0;
+    case TOUCH_KEY_ENTER: {
+        int status = unlock_disk(device, mapper);
+        if (status == 0) { puts("TOUCH_UNLOCK_PASS"); return 1; }
+        puts("TOUCH_UNLOCK_RETRY");
         return 0;
     }
-    return 0;
+    default:
+        return 0;
+    }
 }
 
 static int scale_abs(int value, struct input_absinfo *range, int extent) {
