@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Unprivileged source/packaging checks for the LUKS2 initramfs prototype."""
+
+import importlib.machinery
+import importlib.util
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+
+ROOT = Path(__file__).resolve().parents[1]
+BUILDER = ROOT / "tools/build-instantnoodlep-probe"
+PROVISION = ROOT / "scripts/provision-initramfs-dropbear-host-key.sh"
+UNLOCK = ROOT / "device/instantnoodlep/initramfs/cryptroot-unlock"
+
+
+def require(value, message):
+    if not value:
+        raise RuntimeError(message)
+
+
+def load_builder():
+    loader = importlib.machinery.SourceFileLoader("instantnoodlep_probe", str(BUILDER))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def test_config_and_scripts():
+    config = (ROOT / "device/instantnoodlep/kernel-slim.config").read_text()
+    for symbol in ("CONFIG_BLK_DEV_DM=y", "CONFIG_DM_CRYPT=y",
+                   "CONFIG_CRYPTO_AES_ARM64_CE_BLK=y",
+                   "CONFIG_CRYPTO_SHA2_ARM64_CE=y", "CONFIG_CRYPTO_XTS=y"):
+        require(symbol in config, f"kernel fragment lacks {symbol}")
+    require("0x10000..0x40000" in config,
+            "kernel fragment lacks the stated image_size estimate")
+    for script in (PROVISION, UNLOCK, ROOT / "scripts/prepare-initramfs-root.sh"):
+        result = subprocess.run(["sh", "-n", str(script)], capture_output=True)
+        require(result.returncode == 0, f"shell syntax failed for {script}: {result.stderr!r}")
+
+
+def test_init_patch():
+    probe = load_builder()
+    shared = '''#!/bin/sh
+hostname omamobile
+dropbear -R -E -p 22 2>/dev/null && say "ssh: root@172.16.42.1"
+boot_arch() {
+  [ -n "$dev" ] || { say "arch: no userdata partition"; return 1; }
+}
+'''
+    patched = probe.patch_init(shared, luks2=True, persistent_host_key=True)
+    require("dropbear -E -p 22 -r /etc/dropbear/dropbear_ed25519_host_key" in patched,
+            "init does not use the persistent host key")
+    require("dropbear -R" not in patched, "init still asks Dropbear to generate ephemeral keys")
+    require("cryptsetup isLuks --type luks2 \"$dev\"" in patched,
+            "init lacks the LUKS2 fail-closed gate")
+    require("cryptroot-unlock over USB SSH" in patched,
+            "init does not wait for the USB SSH unlock command")
+    require("device: $rawdev" in patched,
+            "init does not verify the opened mapper source")
+
+
+def test_cli_and_key_import(temp):
+    result = subprocess.run([
+        str(BUILDER), "--kernel", "missing", "--dtb", "missing",
+        "--ssh-key", "missing", "--mkbootimg", "missing",
+        "--omarchy-mobile", "missing", "--initramfs-root", "missing",
+        "--stock-overlay", "missing", "--boot", "2", "--root", "none",
+        "--luks2", "--out", str(temp / "out.img"),
+    ], text=True, capture_output=True)
+    require(result.returncode != 0 and "--luks2 needs --root userdata" in result.stderr,
+            "builder did not require userdata root for --luks2")
+
+
+def test_phone_key_helper():
+    unshare = shutil.which("unshare")
+    if not unshare:
+        print("SKIP - phone key helper test needs unshare -Ur")
+        return
+    with tempfile.TemporaryDirectory(prefix="omamobile-key-test-") as directory:
+        temp = Path(directory)
+        fake_bin = temp / "bin"
+        fake_bin.mkdir()
+        fake = fake_bin / "ssh-keygen"
+        fake.write_text('''#!/bin/sh
+if [ "$1" = -q ]; then
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = -f ]; then
+      shift
+      printf 'private-test-key\\n' > "$1"
+      printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFuRNO9xL3pRgE3KQbjA9bS8v2rqTl3BE5hM2R9YjVoe test\\n' > "$1.pub"
+      exit 0
+    fi
+    shift
+  done
+fi
+if [ "$1" = -y ]; then
+  echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFuRNO9xL3pRgE3KQbjA9bS8v2rqTl3BE5hM2R9YjVoe'
+  exit 0
+fi
+exit 1
+''')
+        fake.chmod(0o755)
+        key_dir = temp / "phone-rootfs/etc/dropbear"
+        env = dict(os.environ, PATH=f"{fake_bin}:{os.environ['PATH']}")
+        first = subprocess.run([unshare, "-Ur", str(PROVISION), str(key_dir)],
+                               env=env, text=True, capture_output=True)
+        require(first.returncode == 0, f"key helper failed: {first.stderr}")
+        private = key_dir / "dropbear_ed25519_host_key"
+        public = key_dir / "dropbear_ed25519_host_key.pub"
+        require(private.read_text() == "private-test-key\n", "private key contents changed")
+        require(private.stat().st_mode & 0o777 == 0o600, "private key mode is not 0600")
+        require(public.read_text().startswith("ssh-ed25519 "), "public key was not derived")
+        prepared = temp / "initramfs-root"
+        result = subprocess.run([
+            str(ROOT / "scripts/prepare-initramfs-root.sh"),
+            "--root", str(prepared), "--dropbear-host-key", str(private), "--dry-run",
+        ], text=True, capture_output=True)
+        require(result.returncode == 0 and "Dropbear host key:" in result.stdout,
+                f"initramfs key import dry run failed: {result.stderr}")
+        before = private.read_bytes()
+        second = subprocess.run([unshare, "-Ur", str(PROVISION), str(key_dir)],
+                                env=env, text=True, capture_output=True)
+        require(second.returncode == 0, f"idempotent key helper failed: {second.stderr}")
+        require(private.read_bytes() == before, "existing host key was replaced")
+
+
+def main():
+    try:
+        test_config_and_scripts()
+        test_init_patch()
+        with tempfile.TemporaryDirectory(prefix="omamobile-encryption-test-") as directory:
+            test_cli_and_key_import(Path(directory))
+        test_phone_key_helper()
+        print("PASS - LUKS2 config, init patch, and persistent host-key provisioning checks")
+        return 0
+    except Exception as error:
+        print(f"FAIL - {error}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
