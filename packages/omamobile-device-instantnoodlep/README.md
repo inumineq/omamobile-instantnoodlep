@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # OnePlus 8 Pro device package
 
-Version 0.0.4 stages the instantnoodlep descriptor, a names-only firmware
+Version 0.0.5 stages the instantnoodlep descriptor, a names-only firmware
 map, session environment settings, the Bluetooth address unit, and the
 USB0 network policy and firstboot mask already owned by the installed 0.0.3
 package. It also masks `systemd-vconsole-setup.service`: it hung two boots on
@@ -46,3 +46,9 @@ Revert with
 and launchers only when they have not changed since setup, then disables the
 profile for that user. `... disable` stops future application while preserving
 the current files; `... enable` re-applies the profile.
+
+Release 0.0.5-1 also adds a per-user Foot and desktop scaling profile and
+Hyprland dialog rules. Foot changes only known upstream defaults; app desktop
+files are copied to `~/.local/share/applications` only if no user entry
+already exists. All candidate values and app IDs are [I] pending the morning
+survey. The setup never writes toolkit scales to global `environment.d`.
