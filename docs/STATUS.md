@@ -32,7 +32,7 @@ and is waiting for the next daily kernel.
 
 | Block | Status | Where it stands | Plan / evidence |
 | --- | --- | --- | --- |
-| Boot | works | Slot B (`boot_b`), Arch root on `userdata`, stock Android untouched on slot A. Daily K3 kernel boots to the session in about 9 s. A day of RAM tests once deleted the daily kernel's modules; they are now pinned | [DAILY-K3-PLAN](../device/instantnoodlep/DAILY-K3-PLAN.md), [STORAGE-M2-PLAN](../device/instantnoodlep/STORAGE-M2-PLAN.md) |
+| Boot | works | Slot B (`boot_b`), Arch root on `userdata`, stock Android untouched on slot A. Daily kernel `daily2` (flashed 2026-11-19) reaches SSH in about 13 s. A day of RAM tests once deleted the daily kernel's modules; they are now pinned | [DAILY-K3-PLAN](../device/instantnoodlep/DAILY-K3-PLAN.md), [STORAGE-M2-PLAN](../device/instantnoodlep/STORAGE-M2-PLAN.md) |
 | Storage | works | UFS, root on `userdata`; `super` and every `_a` partition are never written | [STORAGE-M2-PLAN](../device/instantnoodlep/STORAGE-M2-PLAN.md) |
 | Display | works (120 Hz) | DSI-1 1440x3168@120 | [DISPLAY-M3-PLAN](../device/instantnoodlep/DISPLAY-M3-PLAN.md) |
 | GPU | works | Adreno 650, msm/freedreno, Hyprland on the GPU | [GPU-USERSPACE-PLAN](../device/instantnoodlep/GPU-USERSPACE-PLAN.md) |
@@ -42,8 +42,8 @@ and is waiting for the next daily kernel.
 | Wi-Fi | works | QCA6390 over PCIe (ath11k) | [WIFI-BT-M5-PLAN](../device/instantnoodlep/WIFI-BT-M5-PLAN.md) |
 | Bluetooth | works | QCA6390 UART; public address set by the device package | [WIFI-BT-M5-PLAN](../device/instantnoodlep/WIFI-BT-M5-PLAN.md) |
 | Battery | works | Fuel gauge: level, voltage, current, temperature | [POWER-M5-PLAN](../device/instantnoodlep/POWER-M5-PLAN.md) |
-| Charging | testing | PM8150B charger charged from the laptop for 15 min in RAM with no thermal stop, unplug/replug fine (5 V only). The daily kernel has no charger yet; candidate `daily2` is built | [POWER-M5-PLAN](../device/instantnoodlep/POWER-M5-PLAN.md), [DAILY-K3-PLAN](../device/instantnoodlep/DAILY-K3-PLAN.md) |
-| Haptics | testing | AW8695 buzz felt by the owner in RAM; in candidate `daily2` | [MISC-HW-PLAN](../device/instantnoodlep/MISC-HW-PLAN.md) |
+| Charging | works | PM8150B charger in the daily kernel (`daily2`, flashed 2026-11-19), loaded at boot by the device package. 5 V only; from a 500 mA laptop port it charges at about +150 mA once the session settles | [POWER-M5-PLAN](../device/instantnoodlep/POWER-M5-PLAN.md), [DAILY-K3-PLAN](../device/instantnoodlep/DAILY-K3-PLAN.md) |
+| Haptics | works | AW8695 force-feedback rumble, in the daily kernel since 2026-11-19 | [MISC-HW-PLAN](../device/instantnoodlep/MISC-HW-PLAN.md) |
 | Torch | no | Not started | [MISC-HW-PLAN](../device/instantnoodlep/MISC-HW-PLAN.md) |
 | GNSS | built | Over the SDX55 modem (QRTR LOC); waits on the modem | [GNSS-M5-PLAN](../device/instantnoodlep/GNSS-M5-PLAN.md) |
 | AoC | - | Pixel-only block | |
@@ -68,9 +68,8 @@ and is waiting for the next daily kernel.
 
 ## Next
 
-1. A daily kernel with charging and haptics (`daily2`), RAM test, then flash to `boot_b` after the owner's go.
-2. USB-C: gadget recovery after DisplayPort and keyboard/mouse through a dock.
-3. Idle power, then the first s2idle test.
-4. Audio phase 1 (ADSP on), then the camera CCI hang.
+1. USB-C: gadget recovery after DisplayPort and keyboard/mouse through a dock.
+2. Idle power: the interconnect `sync_state()` waits on `1dfa000.crypto` (no QCE driver), so the SoC never sleeps. Fix that, then the first s2idle test.
+3. Audio phase 1 (ADSP on), then the camera CCI hang.
 
 Day-to-day detail: [docs/agents/state.md](agents/state.md) and [NOTES](../device/instantnoodlep/NOTES.md).
