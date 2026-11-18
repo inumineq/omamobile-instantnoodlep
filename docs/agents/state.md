@@ -52,7 +52,7 @@ See `docs/agents/active/`. Vibe workers on omabook: power P2b, kona, misc-hw, au
 
 ## Next
 
-0. Build new feature kernels on slim K3 with clang 23 (P2b charger, camera, audio, sensors, misc, modem). Daily K3 is on `boot_b`: implement the BT address unit (DAILY-K3-PLAN §5.3); fold further features into daily as they pass RAM tests.
+0. Feature kernels on slim K3 are built offline as 5 RAM candidates (P2 charger, misc, audio, sensors, kona; branches `instantnoodlep-k3-slim-p2`/`-feat` in inumineq/linux-omarchy-mobile, images in `~/android/build/k3-slim-p2-ram`/`k3-slim-feat-ram`, runbook `docs/runbooks/SLIM-FEAT-RUNBOOK.md`) [V: NOTES 2026-11-18 evening]. Next: coordinator runs Part R per candidate; camera and modem candidates still need slimming under the image_size ceiling. Daily K3 is on `boot_b`: implement the BT address unit (DAILY-K3-PLAN §5.3); fold further features into daily as they pass RAM tests.
 1. Owner: upstream proposal for freedreno in the omamobile Mesa (PR of
    `inumineq/gpu-mesa-freedreno`; draft in `~/claude/instantnoodlep/`).
 2. Power: battery gauge and charger (POWER-M5-PLAN), the daily-use blocker.
