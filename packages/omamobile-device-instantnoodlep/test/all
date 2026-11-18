@@ -1,0 +1,62 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Host-side package self-checks; no ARM package build or phone access.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+
+scripts=(
+  PKGBUILD
+  build
+  install
+  omamobile-device-instantnoodlep.install
+  bin/omamobile-bt-public-addr
+  bin/omamobile-instantnoodlep-mobile-profile
+  bin/omamobile-instantnoodlep-app-launcher
+  bin/omamobile-instantnoodlep-scaling
+  test/all
+  test/bt-public-addr
+  test/mobile-profile.sh
+  test/scaling.sh
+)
+bash -n "${scripts[@]}"
+shellcheck "${scripts[@]}"
+srcinfo=$(mktemp)
+trap 'rm -f "$srcinfo"' EXIT
+makepkg --printsrcinfo > "$srcinfo"
+grep -q "^pkgbase = omamobile-device-instantnoodlep$" "$srcinfo"
+./test/bt-public-addr
+./test/mobile-profile.sh
+./test/scaling.sh
+
+stage=$(mktemp -d)
+trap 'rm -rf "$stage" "$srcinfo"' EXIT
+./install "$stage"
+test -f "$stage/usr/share/omamobile/device.conf"
+test -f "$stage/usr/share/omamobile/firmware.map"
+cmp -s firmware.map ../../device/instantnoodlep/firmware.map
+test -f "$stage/usr/share/uwsm/env.d/90-omamobile-instantnoodlep-graphics"
+test -f "$stage/usr/lib/environment.d/50-omamobile-back.conf"
+test -f "$stage/usr/lib/systemd/system/omamobile-bt-public-addr@.service"
+test -f "$stage/usr/share/omamobile/instantnoodlep-mobile-profile/instantnoodlep.conf"
+test -f "$stage/usr/share/omamobile/instantnoodlep-mobile-profile/apps.conf"
+test -x "$stage/usr/bin/omamobile-instantnoodlep-mobile-profile"
+test -x "$stage/usr/bin/omamobile-instantnoodlep-app-launcher"
+test -f "$stage/usr/lib/systemd/user/omamobile-instantnoodlep-mobile-profile.service"
+test -L "$stage/usr/lib/systemd/user/graphical-session-pre.target.wants/omamobile-instantnoodlep-mobile-profile.service"
+test "$(readlink "$stage/usr/lib/systemd/user/graphical-session-pre.target.wants/omamobile-instantnoodlep-mobile-profile.service")" = ../omamobile-instantnoodlep-mobile-profile.service
+test -f "$stage/usr/share/omamobile/instantnoodlep-scaling/apps.tsv"
+test -f "$stage/usr/share/omamobile/instantnoodlep-scaling/windowrules.lua"
+test -x "$stage/usr/bin/omamobile-instantnoodlep-scaling"
+test -f "$stage/usr/lib/systemd/user/omamobile-instantnoodlep-scaling.service"
+test -L "$stage/usr/lib/systemd/user/graphical-session-pre.target.wants/omamobile-instantnoodlep-scaling.service"
+test "$(readlink "$stage/usr/lib/systemd/user/graphical-session-pre.target.wants/omamobile-instantnoodlep-scaling.service")" = ../omamobile-instantnoodlep-scaling.service
+! grep -R -n -E 'GDK_SCALE|QT_SCALE_FACTOR' "$stage/usr/lib/environment.d" "$stage/usr/share/uwsm/env.d"
+test -f "$stage/usr/lib/udev/rules.d/80-omamobile-bt-public-addr.rules"
+test -L "$stage/etc/systemd/system/systemd-firstboot.service"
+test "$(readlink "$stage/etc/systemd/system/systemd-firstboot.service")" = /dev/null
+test -L "$stage/etc/systemd/system/systemd-vconsole-setup.service"
+test "$(readlink "$stage/etc/systemd/system/systemd-vconsole-setup.service")" = /dev/null
+firmware_blob=$(find . -type f \( -name '*.mbn' -o -name '*.mdt' -o -name '*.bin' -o -name '*.tlv' \) -print -quit)
+test -z "$firmware_blob"
+
+printf '%s\n' 'all device package self-checks passed'

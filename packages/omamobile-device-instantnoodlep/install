@@ -1,0 +1,37 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Stage device policy only. This does not mark a boot slot successful, write
+# boot partitions, activate radio services or install firmware blobs.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+destination=${1:?Usage: ./install DESTDIR}
+[[ $destination == /* && $destination != / ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
+
+install -Dm644 device.conf "$destination/usr/share/omamobile/device.conf"
+install -Dm644 firmware.map "$destination/usr/share/omamobile/firmware.map"
+install -Dm644 version "$destination/usr/share/omamobile/device-instantnoodlep/version"
+install -Dm644 LICENSE "$destination/usr/share/licenses/omamobile-device-instantnoodlep/LICENSE"
+install -Dm644 etc/omamobile-mirrorlist "$destination/etc/pacman.d/omamobile-mirrorlist"
+install -Dm644 20-usb-gadget.network "$destination/usr/lib/systemd/network/20-usb-gadget.network"
+install -d "$destination/etc/systemd/system"
+ln -sfn /dev/null "$destination/etc/systemd/system/systemd-firstboot.service"
+ln -sfn /dev/null "$destination/etc/systemd/system/systemd-vconsole-setup.service"
+install -Dm644 uwsm/env.d/90-omamobile-instantnoodlep-graphics "$destination/usr/share/uwsm/env.d/90-omamobile-instantnoodlep-graphics"
+install -Dm644 environment.d/50-omamobile-back.conf "$destination/usr/lib/environment.d/50-omamobile-back.conf"
+install -Dm755 bin/omamobile-bt-public-addr "$destination/usr/bin/omamobile-bt-public-addr"
+install -Dm644 udev/80-omamobile-bt-public-addr.rules "$destination/usr/lib/udev/rules.d/80-omamobile-bt-public-addr.rules"
+install -Dm644 systemd/omamobile-bt-public-addr@.service "$destination/usr/lib/systemd/system/omamobile-bt-public-addr@.service"
+
+install -Dm644 chromium/instantnoodlep.conf "$destination/usr/share/omamobile/instantnoodlep-mobile-profile/instantnoodlep.conf"
+install -Dm644 chromium/apps.conf "$destination/usr/share/omamobile/instantnoodlep-mobile-profile/apps.conf"
+install -Dm755 bin/omamobile-instantnoodlep-mobile-profile "$destination/usr/bin/omamobile-instantnoodlep-mobile-profile"
+install -Dm755 bin/omamobile-instantnoodlep-app-launcher "$destination/usr/bin/omamobile-instantnoodlep-app-launcher"
+install -Dm644 systemd/user/omamobile-instantnoodlep-mobile-profile.service "$destination/usr/lib/systemd/user/omamobile-instantnoodlep-mobile-profile.service"
+install -d "$destination/usr/lib/systemd/user/graphical-session-pre.target.wants"
+ln -sfn ../omamobile-instantnoodlep-mobile-profile.service "$destination/usr/lib/systemd/user/graphical-session-pre.target.wants/omamobile-instantnoodlep-mobile-profile.service"
+
+install -Dm644 scaling/apps.tsv "$destination/usr/share/omamobile/instantnoodlep-scaling/apps.tsv"
+install -Dm644 hypr/windowrules.lua "$destination/usr/share/omamobile/instantnoodlep-scaling/windowrules.lua"
+install -Dm755 bin/omamobile-instantnoodlep-scaling "$destination/usr/bin/omamobile-instantnoodlep-scaling"
+install -Dm644 systemd/user/omamobile-instantnoodlep-scaling.service "$destination/usr/lib/systemd/user/omamobile-instantnoodlep-scaling.service"
+ln -sfn ../omamobile-instantnoodlep-scaling.service "$destination/usr/lib/systemd/user/graphical-session-pre.target.wants/omamobile-instantnoodlep-scaling.service"

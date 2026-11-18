@@ -1,0 +1,88 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Set the QCA6390 public address after hci_qca firmware setup.
+# Address state is private to this phone at /var/lib/omamobile/bt-public-addr.
+set -euo pipefail
+
+ADDR_FILE=${OMAMOBILE_BT_ADDR_FILE:-/var/lib/omamobile/bt-public-addr}
+WAIT=${OMAMOBILE_BT_ADDR_WAIT:-30}
+
+log() { echo "omamobile-bt-public-addr: $*"; }
+die() { echo "omamobile-bt-public-addr: $*" >&2; exit 1; }
+
+hci=${1:?Usage: omamobile-bt-public-addr hciN}
+index=${hci#hci}
+[[ $index =~ ^[0-9]+$ ]] || die "not a controller: $hci"
+[[ $WAIT =~ ^[0-9]+$ ]] || die "wait must be a whole number"
+
+btmgmt_() { btmgmt --index "$index" "$@" 2>/dev/null || true; }
+valid_unicast() {
+  [[ $1 =~ ^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$ ]] || return 1
+  (( (16#${1:0:2} & 1) == 0 ))
+}
+
+# The udev event can arrive before firmware download and management setup finish.
+state=
+i=0
+while (( i < WAIT * 2 )); do
+  info=$(btmgmt_ info)
+  if [[ $info == *"current settings:"* ]]; then
+    state=configured
+    break
+  fi
+  config=$(btmgmt_ config)
+  if [[ $config == *"missing options:"*"public-address"* ]]; then
+    state=needs-address
+    break
+  fi
+  sleep 0.5
+  i=$((i + 1))
+done
+case $state in
+  configured) log "$hci already has a public address"; exit 0 ;;
+  needs-address) ;;
+  *) die "$hci did not answer within ${WAIT}s" ;;
+esac
+
+addr=
+if [[ -s $ADDR_FILE ]]; then
+  stored=$(tr -d '[:space:]' < "$ADDR_FILE" | tr 'a-f' 'A-F')
+  if valid_unicast "$stored"; then
+    addr=$stored
+  else
+    log "$ADDR_FILE does not hold a unicast address; replacing it"
+  fi
+fi
+if [[ -z $addr ]]; then
+  install -d -m 700 "${ADDR_FILE%/*}"
+  (
+    umask 077
+    od -An -N5 -tx1 /dev/urandom |
+      awk '{ printf "02:%s:%s:%s:%s:%s\n", $1, $2, $3, $4, $5 }' |
+      tr 'a-f' 'A-F' > "$ADDR_FILE"
+  )
+  addr=$(tr -d '[:space:]' < "$ADDR_FILE")
+  valid_unicast "$addr" || die "the generated address is not a unicast address"
+  log "generated a new public address in $ADDR_FILE"
+fi
+chmod 600 "$ADDR_FILE"
+
+# An unconfigured controller cannot be powered; set its address first.
+btmgmt --index "$index" public-addr "$addr" >/dev/null 2>&1 ||
+  die "setting the public address on $hci failed"
+
+# Verify a real management reply and the address, because btmgmt can return
+# success for a stale index before the controller finishes reconfiguring.
+info=
+i=0
+while (( i < WAIT * 10 )); do
+  info=$(btmgmt_ info)
+  if [[ $info == *"current settings:"* ]]; then break; fi
+  sleep 0.1
+  i=$((i + 1))
+done
+[[ $info == *"current settings:"* ]] || die "$hci did not return after the address change"
+printf '%s\n' "$info" |
+  grep -qiE "^[[:space:]]*addr[[:space:]]+${addr}([[:space:]]|$)" ||
+  die "$hci does not report the stored address"
+log "$hci now has the stored public address"
