@@ -202,9 +202,14 @@ app sweep cannot exercise gestures, lock UI, OSK, OSD or quick settings.
    (credential and autofill behavior).
 6. **Tune touch ergonomics for Foot/TUIs and GTK/Qt exceptions** — Why: [I]
    keyboard-heavy and desktop-style apps likely have dense controls. Change:
-   measure touch/scroll/font and apply per-app scale or phone-friendly launch
-   defaults; prefer adaptive apps and portal dialogs. Where: app config and
-   upstream shell. Effort: S/M. Risk: L/M (workspace/font changes).
+   device package proposes a Foot font-size 8, `pad=4x4`, scroll multiplier
+   2.0, retains upstream's 300 ms long-press selection setting, and adds
+   per-user desktop overrides for Qt V4L2/Fcitx (`QT_SCALE_FACTOR=0.85`),
+   Pinta/LibreOffice (`GDK_SCALE=2`), plus modal/Nautilus maximize rules.
+   Every app ID and value remains [I] until the morning survey; setup changes
+   only exact upstream Foot defaults and never sets toolkit scale globally.
+   Where: device package, after upstream shell setup. Effort: S/M. Risk: L/M
+   (workspace/font changes and toolkit double-scaling).
 
 ## Sources
 

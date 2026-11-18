@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Device package plan: instantnoodlep
 
-Status: draft package 0.0.4. No phone was accessed by this work. Sources in
+Status: draft package 0.0.5. No phone was accessed by this work. Sources in
 this plan are local repository files unless named otherwise.
 
 ## Package contents
@@ -15,6 +15,7 @@ this plan are local repository files unless named otherwise.
 | `/usr/bin/omamobile-bt-public-addr`, one udev rule and one systemd oneshot | On QCA UART controller add, assigns a phone-local BT public address with `btmgmt public-addr`; the helper stores it only in `/var/lib/omamobile/bt-public-addr`, mode 600, and does not print it | [V: package helper and host test; runtime trigger assumptions remain [I]] |
 | `/etc/systemd/system/systemd-vconsole-setup.service` | Masked by the package | [V: owner report, 2026-11-18: service hung two boots; [I] cause unknown] |
 | `/usr/share/omamobile/instantnoodlep-mobile-profile/` | Candidate Chromium and per-app profiles; user service applies after upstream setup-user. Revert with the package helper. | [V: upstream setup-user at `c4623572be1c141d602cf99a83ae0bf9e3eea09c`, lines 313-378; every OnePlus value and app result is [I].] |
+| `/usr/share/omamobile/instantnoodlep-scaling/` and user service | Foot phone profile, per-user desktop-file scale overrides, and Hyprland dialog rules. Values and app IDs are provisional [I] until the morning survey; desktop overrides copy into `~/.local/share/applications`, never global environment files. | [V: upstream setup-user Foot edits `packages/omamobile-shell/bin/omamobile-setup-user:439-446`; other values [I].] |
 
 The package follows the upstream device-package shape (`PKGBUILD`, `install`,
 `version`, `README.md`, package hook, `device.conf`). I read upstream's
@@ -128,3 +129,52 @@ phone. `reset` restores exact originals only when no post-apply edits are
 detected. Per-app scale overrides are in `apps.conf`; defaults are `inherit`,
 so all eight launchers share the global Chromium profile or keep their
 Electron defaults until the survey finds a concrete need.
+
+## App scaling quick wins survey gate
+
+The device package's UI setup service runs after upstream
+`omamobile-setup-user.service`. It may adjust Foot's known upstream default
+font size, padding and scroll multiplier while leaving upstream's 300 ms
+long-press setting intact. Every OnePlus-specific value is [I] until the
+morning survey; setup changes only exact upstream defaults so existing user
+edits survive. Desktop-file overrides are per-user copies and apply only to
+source entries present on the system; no global `environment.d` variable is
+added. Existing user desktop entries are left untouched.
+
+[I] Initial candidates: Foot `JetBrainsMono Nerd Font:size=8`, `pad=4x4`,
+scroll multiplier `2.0`; Qt V4L2 tools and Fcitx config tool
+`QT_SCALE_FACTOR=0.85`; Pinta and LibreOffice desktop entries
+`GDK_SCALE=2`. These are reversible hypotheses, not measured recommendations.
+Hyprland rules make modal windows and the Nautilus file chooser maximized so
+they fit the usable workspace above the on-screen keyboard; verify polkit and
+all picker classes on-device.
+
+### Gated coordinator runbook
+
+1. Before install, back up `~/.config/foot/foot.ini` and matching
+   `~/.local/share/applications/*.desktop`; record which are user-authored.
+   Expect the service and data files in the package manifest. Stop if an
+   existing desktop entry would be overwritten. Roll back by uninstalling the
+   package and restoring the recorded user files.
+2. After owner approval and the morning survey, install the package and start
+   the graphical session. Expect the service to run after upstream setup-user,
+   Foot only to change known defaults, and copied entries to contain the
+   candidate variable. Stop if an app is double-scaled, an Exec line is
+   malformed, or dialogs are hidden by the keyboard. Roll back with
+   `systemctl --user disable --now
+   omamobile-instantnoodlep-scaling.service`, remove package-created desktop
+   copies/rules, and restore Foot from backup.
+3. Test Foot text/selection/scrolling; each listed application, its dialogs,
+   file picker and polkit prompt; keyboard open/closed; and workspace
+   geometry. Record observed app IDs and smallest usable scale. Package
+   staging does not qualify UI.
+
+### Unrelated upstream weather check
+
+[V] The prior local run stopped at `test/weather.py`, the unit test called
+before package staging in upstream `packages/omamobile-shell/test/all`; the
+weather-timer staging assertions later in `test/all` were not reached. The
+mismatch is JavaScript `Number(null) === 0` in the widget model versus Python
+`None` meaning unknown in the service test. This device-package change does
+not touch upstream code; report that unit-test mismatch upstream instead of
+describing it as a timer-staging failure.

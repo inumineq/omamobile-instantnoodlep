@@ -3,7 +3,7 @@
 # shellcheck disable=SC2034,SC2154 # makepkg consumes metadata and supplies pkgdir.
 pkgname=omamobile-device-instantnoodlep
 pkgver=$(cat "${startdir:-.}/version")
-pkgrel=2
+pkgrel=1
 pkgdesc="Omarchy Mobile support for the OnePlus 8 Pro (instantnoodlep)"
 arch=(aarch64)
 url="https://github.com/inumineq/omamobile-instantnoodlep"

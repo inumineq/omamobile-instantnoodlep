@@ -68,7 +68,8 @@ See `docs/agents/active/`. Vibe workers on omabook: power P2b, kona, misc-hw, au
   issue drafts are in `patches/` and `docs/upstream/`; host applicability/model
   checks passed (details: `docs/upstream/README.md`). [I] Phone verification
   remains pending under `device/instantnoodlep/SHELL-UX-PLAN.md`.
-- [V] Device package 0.0.4 consolidates the BT address helper, descriptor,
+- [V] Device package 0.0.5 proposal adds per-user Foot, app scale exceptions,
+  and Hyprland dialog rules to package 0.0.4's BT address helper, descriptor,
   names-only firmware map, uwsm GL selection, proposed shell edge geometry,
   USB0 policy and boot-service masks. The x86 check script is in
   `packages/omamobile-device-instantnoodlep/test/all`; [I] package install,
