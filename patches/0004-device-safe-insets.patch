@@ -1,0 +1,223 @@
+diff --git a/packages/omamobile-shell/plugins/omamobile.back/Back.qml b/packages/omamobile-shell/plugins/omamobile.back/Back.qml
+index fcedab7..c89b524 100644
+--- a/packages/omamobile-shell/plugins/omamobile.back/Back.qml
++++ b/packages/omamobile-shell/plugins/omamobile.back/Back.qml
+@@ -9,2 +9,3 @@ import "BackModel.js" as BackModel
+ import "BackLink.js" as BackLink
++import "../omamobile.safeinsets"
+ 
+@@ -28,2 +29,3 @@ Item {
+   id: root
++  SafeInsets { id: deviceInsets }
+ 
+@@ -83,3 +85,3 @@ Item {
+   // Device overrides are compositor logical pixels; retain existing defaults.
+-  readonly property int edge: configuredPixels("OMAMOBILE_BACK_EDGE_WIDTH", 14, 1, 128)
++  readonly property int edge: Math.max(14, Math.min(128, Math.round(deviceInsets.gestureEdgeWidth || 14)))
+   readonly property int edgeInset: configuredPixels("OMAMOBILE_BACK_EDGE_INSET", 0, 0, 256)
+diff --git a/packages/omamobile-shell/plugins/omamobile.bar/Bar.qml b/packages/omamobile-shell/plugins/omamobile.bar/Bar.qml
+index 6bd395a..87523a5 100644
+--- a/packages/omamobile-shell/plugins/omamobile.bar/Bar.qml
++++ b/packages/omamobile-shell/plugins/omamobile.bar/Bar.qml
+@@ -12,2 +12,3 @@ import qs.Commons as Commons
+ import "StatusModel.js" as StatusModel
++import "../omamobile.safeinsets"
+ 
+@@ -22,2 +23,3 @@ Item {
+   id: root
++  SafeInsets { id: deviceInsets }
+ 
+@@ -230,3 +232,5 @@ Item {
+   function panelWidgetIdAt(section, index) { return "" }
+-  function debugBarGeometry() { return [{ position: position, size: barSize }] }
++  // Include the safe top band in the occupied span so notifications and OSD
++  // placed by the host do not overlap the curved/unsafe area above the bar.
++  function debugBarGeometry() { return [{ position: position, size: barSize + deviceInsets.topInset }] }
+ 
+@@ -281,2 +285,5 @@ Item {
+       anchors { top: true; left: true; right: true }
++      anchors.topMargin: deviceInsets.topInset
++      anchors.leftMargin: deviceInsets.leftInset
++      anchors.rightMargin: deviceInsets.rightInset
+       implicitHeight: root.barSize
+diff --git a/packages/omamobile-shell/plugins/omamobile.keyboard/LanguageWindow.qml b/packages/omamobile-shell/plugins/omamobile.keyboard/LanguageWindow.qml
+index 0dff3e9..ea0088e 100644
+--- a/packages/omamobile-shell/plugins/omamobile.keyboard/LanguageWindow.qml
++++ b/packages/omamobile-shell/plugins/omamobile.keyboard/LanguageWindow.qml
+@@ -4,2 +4,3 @@ import Quickshell
+ import Quickshell.Wayland
++import "../omamobile.safeinsets"
+ 
+@@ -13,2 +14,3 @@ PanelWindow {
+   id: win
++  SafeInsets { id: deviceInsets }
+ 
+@@ -34,2 +36,6 @@ PanelWindow {
+   anchors { top: true; bottom: true; left: true; right: true }
++  anchors.topMargin: deviceInsets.topInset
++  anchors.bottomMargin: deviceInsets.bottomInset
++  anchors.leftMargin: deviceInsets.leftInset
++  anchors.rightMargin: deviceInsets.rightInset
+   exclusionMode: ExclusionMode.Ignore
+diff --git a/packages/omamobile-shell/plugins/omamobile.launcher/Launcher.qml b/packages/omamobile-shell/plugins/omamobile.launcher/Launcher.qml
+index 8ccbb35..c4e7bc6 100644
+--- a/packages/omamobile-shell/plugins/omamobile.launcher/Launcher.qml
++++ b/packages/omamobile-shell/plugins/omamobile.launcher/Launcher.qml
+@@ -13,2 +13,3 @@ import "Readable.js" as Readable
+ import "DrawerLink.js" as DrawerLink
++import "../omamobile.safeinsets"
+ 
+@@ -30,2 +31,3 @@ Item {
+   id: root
++  SafeInsets { id: deviceInsets }
+ 
+@@ -420,2 +422,5 @@ Item {
+       anchors { bottom: true; left: true; right: true }
++      anchors.bottomMargin: deviceInsets.bottomInset
++      anchors.leftMargin: deviceInsets.leftInset
++      anchors.rightMargin: deviceInsets.rightInset
+       implicitHeight: root.dockHeight
+@@ -695,2 +700,5 @@ Item {
+       anchors { bottom: true; left: true; right: true }
++      anchors.bottomMargin: deviceInsets.bottomInset
++      anchors.leftMargin: deviceInsets.leftInset
++      anchors.rightMargin: deviceInsets.rightInset
+       implicitHeight: root.stripHeight
+@@ -736,2 +744,6 @@ Item {
+     anchors { top: true; bottom: true; left: true; right: true }
++    anchors.topMargin: deviceInsets.topInset
++    anchors.bottomMargin: deviceInsets.bottomInset
++    anchors.leftMargin: deviceInsets.leftInset
++    anchors.rightMargin: deviceInsets.rightInset
+     // Normal: fit between the bar and the on-screen keyboard, like Android's
+diff --git a/packages/omamobile-shell/plugins/omamobile.quicksettings/BluetoothPanel.qml b/packages/omamobile-shell/plugins/omamobile.quicksettings/BluetoothPanel.qml
+index 1ca0566..04e4a0c 100644
+--- a/packages/omamobile-shell/plugins/omamobile.quicksettings/BluetoothPanel.qml
++++ b/packages/omamobile-shell/plugins/omamobile.quicksettings/BluetoothPanel.qml
+@@ -11,2 +11,3 @@ import "BluetoothModel.js" as BluetoothModel
+ import "Readable.js" as Readable
++import "../omamobile.safeinsets"
+ 
+@@ -35,2 +36,3 @@ Item {
+   id: root
++  SafeInsets { id: deviceInsets }
+ 
+@@ -512,2 +514,6 @@ Item {
+     anchors { top: true; bottom: true; left: true; right: true }
++    anchors.topMargin: deviceInsets.topInset
++    anchors.bottomMargin: deviceInsets.bottomInset
++    anchors.leftMargin: deviceInsets.leftInset
++    anchors.rightMargin: deviceInsets.rightInset
+     // Normal: fit between the status bar and the on-screen keyboard.
+diff --git a/packages/omamobile-shell/plugins/omamobile.quicksettings/QuickSettings.qml b/packages/omamobile-shell/plugins/omamobile.quicksettings/QuickSettings.qml
+index a7e21db..294c398 100644
+--- a/packages/omamobile-shell/plugins/omamobile.quicksettings/QuickSettings.qml
++++ b/packages/omamobile-shell/plugins/omamobile.quicksettings/QuickSettings.qml
+@@ -16,2 +16,3 @@ import "Readable.js" as Readable
+ import "MediaModel.js" as MediaModel
++import "../omamobile.safeinsets"
+ 
+@@ -48,2 +49,3 @@ Item {
+   id: root
++  SafeInsets { id: deviceInsets }
+ 
+@@ -1457,2 +1459,6 @@ Item {
+     anchors { top: true; bottom: true; left: true; right: true }
++    anchors.topMargin: deviceInsets.topInset
++    anchors.bottomMargin: deviceInsets.bottomInset
++    anchors.leftMargin: deviceInsets.leftInset
++    anchors.rightMargin: deviceInsets.rightInset
+     color: "transparent"
+diff --git a/packages/omamobile-shell/plugins/omamobile.quicksettings/RecordPanel.qml b/packages/omamobile-shell/plugins/omamobile.quicksettings/RecordPanel.qml
+index 3441849..8c028fb 100644
+--- a/packages/omamobile-shell/plugins/omamobile.quicksettings/RecordPanel.qml
++++ b/packages/omamobile-shell/plugins/omamobile.quicksettings/RecordPanel.qml
+@@ -7,2 +7,3 @@ import qs.Commons as Commons
+ import qs.Ui
++import "../omamobile.safeinsets"
+ 
+@@ -14,2 +15,3 @@ Item {
+   id: root
++  SafeInsets { id: deviceInsets }
+ 
+@@ -45,2 +47,6 @@ Item {
+     anchors { top: true; bottom: true; left: true; right: true }
++    anchors.topMargin: deviceInsets.topInset
++    anchors.bottomMargin: deviceInsets.bottomInset
++    anchors.leftMargin: deviceInsets.leftInset
++    anchors.rightMargin: deviceInsets.rightInset
+     exclusionMode: ExclusionMode.Normal
+diff --git a/packages/omamobile-shell/plugins/omamobile.quicksettings/WifiPanel.qml b/packages/omamobile-shell/plugins/omamobile.quicksettings/WifiPanel.qml
+index 5a6242b..77c85fa 100644
+--- a/packages/omamobile-shell/plugins/omamobile.quicksettings/WifiPanel.qml
++++ b/packages/omamobile-shell/plugins/omamobile.quicksettings/WifiPanel.qml
+@@ -11,2 +11,3 @@ import "WifiModel.js" as WifiModel
+ import "Readable.js" as Readable
++import "../omamobile.safeinsets"
+ 
+@@ -33,2 +34,3 @@ Item {
+   id: root
++  SafeInsets { id: deviceInsets }
+ 
+@@ -430,2 +432,6 @@ Item {
+     anchors { top: true; bottom: true; left: true; right: true }
++    anchors.topMargin: deviceInsets.topInset
++    anchors.bottomMargin: deviceInsets.bottomInset
++    anchors.leftMargin: deviceInsets.leftInset
++    anchors.rightMargin: deviceInsets.rightInset
+     // Normal: fit between the status bar and the on-screen keyboard.
+diff --git a/packages/omamobile-shell/plugins/omamobile.safeinsets/SafeInsets.qml b/packages/omamobile-shell/plugins/omamobile.safeinsets/SafeInsets.qml
+new file mode 100644
+index 0000000..9ac573b
+--- /dev/null
++++ b/packages/omamobile-shell/plugins/omamobile.safeinsets/SafeInsets.qml
+@@ -0,0 +1,49 @@
++// SPDX-License-Identifier: MIT
++import Quickshell
++import Quickshell.Io
++import QtQuick
++
++// Device physical-pixel UI geometry. The device package installs this file
++// at /usr/share/omamobile/device-ui.conf; absent or invalid files are zero.
++Item {
++  id: root
++  visible: false
++  property var pixels: ({ left: 0, top: 0, right: 0, bottom: 0, gesture: 0 })
++  readonly property real outputScale: Screen.devicePixelRatio > 0 ? Screen.devicePixelRatio : 1
++  readonly property real leftInset: pixels.left / outputScale
++  readonly property real topInset: pixels.top / outputScale
++  readonly property real rightInset: pixels.right / outputScale
++  readonly property real bottomInset: pixels.bottom / outputScale
++  readonly property real gestureEdgeWidth: pixels.gesture / outputScale
++
++  function bounded(value) {
++    var number = Number(value)
++    return Number.isFinite(number) ? Math.max(0, Math.min(512, Math.round(number))) : 0
++  }
++
++  function parse(text) {
++    var next = { left: 0, top: 0, right: 0, bottom: 0, gesture: 0 }
++    var rows = String(text).split("\n")
++    for (var i = 0; i < rows.length; i++) {
++      var match = rows[i].match(/^\s*(safe_insets_px|gesture_edge_width_px)\s*=\s*(.*?)\s*$/)
++      if (!match) continue
++      var values = match[2].split(",")
++      if (match[1] === "safe_insets_px" && values.length === 4) {
++        next.left = bounded(values[0]); next.top = bounded(values[1])
++        next.right = bounded(values[2]); next.bottom = bounded(values[3])
++      } else if (match[1] === "gesture_edge_width_px" && values.length === 1) {
++        next.gesture = bounded(values[0])
++      }
++    }
++    pixels = next
++  }
++
++  FileView {
++    path: "/usr/share/omamobile/device-ui.conf"
++    watchChanges: true
++    printErrors: false
++    onLoaded: root.parse(text())
++    onLoadFailed: root.pixels = ({ left: 0, top: 0, right: 0, bottom: 0, gesture: 0 })
++    onFileChanged: reload()
++  }
++}
