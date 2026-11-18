@@ -21,3 +21,4 @@ magisk_patched*
 # Build output
 out/
 __pycache__/
+/REPORT.md
