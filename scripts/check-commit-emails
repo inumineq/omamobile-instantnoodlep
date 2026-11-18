@@ -1,0 +1,19 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Fail when a commit by the owner carries anything but his GitHub noreply
+# address. The repo is public: personal contact details never enter history.
+# Usage: scripts/check-commit-emails [<rev-range>]   (default: origin/main..HEAD)
+set -euo pipefail
+range=${1:-origin/main..HEAD}
+bad=0
+while IFS=$'\t' read -r sha an ae cn ce; do
+  for pair in "$an	$ae" "$cn	$ce"; do
+    name=${pair%%	*} mail=${pair#*	}
+    case "$name" in *Mikkel*|*inumineq*) ;; *) continue ;; esac
+    case "$mail" in *@users.noreply.github.com) ;; *)
+      echo "$sha: $name uses a non-noreply address; set: git config user.email 6770514+inumineq@users.noreply.github.com" >&2
+      bad=1 ;;
+    esac
+  done
+done < <(git log --format=$'%h\t%an\t%ae\t%cn\t%ce' "$range")
+exit $bad
