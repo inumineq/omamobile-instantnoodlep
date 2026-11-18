@@ -210,3 +210,112 @@ userdata --debug-shell`.
 2. Owner go: runbook F-steps (`flash boot_b` + B5).
 3. Implement §5.3 as a device-package change behind its own plan update.
 4. P2 charger joins daily only after its own RAM boot passes.
+
+## 8. Daily2 candidate (2026-11-18)
+
+[V] Kernel branch `instantnoodlep-k3-slim-daily2` at `b08288732784` changes only the board's USB-related DTS entries on top of slim-all
+`c30e3f696707`. Slim-all carries the slim-feat changes, Kona fallbacks,
+haptics and the P2 charger; its front camera is disabled. The DWC3
+`dr_mode = "peripheral"` matches slim-feat `48f4edd637f6f` and the slim base
+`78f38a2acc99`. Daily2 drops `usb-role-switch` and
+`role-switch-default-mode` from DWC3 and `mode-switch` from the QMP PHY.
+The slim-all DP gadget timeout and dock USB2 debounce failure are recorded
+in the morning test learning `l-4ba3a6b2`.
+[Daily2 kernel commit](https://github.com/inumineq/linux-omarchy-mobile/commit/b082887327844a37bfae005bf0550599669259f7)
+
+[V] The candidate starts from `~/android/configs/slim-all.config` (SHA-256
+prefix `8a7b72e0de22f85d`). It disables `TYPEC_QCOM_PMIC`,
+`TYPEC_DP_ALTMODE`, `TYPEC_MUX_FSA4480`, `USB_XHCI_HCD` and
+`LOCALVERSION_AUTO`, sets `LOCALVERSION="-instantnoodlep-k3-daily2"` and
+keeps `INPUT_AW8695_HAPTICS=m` and `CHARGER_QCOM_SMB5=m`. Kconfig also
+lowers `DRM_AUX_HPD_BRIDGE` from built-in to module
+(`scripts/diffconfig` against the refreshed slim-all config). Apply those
+changes with `scripts/config`, then run `make ARCH=arm64 LLVM=1 olddefconfig`
+with clang/LLD 23. The generated config and the change summary are saved as
+`k3-daily2.config` and `config-summary.txt` in the build directory. The
+charger driver's device table is intentionally unexported
+(`drivers/power/supply/qcom_pm8150b_charger.c:1723`), so the coordinator
+loads it manually.
+
+[V] Both board DTBs built with `CHECK_DTBS=y` without DT diagnostics.
+Decompiling them emitted the same 32 warnings after stripping the filename
+prefix. The decompiled status diff contains exactly these changes
+(`dtb-decompiled.diff`, `dtb-status-diff.txt` and `logs/*dtc-decompile.log`):
+
+| Node | slim-all | daily2 |
+| --- | --- | --- |
+| `/soc@0/display-subsystem@ae00000/displayport-controller@ae90000` | `okay` | `disabled` |
+| `/soc@0/geniqup@8c0000/i2c@884000/typec-mux@42` | implicit `okay` | `disabled` |
+| `/soc@0/spmi@c440000/pmic@2/typec@1500` | `okay` | `disabled` |
+
+### Build evidence
+
+[V] The MacBook Pro build used Debian clang and LLD 23.1.6. The first
+clang 23 pass stopped at `net/netfilter/xt_TCPMSS.o` on the case-folded
+source mount. After it exited, the build resumed from the committed
+archive in a case-sensitive Docker volume and invalidated dependencies
+on the conflicting paths. See `logs/kernel-build.log`,
+`logs/kernel-case-sensitive.log` and `logs/daily2-toolchain.log`.
+
+```text
+Debian clang version 23.1.6 (++20261116014037+5b10d2d74929-1~exp1~20261116134151.96)
+Target: aarch64-unknown-linux-gnu
+Thread model: posix
+InstalledDir: /usr/lib/llvm-23/bin
+Debian LLD 23.1.6 (compatible with GNU linkers)
+```
+
+[V] The release is `7.3.0-rc6-instantnoodlep-k3-daily2`. The arm64
+Image header reports `image_size=0x1750000`
+(`od -An -tx8 -j16 -N8 arch/arm64/boot/Image`), within the
+`0x2b60000` ABL ceiling.
+
+[V] The stripped modules archive contains the AW8695 and PM8150B modules
+(`logs/module-archive-members.txt`). The packaged charger has the candidate
+release in its vermagic and no aliases in either `modinfo` or
+`modules.alias`. The rebuilt TCPMSS module exports both expected target
+aliases (`logs/daily2-tcpmss-alias.txt`).
+
+[V] Pull these files and `SHA256SUMS` from
+`/Users/inumineq/android/build/k3-daily2/` on macbookpro. All five hashes
+passed recomputation after packaging.
+
+| File | SHA-256 |
+| --- | --- |
+| `Image.gz` | `fb789382c27c01b8eb123cc4843142a5e4a9ba64e1bb67ed68cd74651e54790d` |
+| `sm8250-oneplus-instantnoodlep.dtb` | `4a58be32100b1baeceb84949b8a58258adbcc473f9e5ba180b2d27408e7984a7` |
+| `modules-7.3.0-rc6-instantnoodlep-k3-daily2.tar.zst` | `3ddd9c88c7b806ac292cab8f955b9352425af87504d4178c52dbb83e208e6419` |
+| `kernel.release` | `5d1ba574a9ddfbcfedee3d3672768fd99d8da2fd1f878ae1aea5fe89f586b049` |
+| `image_size.txt` | `c4a89a762656a584bb36337bb350fb36bfd0eeeac6b0216fdaad44beb55caef1` |
+
+### RAM-only qualification
+
+[I] The coordinator runs these checks with the owner. Use the daily
+runbook's Part R preparation and rollback. Verify hashes, stage the modules
+for this release (the archive is rooted at `lib/modules/<release>/`, so
+use `--strip-components=2 -C /usr/lib/modules`) and confirm the existing
+daily module tree is pinned (learning `l-be31051d`). Pack `boot-daily2.img` with the daily manifest's
+`--boot 2 --root userdata --debug-shell` flags.
+
+1. With the owner ready for recovery and slot B confirmed, run
+   `fastboot boot ~/android/build/k3-daily2/boot-daily2.img` after the owner's
+   go. Expect `Booting OKAY` and SSH within two minutes. Check `uname -r`,
+   panel output, hardware GPU rendering, Wi-Fi association, Bluetooth
+   (`hci0`), and plausible fuel-gauge readings. If boot or SSH fails, stop
+   and recover to the installed daily K3 using Part R.
+2. After announcing the haptics check to the owner, identify the AW8695
+   input by name (`event3` in the prior test) and check one 100 ms buzz.
+3. Confirm the charger did not load at boot. Follow the P2b manual-load
+   gate in the power plan, with logging and the charge watch ready
+   before the owner's go for `modprobe qcom_pm8150b_charger`. Observe 15
+   minutes on the laptop cable. Use the P2-6 limits and stop on any watch
+   `STOP`, over-temperature, loss of SSH, or unexpected battery behavior.
+   [POWER-M5-PLAN §7.4–7.5](https://github.com/inumineq/omamobile-instantnoodlep/blob/bb58511c900290cbe529acbe345e756fc286219d/device/instantnoodlep/POWER-M5-PLAN.md#75-p2b-charger-as-a-module-loaded-by-hand)
+4. Have the owner unplug and reconnect the laptop cable, then confirm the
+   gadget returns with a fresh SSH session and the charger follows cable
+   state. On failure, stop, unplug and use the P2b rollback to the installed
+   daily K3. If SSH is gone, use the owner-attended button recovery from
+   Part R. Daily2 has `PANIC_TIMEOUT=0` and does not enable
+   `DETECT_HUNG_TASK` [V: `k3-daily2.config`], so do not rely on the P2b
+   automatic reboot. End the watch by its PID file and return to the
+   installed daily K3 at the end of the RAM test.
