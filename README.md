@@ -7,19 +7,11 @@ Arch Linux ARM + Hyprland on a mainline kernel, no Android) on the
 
 Device support request: [derekross/omarchy-mobile#808](https://github.com/derekross/omarchy-mobile/issues/808)
 
-## Status (2026-11-15)
+## Status
 
-The current state is in [`docs/agents/state.md`](docs/agents/state.md); this
-table is the starting point.
-
-| Item | State |
-| --- | --- |
-| Support request | Posted and open: issue #808 |
-| Stage-0 facts (stock capture, partition map, live DT) | Not collected yet, see `docs/STAGE-0.md` |
-| Board DTS | Not started. Base: the community SM8250 fork's `sm8250-oneplus-instantnoodlep.dts` |
-| `device/instantnoodlep/device.conf` | Draft in place, values marked TODO/I must be verified by stage 0 |
-| Kernel branch | To be based on `omamobile` in [derekross/linux-omarchy-mobile](https://github.com/derekross/linux-omarchy-mobile) |
-| First boot on slot B | Not attempted |
+**[docs/STATUS.md](docs/STATUS.md)**: what works on the phone, block by block,
+in the same matrix and legend as upstream's supported-devices list.
+Day-to-day detail is in [`docs/agents/state.md`](docs/agents/state.md).
 
 ## Why this port is plausible
 
