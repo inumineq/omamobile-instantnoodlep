@@ -5,7 +5,9 @@ Status: M-CAM1 offline candidate in preparation; no phone test has run. The targ
 single raw Bayer frame from the fixed-focus front camera. All phone commands
 below are for the owner/coordinator; this worker had no phone access.
 
-- Date: 2026-11-17. Candidate branch: `instantnoodlep-k3-camera`.
+- Date: 2026-11-17. Candidate branches: `instantnoodlep-k3-camera` (combo
+  base, 2026-11-17, clang 19) and `instantnoodlep-k3-slim-cam` (slim K3 base
+  `78f38a2acc99`, 2026-11-18, clang 23 — the current candidate, §9.5).
 - Reading order: `AGENTS.md`, `DTS-PORT-PLAN.md`, `DTBO-PLAN.md`,
   `FIRMWARE-PLAN.md` and `firmware.map`, `DISPLAY-M3-PLAN.md`,
   `AUDIO-M5-PLAN.md`, `NOTES.md`, and `M5-REVIEW.md`.
@@ -172,7 +174,8 @@ autofocus, OIS and the other four sensors out of the first experiment.
 | 5 | Device camera application | Only after reliable raw streams, implement/port libcamera support, safe tuning provenance, camera naming and app integration. |
 
 [V] Rows 1-2 are implemented offline as the three-commit kernel series and
-verified per §9.4; row 3 is the coordinator's C1-C5 gates in §9.1. Row 0 is
+verified per §9.4 (combo base) and §9.5 (slim base, current candidate); row 3
+is the coordinator's C1-C5 gates in §9.1. Row 0 is
 covered for this RAM candidate only by the combo kernel's test-only Kona
 match (§9); the upstreamable replacement is separate work.
 
@@ -368,12 +371,19 @@ run this in a dedicated phone SSH shell before C1. Expect a new directory
 for only this release and successful depmod. Stop if the directory already
 exists, extraction fails or the archive contains a different release.
 Rollback (after returning to the baseline): remove only
-`/usr/lib/modules/7.3.0-rc6-instantnoodlep-k3-camera-g70d0761d1` and the
+`/usr/lib/modules/7.3.0-rc6-instantnoodlep-k3-slim-cam-gd53d0fd6baaa` and the
 `/tmp` staging directory/archive. The baseline module directory is retained.
+
+[V] The slim rebuild (§9.5) carries the whole camera stack as modules
+(`qcom-camss.ko`, `camcc-sm8250.ko`, `i2c-qcom-cci.ko`, `v4l2-cci.ko`,
+`imx471.ko`), so staging this tarball is what makes the C2 enumeration
+possible; udev loads them by modalias (platform `qcom,sm8250-camss` /
+`qcom,sm8250-cci`, i2c `sony,imx471`). No manual module load is part of
+C2; if the graph is empty after staging, stop and record it as a finding.
 
 ```sh
 set -eu
-CAMERA_RELEASE=7.3.0-rc6-instantnoodlep-k3-camera-g70d0761d1
+CAMERA_RELEASE=7.3.0-rc6-instantnoodlep-k3-slim-cam-gd53d0fd6baaa
 test ! -e "/usr/lib/modules/$CAMERA_RELEASE"
 CAMERA_STAGE=$(mktemp -d /tmp/camera-modules.XXXXXX)
 tar -xzf /tmp/camera-modules.tar.gz -C "$CAMERA_STAGE"
@@ -384,18 +394,27 @@ depmod "$CAMERA_RELEASE"
 
 ### 9.3 Laptop probe-builder command
 
-[V] Builder flags below follow `tools/build-instantnoodlep-probe` CLI and
-NOTES' known paths. It runs offline on omabook after the coordinator copies
-and checks the Mac artifacts. Set `STOCK_OVERLAY` to the owner's previously
-verified entry-16 overlay and `UFDT_APPLY` to the existing libufdt tool;
-these private input paths are intentionally not guessed. Stop if either is
-unset or does not match the known-good K3 builder inputs. Expect a new image,
-read-back validation and matching manifest hashes; rollback by deleting
-only the fresh output directory if offline validation fails. Never reuse an
-existing `--out`, and do not boot if the builder fails.
+[V] 2026-11-18 update (slim rebuild, §9.5): the candidate is built and the
+RAM image already exists on omabook — no Mac transfer anymore. The release
+block for C1 is `~/android/build/k3-slim-cam-ram/boot-slim-cam.img`
+(sha256 in `~/android/build/k3-slim-cam-ram/SHA256SUMS`, manifest
+`boot-slim-cam.manifest.json`, flags identical to
+`~/android/build/k3-daily-ram/boot-daily.manifest.json`: `--boot 2 --root
+userdata --debug-shell`). The builder inputs live in
+`~/android/build/k3-slim-cam/` (`Image.gz`, the board DTB,
+`modules-<release>.tar.gz`, `.config`). The 2026-11-17 macbookpro transfer
+below (scp from `~/build/instantnoodlep-k3-camera-70d0761d1/`, ssh key
+`id_ed25519.pub`) is superseded: that clang 19 build froze and was over the
+image_size ceiling (learning `l-e03ff7fe`; KERNEL-SIZE §1). Stop if
+`STOCK_OVERLAY`/`UFDT_APPLY` are unset or do not match the known-good K3
+builder inputs (`~/android/build/p3/entry16.dtbo`,
+`~/android/build/ufdt/ufdt_apply_overlay`). Expect a new image, read-back
+validation and matching manifest hashes; rollback by deleting only the fresh
+output directory. Never reuse an existing `--out`, and do not boot if the
+builder fails.
 
-[V] Copy the four files from macbookpro first and check them against the
-hashes in §9.4 before building:
+[V] Superseded 2026-11-17 transfer step, kept for the record (macbookpro
+clang 19 build; do not reuse):
 
 ```sh
 # Laptop, from the Mac (paths as delivered in §9.4).
@@ -406,16 +425,16 @@ cd "$HOME/android/build/k3-camera-artifacts" && sha256sum -c SHA256SUMS
 ```
 
 ```sh
-# Laptop, from this port repo. Use a fresh directory for every attempt.
+# Laptop (omabook), from this port repo. Use a fresh directory for every attempt.
 set -eu
 : "${STOCK_OVERLAY:?set the verified private entry-16 overlay path}"
 : "${UFDT_APPLY:?set the verified ufdt_apply_overlay executable path}"
-CAMERA_ARTIFACTS="$HOME/android/build/k3-camera-artifacts"
-CAMERA_BOOT_DIR=$(mktemp -d "$HOME/android/build/k3-camera-ram.XXXXXX")
+CAMERA_ARTIFACTS="$HOME/android/build/k3-slim-cam"
+CAMERA_BOOT_DIR=$(mktemp -d "$HOME/android/build/k3-slim-cam-ram.XXXXXX")
 python3 tools/build-instantnoodlep-probe \
-  --kernel "$CAMERA_ARTIFACTS/Image.gz" \
-  --dtb "$CAMERA_ARTIFACTS/sm8250-oneplus-instantnoodlep.dtb" \
-  --ssh-key "$HOME/.ssh/id_ed25519.pub" \
+  --kernel "$CAMERA_ARTIFACTS/arch/arm64/boot/Image.gz" \
+  --dtb "$CAMERA_ARTIFACTS/arch/arm64/boot/dts/qcom/sm8250-oneplus-instantnoodlep.dtb" \
+  --ssh-key "$HOME/.ssh/omamobile_probe.pub" \
   --mkbootimg "$HOME/aosp-tools/system/tools/mkbootimg/mkbootimg.py" \
   --omarchy-mobile "$HOME/src/omarchy-mobile" \
   --initramfs-root "$HOME/android/build/initramfs-root" \
@@ -491,3 +510,60 @@ ordering and module electrical timing, 200 MHz streaming through CSIPHY3/
 CSID0/VFE0 RDI0, and the `orientation`/`rotation` values, which are inherited
 from the public board patch and not measured on this unit. A chip-ID failure
 in C2 stops the experiment; do not retry with a different mode or graph.
+
+### 9.5 Offline verification results (2026-11-18, omabook, clang 23.1.3, slim K3 base)
+
+[V] The three-commit camera series was re-based onto the slim K3 tip
+`78f38a2acc99` (branch `instantnoodlep-k3-slim-cam`, tip `d53d0fd6baaa` in
+`~/src/l-k3-slim`, fetched from macbookpro `instantnoodlep-k3-camera` via git
+bundle; commits 1-2 cherry-pick identically, the board DTS commit was
+merge-resolved against the daily tip's Wi-Fi/BT/gauge DTS additions —
+camera and Wi-Fi/BT nodes are siblings, nothing dropped). Release:
+`7.3.0-rc6-instantnoodlep-k3-slim-cam-gd53d0fd6baaa`.
+
+[V] Config: the slim `.config` (`~/android/build/k3-slim/.config`) merged with
+a two-line camera fragment (`CONFIG_VIDEO_IMX471=m`,
+`CONFIG_LOCALVERSION="-instantnoodlep-k3-slim-cam"`) + `olddefconfig`; the
+diff against the slim `.config` is exactly those two lines. The whole camera
+stack stays **modules** — `VIDEO_QCOM_CAMSS=m`, `SM_CAMCC_8250=m`,
+`I2C_QCOM_CCI=m`, `V4L2_CCI=m`, `V4L2_CCI_I2C=m` as in slim — so a camera
+probe hang cannot block boot; the modules ship in the tarball
+(`qcom-camss.ko`, `camcc-sm8250.ko`, `i2c-qcom-cci.ko`, `v4l2-cci.ko`,
+`imx471.ko`, 1125 modules total, `INSTALL_MOD_STRIP=1`).
+
+[V] Build: `nice -n 5 make O=~/android/build/k3-slim-cam ARCH=arm64 LLVM=1 -j8
+Image.gz qcom/sm8250-oneplus-instantnoodlep.dtb modules` with clang/lld
+23.1.3 on omabook, RC=0. `image_size` (`od -An -tx8 -j16 -N8 Image`) =
+**0x1720000**, identical to slim (the camera adds no built-in code) and far
+under the ABL ceiling 0x2b60000 (KERNEL-SIZE §1) — unlike the 2026-11-17
+clang 19 build (0x2cd0000, froze). `CHECK_DTBS=y` (dtschema venv): clean.
+
+[V] Decompiled DTB: `camss@ac6a000` okay with `vdda-phy`/`vdda-pll`; exactly
+one `camera@10` (`sony,imx471`, `reg = <0x10>`) on `cci@ac50000` `i2c-bus@1`,
+MCLK 19.2 MHz (0x124f800), `reset-gpios` TLMM 78, three supplies, sensor
+`data-lanes = <1 2 3 4>`, `link-frequencies = <200000000>`, remote-endpoint
+into `camss` `port@3`; `i2c-bus@0` disabled; `qca6390-pmu` and
+`regulator-cam-front-avdd` are separate root nodes (a misplacement of the
+latter inside the former was caught by `dtbs_check` and fixed before
+release).
+
+[V] RAM image: `tools/build-instantnoodlep-probe` with exactly the daily
+manifest flags (`--boot 2 --root userdata --debug-shell`, omabook probe key,
+mkbootimg, omarchy-mobile, initramfs-root, entry-16 stock overlay,
+ufdt_apply_overlay) produced
+`~/android/build/k3-slim-cam-ram/boot-slim-cam.img` with read-back pass and
+manifest `boot-slim-cam.manifest.json`. Artefacts and sha256
+(`~/android/build/k3-slim-cam-ram/SHA256SUMS`):
+
+| File | SHA256 |
+| --- | --- |
+| `~/android/build/k3-slim-cam/arch/arm64/boot/Image.gz` | `22d0ccf284003abde18f80715ecc84705e07ea5d6afcf9dd7ddbbd100956b574` |
+| `.../arch/arm64/boot/dts/qcom/sm8250-oneplus-instantnoodlep.dtb` | `7f04a8fd5d17794ce9fc0bcdc0f04d74e7f62b223c3ffb95346811699568f3ad` |
+| `~/android/build/k3-slim-cam/modules-7.3.0-rc6-instantnoodlep-k3-slim-cam-gd53d0fd6baaa.tar.gz` | `87ec8cc7577357c094a91bb8b7d6d767e7aa37da457e51c0582158e5d7d605b9` |
+| `~/android/build/k3-slim-cam/.config` | `a70b8d804d317316fd9ee3f0c45f56167893fc6ff774b8f7f79137555bbfd574` |
+| `~/android/build/k3-slim-cam-ram/boot-slim-cam.img` | `1704fd45d9c70c50d5eabd3e0a27c4a8b63c63cd649a3e3fa4b6d5a331d8516f` |
+
+[I] Not done: no phone access, no RAM boot, no frame. C0-C5 remain the
+coordinator gates, now against this release; the module staging in §9.2
+carries the camera stack as modules. The §9.4 macbookpro artefacts stay as
+the historical clang 19 reference.
