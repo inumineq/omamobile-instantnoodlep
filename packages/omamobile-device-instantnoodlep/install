@@ -9,6 +9,7 @@ destination=${1:?Usage: ./install DESTDIR}
 
 install -Dm644 device.conf "$destination/usr/share/omamobile/device.conf"
 install -Dm644 firmware.map "$destination/usr/share/omamobile/firmware.map"
+install -Dm644 device-ui.conf "$destination/usr/share/omamobile/device-ui.conf"
 install -Dm644 version "$destination/usr/share/omamobile/device-instantnoodlep/version"
 install -Dm644 LICENSE "$destination/usr/share/licenses/omamobile-device-instantnoodlep/LICENSE"
 install -Dm644 etc/omamobile-mirrorlist "$destination/etc/pacman.d/omamobile-mirrorlist"
@@ -23,6 +24,9 @@ install -Dm644 systemd/sleep.conf.d/40-omamobile-instantnoodlep.conf "$destinati
 install -Dm755 bin/omamobile-bt-public-addr "$destination/usr/bin/omamobile-bt-public-addr"
 install -Dm644 udev/80-omamobile-bt-public-addr.rules "$destination/usr/lib/udev/rules.d/80-omamobile-bt-public-addr.rules"
 install -Dm644 systemd/omamobile-bt-public-addr@.service "$destination/usr/lib/systemd/system/omamobile-bt-public-addr@.service"
+install -Dm644 systemd/omamobile-instantnoodlep-charger.service "$destination/usr/lib/systemd/system/omamobile-instantnoodlep-charger.service"
+install -d "$destination/usr/lib/systemd/system/multi-user.target.wants"
+ln -sfn ../omamobile-instantnoodlep-charger.service "$destination/usr/lib/systemd/system/multi-user.target.wants/omamobile-instantnoodlep-charger.service"
 
 install -Dm644 chromium/instantnoodlep.conf "$destination/usr/share/omamobile/instantnoodlep-mobile-profile/instantnoodlep.conf"
 install -Dm644 chromium/apps.conf "$destination/usr/share/omamobile/instantnoodlep-mobile-profile/apps.conf"

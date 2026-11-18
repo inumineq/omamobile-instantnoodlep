@@ -16,7 +16,7 @@ index fcedab7..c89b524 100644
 +  readonly property int edge: Math.max(14, Math.min(128, Math.round(deviceInsets.gestureEdgeWidth || 14)))
    readonly property int edgeInset: configuredPixels("OMAMOBILE_BACK_EDGE_INSET", 0, 0, 256)
 diff --git a/packages/omamobile-shell/plugins/omamobile.bar/Bar.qml b/packages/omamobile-shell/plugins/omamobile.bar/Bar.qml
-index 6bd395a..87523a5 100644
+index 6bd395a..da1db93 100644
 --- a/packages/omamobile-shell/plugins/omamobile.bar/Bar.qml
 +++ b/packages/omamobile-shell/plugins/omamobile.bar/Bar.qml
 @@ -12,2 +12,3 @@ import qs.Commons as Commons
@@ -34,14 +34,12 @@ index 6bd395a..87523a5 100644
 +  // placed by the host do not overlap the curved/unsafe area above the bar.
 +  function debugBarGeometry() { return [{ position: position, size: barSize + deviceInsets.topInset }] }
  
-@@ -281,2 +285,5 @@ Item {
+@@ -281,2 +285,3 @@ Item {
        anchors { top: true; left: true; right: true }
-+      anchors.topMargin: deviceInsets.topInset
-+      anchors.leftMargin: deviceInsets.leftInset
-+      anchors.rightMargin: deviceInsets.rightInset
++      margins { top: deviceInsets.topInset; left: deviceInsets.leftInset; right: deviceInsets.rightInset }
        implicitHeight: root.barSize
 diff --git a/packages/omamobile-shell/plugins/omamobile.keyboard/LanguageWindow.qml b/packages/omamobile-shell/plugins/omamobile.keyboard/LanguageWindow.qml
-index 0dff3e9..ea0088e 100644
+index 0dff3e9..73d090b 100644
 --- a/packages/omamobile-shell/plugins/omamobile.keyboard/LanguageWindow.qml
 +++ b/packages/omamobile-shell/plugins/omamobile.keyboard/LanguageWindow.qml
 @@ -4,2 +4,3 @@ import Quickshell
@@ -52,15 +50,12 @@ index 0dff3e9..ea0088e 100644
    id: win
 +  SafeInsets { id: deviceInsets }
  
-@@ -34,2 +36,6 @@ PanelWindow {
+@@ -34,2 +36,3 @@ PanelWindow {
    anchors { top: true; bottom: true; left: true; right: true }
-+  anchors.topMargin: deviceInsets.topInset
-+  anchors.bottomMargin: deviceInsets.bottomInset
-+  anchors.leftMargin: deviceInsets.leftInset
-+  anchors.rightMargin: deviceInsets.rightInset
++  margins { top: deviceInsets.topInset; bottom: deviceInsets.bottomInset; left: deviceInsets.leftInset; right: deviceInsets.rightInset }
    exclusionMode: ExclusionMode.Ignore
 diff --git a/packages/omamobile-shell/plugins/omamobile.launcher/Launcher.qml b/packages/omamobile-shell/plugins/omamobile.launcher/Launcher.qml
-index 8ccbb35..c4e7bc6 100644
+index 8ccbb35..40753cc 100644
 --- a/packages/omamobile-shell/plugins/omamobile.launcher/Launcher.qml
 +++ b/packages/omamobile-shell/plugins/omamobile.launcher/Launcher.qml
 @@ -13,2 +13,3 @@ import "Readable.js" as Readable
@@ -71,27 +66,20 @@ index 8ccbb35..c4e7bc6 100644
    id: root
 +  SafeInsets { id: deviceInsets }
  
-@@ -420,2 +422,5 @@ Item {
+@@ -420,2 +422,3 @@ Item {
        anchors { bottom: true; left: true; right: true }
-+      anchors.bottomMargin: deviceInsets.bottomInset
-+      anchors.leftMargin: deviceInsets.leftInset
-+      anchors.rightMargin: deviceInsets.rightInset
++      margins { bottom: deviceInsets.bottomInset; left: deviceInsets.leftInset; right: deviceInsets.rightInset }
        implicitHeight: root.dockHeight
-@@ -695,2 +700,5 @@ Item {
+@@ -695,2 +698,3 @@ Item {
        anchors { bottom: true; left: true; right: true }
-+      anchors.bottomMargin: deviceInsets.bottomInset
-+      anchors.leftMargin: deviceInsets.leftInset
-+      anchors.rightMargin: deviceInsets.rightInset
++      margins { bottom: deviceInsets.bottomInset; left: deviceInsets.leftInset; right: deviceInsets.rightInset }
        implicitHeight: root.stripHeight
-@@ -736,2 +744,6 @@ Item {
+@@ -736,2 +740,3 @@ Item {
      anchors { top: true; bottom: true; left: true; right: true }
-+    anchors.topMargin: deviceInsets.topInset
-+    anchors.bottomMargin: deviceInsets.bottomInset
-+    anchors.leftMargin: deviceInsets.leftInset
-+    anchors.rightMargin: deviceInsets.rightInset
++    margins { top: deviceInsets.topInset; bottom: deviceInsets.bottomInset; left: deviceInsets.leftInset; right: deviceInsets.rightInset }
      // Normal: fit between the bar and the on-screen keyboard, like Android's
 diff --git a/packages/omamobile-shell/plugins/omamobile.quicksettings/BluetoothPanel.qml b/packages/omamobile-shell/plugins/omamobile.quicksettings/BluetoothPanel.qml
-index 1ca0566..04e4a0c 100644
+index 1ca0566..755e403 100644
 --- a/packages/omamobile-shell/plugins/omamobile.quicksettings/BluetoothPanel.qml
 +++ b/packages/omamobile-shell/plugins/omamobile.quicksettings/BluetoothPanel.qml
 @@ -11,2 +11,3 @@ import "BluetoothModel.js" as BluetoothModel
@@ -102,15 +90,12 @@ index 1ca0566..04e4a0c 100644
    id: root
 +  SafeInsets { id: deviceInsets }
  
-@@ -512,2 +514,6 @@ Item {
+@@ -512,2 +514,3 @@ Item {
      anchors { top: true; bottom: true; left: true; right: true }
-+    anchors.topMargin: deviceInsets.topInset
-+    anchors.bottomMargin: deviceInsets.bottomInset
-+    anchors.leftMargin: deviceInsets.leftInset
-+    anchors.rightMargin: deviceInsets.rightInset
++    margins { top: deviceInsets.topInset; bottom: deviceInsets.bottomInset; left: deviceInsets.leftInset; right: deviceInsets.rightInset }
      // Normal: fit between the status bar and the on-screen keyboard.
 diff --git a/packages/omamobile-shell/plugins/omamobile.quicksettings/QuickSettings.qml b/packages/omamobile-shell/plugins/omamobile.quicksettings/QuickSettings.qml
-index a7e21db..294c398 100644
+index a7e21db..b513e24 100644
 --- a/packages/omamobile-shell/plugins/omamobile.quicksettings/QuickSettings.qml
 +++ b/packages/omamobile-shell/plugins/omamobile.quicksettings/QuickSettings.qml
 @@ -16,2 +16,3 @@ import "Readable.js" as Readable
@@ -121,15 +106,12 @@ index a7e21db..294c398 100644
    id: root
 +  SafeInsets { id: deviceInsets }
  
-@@ -1457,2 +1459,6 @@ Item {
+@@ -1457,2 +1459,3 @@ Item {
      anchors { top: true; bottom: true; left: true; right: true }
-+    anchors.topMargin: deviceInsets.topInset
-+    anchors.bottomMargin: deviceInsets.bottomInset
-+    anchors.leftMargin: deviceInsets.leftInset
-+    anchors.rightMargin: deviceInsets.rightInset
++    margins { top: deviceInsets.topInset; bottom: deviceInsets.bottomInset; left: deviceInsets.leftInset; right: deviceInsets.rightInset }
      color: "transparent"
 diff --git a/packages/omamobile-shell/plugins/omamobile.quicksettings/RecordPanel.qml b/packages/omamobile-shell/plugins/omamobile.quicksettings/RecordPanel.qml
-index 3441849..8c028fb 100644
+index 3441849..3aed7a9 100644
 --- a/packages/omamobile-shell/plugins/omamobile.quicksettings/RecordPanel.qml
 +++ b/packages/omamobile-shell/plugins/omamobile.quicksettings/RecordPanel.qml
 @@ -7,2 +7,3 @@ import qs.Commons as Commons
@@ -140,15 +122,12 @@ index 3441849..8c028fb 100644
    id: root
 +  SafeInsets { id: deviceInsets }
  
-@@ -45,2 +47,6 @@ Item {
+@@ -45,2 +47,3 @@ Item {
      anchors { top: true; bottom: true; left: true; right: true }
-+    anchors.topMargin: deviceInsets.topInset
-+    anchors.bottomMargin: deviceInsets.bottomInset
-+    anchors.leftMargin: deviceInsets.leftInset
-+    anchors.rightMargin: deviceInsets.rightInset
++    margins { top: deviceInsets.topInset; bottom: deviceInsets.bottomInset; left: deviceInsets.leftInset; right: deviceInsets.rightInset }
      exclusionMode: ExclusionMode.Normal
 diff --git a/packages/omamobile-shell/plugins/omamobile.quicksettings/WifiPanel.qml b/packages/omamobile-shell/plugins/omamobile.quicksettings/WifiPanel.qml
-index 5a6242b..77c85fa 100644
+index 5a6242b..0b4cb3a 100644
 --- a/packages/omamobile-shell/plugins/omamobile.quicksettings/WifiPanel.qml
 +++ b/packages/omamobile-shell/plugins/omamobile.quicksettings/WifiPanel.qml
 @@ -11,2 +11,3 @@ import "WifiModel.js" as WifiModel
@@ -159,12 +138,9 @@ index 5a6242b..77c85fa 100644
    id: root
 +  SafeInsets { id: deviceInsets }
  
-@@ -430,2 +432,6 @@ Item {
+@@ -430,2 +432,3 @@ Item {
      anchors { top: true; bottom: true; left: true; right: true }
-+    anchors.topMargin: deviceInsets.topInset
-+    anchors.bottomMargin: deviceInsets.bottomInset
-+    anchors.leftMargin: deviceInsets.leftInset
-+    anchors.rightMargin: deviceInsets.rightInset
++    margins { top: deviceInsets.topInset; bottom: deviceInsets.bottomInset; left: deviceInsets.leftInset; right: deviceInsets.rightInset }
      // Normal: fit between the status bar and the on-screen keyboard.
 diff --git a/packages/omamobile-shell/plugins/omamobile.safeinsets/SafeInsets.qml b/packages/omamobile-shell/plugins/omamobile.safeinsets/SafeInsets.qml
 new file mode 100644
@@ -221,3 +197,59 @@ index 0000000..9ac573b
 +    onFileChanged: reload()
 +  }
 +}
+diff --git a/packages/omamobile-shell/test/drawer-touch b/packages/omamobile-shell/test/drawer-touch
+index a763b6b..b286a92 100755
+--- a/packages/omamobile-shell/test/drawer-touch
++++ b/packages/omamobile-shell/test/drawer-touch
+@@ -47,3 +47,3 @@ window = window.replace("  PanelWindow {", "  Item {\n    anchors.fill: parent",
+ window = "\n".join(l for l in window.split("\n")
+-                   if not re.match(r"^    (anchors \{ top|exclusionMode:|WlrLayershell\.|color: \"transparent\"|mask: Region)", l))
++                   if not re.match(r"^    (anchors \{ top|exclusionMode:|margins \{ [a-z]+: deviceInsets|WlrLayershell\.|color: \"transparent\"|mask: Region)", l))
+ cell = block(src.index("  component AppCell: Item {"))
+diff --git a/packages/omamobile-shell/test/home-render b/packages/omamobile-shell/test/home-render
+index cde4deb..dde9418 100755
+--- a/packages/omamobile-shell/test/home-render
++++ b/packages/omamobile-shell/test/home-render
+@@ -49,3 +49,3 @@ cp "$here/../plugins/omamobile.launcher/"{DrawerLink.js,DrawerLinkClient.qml} "$
+ sed -i -E \
+-  -e '/^    (screen: Quickshell\.screens|anchors \{ top: true|exclusionMode:|WlrLayershell\.|color: "transparent"|mask: Region)/d' \
++  -e '/^    (screen: Quickshell\.screens|anchors \{ top: true|exclusionMode:|margins \{ [a-z]+: deviceInsets|WlrLayershell\.|color: "transparent"|mask: Region)/d' \
+   -e 's/^  PanelWindow \{$/  Item { anchors.fill: parent/' \
+diff --git a/packages/omamobile-shell/test/launcher-render b/packages/omamobile-shell/test/launcher-render
+index afca55a..51e9522 100755
+--- a/packages/omamobile-shell/test/launcher-render
++++ b/packages/omamobile-shell/test/launcher-render
+@@ -43,4 +43,4 @@ cp "$here/../plugins/omamobile.voice/"{VoiceLink.js,VoiceLinkClient.qml} "$h/oma
+ sed -i -E \
+-  -e '/^    (screen: modelData|anchors \{ (top|bottom): true|exclusionMode:|WlrLayershell\.|color: "transparent"|mask: Region)/d' \
+-  -e '/^      (screen: modelData|anchors \{ (top|bottom): true|exclusionMode:|WlrLayershell\.|color: "transparent"|color: Commons\.Color\.bar\.background|mask: Region)/d' \
++  -e '/^    (screen: modelData|anchors \{ (top|bottom): true|exclusionMode:|margins \{ [a-z]+: deviceInsets|WlrLayershell\.|color: "transparent"|mask: Region)/d' \
++  -e '/^      (screen: modelData|anchors \{ (top|bottom): true|exclusionMode:|margins \{ [a-z]+: deviceInsets|WlrLayershell\.|color: "transparent"|color: Commons\.Color\.bar\.background|mask: Region)/d' \
+   -e 's/^  PanelWindow \{$/  Item { anchors.fill: parent/' \
+diff --git a/packages/omamobile-shell/test/quicksettings-render b/packages/omamobile-shell/test/quicksettings-render
+index 4c98606..ea296dc 100755
+--- a/packages/omamobile-shell/test/quicksettings-render
++++ b/packages/omamobile-shell/test/quicksettings-render
+@@ -43,3 +43,3 @@ for qml in "$h"/quicksettings/*.qml; do
+   sed -i -E \
+-    -e '/^    (anchors \{ top: true|exclusionMode:|WlrLayershell\.|color: "transparent")/d' \
++    -e '/^    (anchors \{ top: true|exclusionMode:|margins \{ [a-z]+: deviceInsets|WlrLayershell\.|color: "transparent")/d' \
+     -e 's/^  PanelWindow \{$/  Item { anchors.fill: parent/' \
+diff --git a/packages/omamobile-shell/test/switcher-touch b/packages/omamobile-shell/test/switcher-touch
+index ea4b24a..f85d4bc 100755
+--- a/packages/omamobile-shell/test/switcher-touch
++++ b/packages/omamobile-shell/test/switcher-touch
+@@ -19,3 +19,3 @@ cp "$plugin/Readable.js" "$plugin/SwitcherModel.js" "$work/switcher/"
+ sed -E \
+-  -e '/^[[:space:]]*(WlrLayershell\.|exclusionMode:|anchors \{ top: true)/d' \
++  -e '/^[[:space:]]*(WlrLayershell\.|exclusionMode:|margins \{ [a-z]+: deviceInsets|anchors \{ top: true)/d' \
+   -e 's/^([[:space:]]*)PanelWindow \{$/\1Window { width: 412; height: 892/' \
+diff --git a/packages/omamobile-shell/test/update-render b/packages/omamobile-shell/test/update-render
+index af08ab1..a97e0b1 100755
+--- a/packages/omamobile-shell/test/update-render
++++ b/packages/omamobile-shell/test/update-render
+@@ -34,3 +34,3 @@ cp -r "$plugin" "$h/update"
+ sed -i -E \
+-  -e '/^    (anchors \{ top: true|exclusionMode:|WlrLayershell\.|color: "transparent")/d' \
++  -e '/^    (anchors \{ top: true|exclusionMode:|margins \{ [a-z]+: deviceInsets|WlrLayershell\.|color: "transparent")/d' \
+   -e 's/^  PanelWindow \{$/  Item { anchors.fill: parent/' \

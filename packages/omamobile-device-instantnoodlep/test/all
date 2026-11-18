@@ -39,6 +39,8 @@ test -f "$stage/usr/share/omamobile/firmware.map"
 cmp -s firmware.map ../../device/instantnoodlep/firmware.map
 test -f "$stage/usr/share/uwsm/env.d/90-omamobile-instantnoodlep-graphics"
 test -f "$stage/usr/lib/environment.d/50-omamobile-back.conf"
+test -f "$stage/usr/share/omamobile/device-ui.conf"
+grep -qx "OMAMOBILE_BACK_EDGE_INSET=0" environment.d/50-omamobile-back.conf
 test -f "$stage/usr/lib/environment.d/40-omamobile-instantnoodlep-sleep.conf"
 test -f "$stage/usr/lib/systemd/sleep.conf.d/40-omamobile-instantnoodlep.conf"
 grep -qx 'OMAMOBILE_SLEEP_AFTER_OFF=30' environment.d/40-omamobile-instantnoodlep-sleep.conf

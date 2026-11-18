@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # State: where the port stands now
 
-Last updated: 2026-11-18 (USB and touchscreen LUKS2 prototypes; slim K3 RAM-boots; clang 19 builds freeze), claude on omabook.
+Last updated: 2026-11-18 afternoon (morning session: RAM tests of slim features, packages 0.0.6/1.2/0.1.3 installed, module-tree loss found and fixed), claude on omabook.
 
 The one page an agent reads first. Keep it short and current: it is
 overwritten, not appended to. History goes to `device/instantnoodlep/NOTES.md`
@@ -21,16 +21,25 @@ of it from `origin/main` plus the pushed branches.
 | M1b: K2 on slot B as the default boot, B5 success mark | Done [V: NOTES 2026-11-17 night, B4-B5] |
 | K3 (panel, touch, keys, GPU) | Superseded on `boot_b` by daily K3; combo stays the rollback image [V: NOTES 2026-11-17 night] |
 | Daily K3 (combo + Wi-Fi/BT + P1 gauge) | **On `boot_b`, B5 set**: boots from flash to Hyprland on the GPU, Wi-Fi connected, hci0 present [V: NOTES 2026-11-17 night] |
+| Daily2 candidate | [V] Built on macbookpro with clang/LLD 23.1.6, fixed USB peripheral mode, haptics and manual-load charger, `image_size=0x1750000`. [I] RAM qualification pending. Build evidence and checklist in DAILY-K3-PLAN §8. |
 | Slim K3 (daily minus foreign-SoC drivers, `-k3-slim-g78f38a2acc99`) | RAM boot passes on omabook clang 23.1.3: `image_size` 0x1720000 (ceiling `0x2b60000`), USB, `running`, panel, msm GL, Wi-Fi, hci0, gauge; modules on the rootfs. Base for new features; not flashed [V: 2026-11-18 RAM test]. the same tree built with MBP Docker clang 19 freezes on the splash (learning 2026-11-18); P2 froze because its `image_size` 0x2b70000 is over the ceiling |
+| Slim-all Type-C recovery | [V] Two clang/LLD 23.1.6 candidates built offline with `image_size=0x1780000`. [I] QMP DP-exit recovery and static UTMI for the USB2 hub await T6/T7 in [TYPEC-DP-PLAN §7](../../device/instantnoodlep/TYPEC-DP-PLAN.md#7-recovery-candidates-after-dp-disconnect). |
 | Neutral `dtbo_b` (DTBO-PLAN) | Parked: ABL rejected v1 (table) and v2 (raw FDT); stock dtbo back [V: DTBO-PLAN §6; learning `l-48e0c482`] |
 | M3 display stack on the device (hardware GL) | Hardware GL works under combo K3 with the freedreno Mesa (rootfs, not upstream yet) [V: NOTES 2026-11-17 day; learning `l-405b6773`] |
 | M5 (Wi-Fi/BT, modem, GNSS, audio, sensors, power, camera, misc) | All plans written; the five original M5 plans cross-reviewed [V: `device/instantnoodlep/*-M5-PLAN.md`, `GNSS-M5-PLAN.md`, `CAMERA-PLAN.md`, `MISC-HW-PLAN.md`, `M5-REVIEW.md`]. Audio phase 2: TFA987x codec driver series compile-checked offline (clang 23.1.3, checkpatch/dt_binding_check clean), patches in `device/instantnoodlep/patches/audio-tfa987x/`, plan §10; first sound still phone-gated (PR #82 §9) [V: AUDIO-M5-PLAN §10] |
 | M5 Wi-Fi/BT | Daily on `boot_b`: Wi-Fi connects; BT works after `btmgmt public-addr` [V: NOTES 2026-11-17 night]. One persistent phone-local address helper and device package 0.0.4 are proposed in PR #92; phone qualification remains [I] in `DEVICE-PACKAGE-PLAN.md`. |
 | M5 modem/GNSS | Kernel candidate rebuilt on slim K3 with omabook clang 23.1.3: branch `instantnoodlep-k3-slim-modem` @ `7dc2ea318807`, release `7.3.0-rc6-instantnoodlep-k3-slim-modem-g7dc2ea318807`, `image_size` 0x1750000 (ceiling 0x2b60000), dtbs_check clean, RAM image `~/android/build/k3-slim-modem-ram/boot-slim-modem.img` [V: MODEM-M5-DELTA §6.2]. No handset test; private EFS/DDR policy still blocks first boot (gates A-C). The earlier MBP clang 19 candidate (`e9ff58528f8b`) is superseded. |
-| M5 power | P1 gauge works on a RAM boot; P2 charger image hangs early at boot (P2b in progress); no charging under any of our kernels [V: POWER-M5-PLAN §7.3-7.4] |
-| M5 camera (M-CAM1 front IMX471) | Kernel series rebuilt on slim K3 with omabook clang 23.1.3: branch `instantnoodlep-k3-slim-cam` @ `d53d0fd6baaa`, release `7.3.0-rc6-instantnoodlep-k3-slim-cam-gd53d0fd6baaa`, `image_size` 0x1720000 (ceiling 0x2b60000), dtbs_check clean, camera stack (CAMSS/camcc/CCI/imx471) as **modules** so a probe hang cannot block boot, one IMX471 on CCI1 master 1 to CSIPHY3 in the DTB, RAM image `~/android/build/k3-slim-cam-ram/boot-slim-cam.img` [V: CAMERA-PLAN §9.5]. No RAM boot or frame yet; coordinator gates C0-C5 pending. The earlier MBP clang 19 candidate (`g70d0761d1`, image_size 0x2cd0000, froze) is superseded. |
+| M5 power | Charger P2 (`slim-p2`, module loaded by hand) passed P2-5..P2-7 in RAM on 2026-11-18: charges from the laptop at SDP 500 mA, 15 min without a STOP, max 29.7 °C, unplug/replug correct. Not on `boot_b`; the daily K3 still does not charge [V: learning 2026-11-18 slim-all] |
+| M5 camera (M-CAM1 front IMX471) | `boot-slim-cam.img` hung before the root on 2026-11-18 (no journal, no USB); with the camera stack loaded the combined slim-all kernel died within a minute. Camera stays off; C2-C5 not reached [V: learning 2026-11-18 slim-all] |
+
+## Combined slim-all candidate (2026-11-18, not flashed)
+
+- [V] `instantnoodlep-k3-slim-all` @ `gc30e3f696707` (local `~/src/l-k3-slim-all`, omabook): slim-feat + p2 + typec + cam, plus fixes for typec (`op-sink-microwatt`, i2c15 on, xHCI), haptics on, camera off. RAM image `~/android/build/k3-slim-all-ram/v3/boot-slim-all.img`. Passes R checks, haptics buzz, typec T1/T2, DP picture on a USB-C monitor.
+- [V] Blockers before `boot_b`: after DP alt mode the USB gadget dies until reboot (QMP combo PHY init timeout, `ep0out`), and USB2 behind a 4-lane DP monitor does not enumerate (keyboard/mouse). Learning 2026-11-18 slim-all.
 
 ## The phone right now
+
+- [V] Daily K3 on `boot_b` again boots in ~9 s with Wi-Fi after its module tree was restored and pinned in `/usr/lib/modules/.omamobile-pinned`; upstream `omamobile-modules-cleanup` had deleted it at 09:10 (learning 2026-11-18 pin). Packages: device 0.0.6-1, shell 0.2.133-1.2, settings 0.1.3-1 (unsigned, `pacman -U`).
 
 - [V] Slot B active, successful, stock `dtbo_b`
   (B5 redone after the second dtbo try). The Arch root on `userdata`
@@ -78,5 +87,5 @@ See `docs/agents/active/`. Vibe workers on omabook: power P2b, kona, misc-hw, au
   for the shell's phone verification.
 - [V] Chromium and app profile implementation plus x86 self-checks are in PR #99. [I] OnePlus UA/scale, per-app exceptions, optional touch/scroll/pinch and Ozone choices await the morning phone survey in `MOBILE-UX-RESEARCH.md`; no phone testing was done.
 - [V] Signed local pacman-repo tooling, an ALARM rebuild recipe for Mesa/shell/device packages, and x86 dummy-package signing tests are in PR #111. [I] Owner-key creation and phone repo switch/rollback are documented but not run; no phone or real key was used.
-- [V] Unsigned morning package set built 2026-11-18 on macbookpro in the `k3arch` ALARM container (check() passed for each): `omamobile-device-instantnoodlep 0.0.6-1`, `omamobile-shell 0.2.133-1.2` (upstream `c462357` + patches 0001-0004), `omamobile-settings 0.1.3-1` (security patch, incl. two check() fixes found by the build); archives + `SHA256SUMS` in `~/android/build/arm-pkgs-20261118/` on omabook; owner-attended install runbook in `docs/runbooks/MORNING-PKG-RUNBOOK.md`; the localrepo manifest carries these versions. [I] Phone install and verification remain pending; no phone was touched.
+- [V] Unsigned morning package set built 2026-11-18 on macbookpro in the `k3arch` ALARM container (check() passed for each): `omamobile-device-instantnoodlep 0.0.6-1`, `omamobile-shell 0.2.133-1.2` (upstream `c462357` + patches 0001-0004), `omamobile-settings 0.1.3-1` (security patch, incl. two check() fixes found by the build); archives + `SHA256SUMS` in `~/android/build/arm-pkgs-20261118/` on omabook; owner-attended install runbook in `docs/runbooks/MORNING-PKG-RUNBOOK.md`; the localrepo manifest carries these versions. [V] Installed on the phone 2026-11-18. Shell 1.2 broke the launcher (patch 0004 used `anchors.*Margin` on windows); fixed in `0.2.133-1.3` with device `0.0.7-1` (calibrated edge values), both installed, home strip back. See SHELL-UX-PLAN "Launcher regression and fix".
 - [V] Dock/desktop plan and Settings 0.1.4 Displays-page patch are proposed in `device/instantnoodlep/DOCK-DESKTOP-PLAN.md` and `patches/omamobile-settings/0002-settings-displays-page.patch`; the fake-monitor backend fixture passes. The full Settings package check could not build on obsidian because `qmake6` is unavailable. [I] Hotplug desktop transition, persistent monitor rule loading and dock USB input remain phone-gated; keyboard/mouse through the display hub depends on task B.
