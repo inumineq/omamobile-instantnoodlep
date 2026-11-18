@@ -184,3 +184,32 @@ Not verified offline (still pending): the `pkexec`/polkit agent round trip on
 a real session, the lock screen itself on the phone, and the D-Bus single
 instance fixture in `test/all` (needs `shellcheck` on the build host; its
 components were run individually here).
+
+## Displays page patch (0002)
+
+`0002-settings-displays-page.patch` stacks on 0001 at upstream commit
+`c4623572be1c141d602cf99a83ae0bf9e3eea09c` and bumps the package to 0.1.4.
+It adds a Displays page and a fixed-argument backend that reads
+`hyprctl -j monitors all`, presents each output's current and available modes,
+and keeps DSI/eDP outputs read-only. External mode and scale changes are
+validated against the connected output, applied with `hyprctl eval` and
+`hl.monitor`, and stored in a managed section of `~/.config/hypr/monitors.lua`
+without replacing the rest of that user file.
+
+Offline verification on 2026-11-18:
+
+- [V] Applied 0001 and 0002 in order to a clean checkout at the pinned commit;
+  both patch checks passed, and 0002 applied without hunk truncation.
+- [V] `bash test/displays-backend.sh` passed all four checks using a fake
+  `hyprctl` and JSON fixture with DSI-1 plus U3219Q modes 3840x2160@60,
+  2560x1440@60 and 1920x1080@60. It verified current-mode parsing, rejection
+  of DSI-1 writes and unsupported modes, Lua `hl.monitor` application, and
+  preserving user monitor config while updating the managed rule.
+- [V] `bash -n backends/displays.sh test/displays-backend.sh
+  test/security-static.sh` and `git diff --check` passed.
+- [V] The complete package `test/all` stopped at `bin/build` because `qmake6`
+  is not installed on this host. `qmllint`, `qmlformat`, and `shellcheck` are
+  unavailable; the Docker daemon is inaccessible to this worker.
+- [V] No phone was accessed or tested. Live connector names, modes, mode/scale
+  application and login persistence remain phone gates in
+  `device/instantnoodlep/DOCK-DESKTOP-PLAN.md`.

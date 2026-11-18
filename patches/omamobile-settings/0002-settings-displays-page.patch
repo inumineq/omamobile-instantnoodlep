@@ -1,0 +1,596 @@
+# SPDX-License-Identifier: MIT
+# Proposal against upstream c4623572be1c141d602cf99a83ae0bf9e3eea09c, after 0001.
+
+diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -4,4 +4,7 @@
+ A native Qt Quick application with mobile navigation, search, a live Omarchy
+-palette, and About, Display, and Security pages. Security lets the user change
++palette, and About, Display, Displays, and Security pages. Displays lists
++Hyprland outputs and their available modes; external output mode and scale can
++be applied live and saved in `~/.config/hypr/monitors.lua`. The phone panel is
++read-only. Security lets the user change
+ the lock-screen PIN, change the account password, choose the numeric keypad,
+ and opt in to a separate lock-screen PIN.
+
+diff --git a/app/DisplaysPage.qml b/app/DisplaysPage.qml
+new file mode 100644
+--- /dev/null
++++ b/app/DisplaysPage.qml
+@@ -0,0 +1,129 @@
++// SPDX-License-Identifier: MIT
++import QtQuick
++import QtQuick.Controls
++import QtQuick.Layouts
++import "."
++
++ColumnLayout {
++    id: page
++    spacing: 12
++    property var monitors: []
++    property string status: qsTr("Reading connected displays…")
++    property bool busy: true
++    property int reqId: -1
++    readonly property var scales: ["1", "1.25", "1.5", "1.75", "2", "2.25", "2.5", "2.75", "3"]
++
++    function apply(r) {
++        busy = false
++        if (r.error) { status = r.error; return }
++        monitors = r.monitors || []
++        status = monitors.length ? qsTr("External display settings are saved in Hyprland's monitor configuration.")
++                                 : qsTr("No connected displays were found.")
++    }
++    function refresh() {
++        busy = true
++        status = qsTr("Reading connected displays…")
++        reqId = actions.run("displays", ["get"])
++    }
++    Connections {
++        target: actions
++        function onFinished(tool, result, id) {
++            if (tool === "displays" && id === page.reqId) page.apply(result)
++        }
++    }
++    Component.onCompleted: refresh()
++
++    Flickable {
++        Layout.fillWidth: true
++        Layout.fillHeight: true
++        contentWidth: width
++        contentHeight: content.implicitHeight
++        clip: true
++        ColumnLayout {
++            id: content
++            width: parent.width
++            spacing: 14
++            Repeater {
++                model: page.monitors
++                delegate: ColumnLayout {
++                    required property var modelData
++                    property var output: modelData
++                    Layout.fillWidth: true
++                    spacing: 8
++                    SettingsLabel {
++                        text: output.name
++                        color: backend.foreground
++                        font.pixelSize: SettingsStyle.fontPx(17)
++                        font.weight: Font.DemiBold
++                        Layout.fillWidth: true
++                    }
++                    SettingsLabel {
++                        text: output.currentMode.length ? qsTr("Current: %1 · scale %2").arg(output.currentMode).arg(output.scale)
++                                                        : qsTr("Display connected")
++                        color: backend.muted
++                        font.pixelSize: SettingsStyle.fontPx(13)
++                        Layout.fillWidth: true
++                    }
++                    SettingsLabel {
++                        visible: output.internal
++                        text: qsTr("The built-in phone panel is managed by the phone profile.")
++                        color: backend.muted
++                        font.pixelSize: SettingsStyle.fontPx(13)
++                        wrapMode: Text.Wrap
++                        Layout.fillWidth: true
++                    }
++                    ColumnLayout {
++                        visible: !output.internal
++                        Layout.fillWidth: true
++                        spacing: 8
++                        SettingsLabel { text: qsTr("Resolution and refresh rate"); color: backend.foreground; font.weight: Font.DemiBold }
++                        ComboBox {
++                            id: modeChoice
++                            objectName: "displayMode_" + output.name
++                            Layout.fillWidth: true
++                            model: output.availableModes
++                            currentIndex: Math.max(0, output.availableModes.indexOf(output.currentMode))
++                            enabled: !page.busy && output.availableModes.length > 0
++                        }
++                        SettingsLabel { text: qsTr("Scale"); color: backend.foreground; font.weight: Font.DemiBold }
++                        ComboBox {
++                            id: scaleChoice
++                            objectName: "displayScale_" + output.name
++                            Layout.fillWidth: true
++                            model: page.scales
++                            currentIndex: Math.max(0, page.scales.indexOf(String(output.scale)))
++                            enabled: !page.busy
++                        }
++                        SettingsButton {
++                            Layout.fillWidth: true
++                            Layout.preferredHeight: 52
++                            text: qsTr("Apply to %1").arg(output.name)
++                            enabled: !page.busy && modeChoice.currentText.length > 0
++                            onClicked: {
++                                page.busy = true
++                                page.status = qsTr("Applying display settings…")
++                                page.reqId = actions.run("displays", ["set", output.name, modeChoice.currentText, scaleChoice.currentText])
++                            }
++                        }
++                    }
++                    Rectangle { Layout.fillWidth: true; height: 1; color: backend.muted; opacity: 0.25 }
++                }
++            }
++            SettingsLabel {
++                visible: page.monitors.length === 0 || page.busy || page.status.length > 0
++                text: page.status
++                color: backend.muted
++                font.pixelSize: SettingsStyle.fontPx(13)
++                wrapMode: Text.Wrap
++                Layout.fillWidth: true
++            }
++            SettingsButton {
++                Layout.fillWidth: true
++                Layout.preferredHeight: 52
++                text: qsTr("Refresh displays")
++                enabled: !page.busy
++                onClicked: page.refresh()
++            }
++        }
++    }
++}
+diff --git a/app/Main.qml b/app/Main.qml
+--- a/app/Main.qml
++++ b/app/Main.qml
+@@ -24,7 +24,7 @@ ApplicationWindow {
+         if (backend.searching) search.clear()
+         backend.back()
+     }
+-    readonly property var customPages: ({ display: "DisplayPage.qml", security: "SecurityPage.qml" })
++    readonly property var customPages: ({ display: "DisplayPage.qml", security: "SecurityPage.qml", displays: "DisplaysPage.qml" })
+     readonly property string customSource: backend.searching ? "" : (customPages[backend.page] || "")
+     readonly property bool showingAbout: backend.page === "about" && !backend.searching
+     Connections {
+diff --git a/app/actionrunner.cpp b/app/actionrunner.cpp
+--- a/app/actionrunner.cpp
++++ b/app/actionrunner.cpp
+@@ -17,10 +17,20 @@ int ActionRunner::run(const QString &tool, const QStringList &args) {
+ int ActionRunner::run(const QString &tool, const QStringList &args) {
+     static const QRegularExpression word("\\A[a-z0-9]{1,16}\\z");
+-    static const QStringList tools = {"display"};
++    static const QRegularExpression connector("\\A[A-Za-z0-9_.-]{1,32}\\z");
++    static const QRegularExpression mode("\\A[0-9]{3,5}x[0-9]{3,5}@[0-9]{1,3}(?:\\.[0-9]{1,3})?\\z");
++    static const QStringList tools = {"display", "displays"};
+     const int id = ++m_next;
+     auto fail = [this, &tool, id](const QString &why) { post(tool, {{"error", why}}, id); return id; };
+-    if (!tools.contains(tool) || args.size() > 3) return fail("unknown action");
+-    for (const auto &a : args) if (!word.match(a).hasMatch()) return fail("bad argument");
++    if (!tools.contains(tool) || args.size() > (tool == "displays" ? 4 : 3)) return fail("unknown action");
++    if (tool == "displays") {
++        const bool validGet = args == QStringList{"get"};
++        const bool validSet = args.size() == 4 && args[0] == "set"
++            && connector.match(args[1]).hasMatch() && mode.match(args[2]).hasMatch()
++            && QStringList{"1", "1.25", "1.5", "1.75", "2", "2.25", "2.5", "2.75", "3"}.contains(args[3]);
++        if (!validGet && !validSet) return fail("bad argument");
++    } else {
++        for (const auto &a : args) if (!word.match(a).hasMatch()) return fail("bad argument");
++    }
+     const QString dir = "/usr/lib/omamobile-settings/backends";
+     auto *p = new QProcess(this);
+     // bash would run a startup file named by these
+diff --git a/app/catalog.json b/app/catalog.json
+--- a/app/catalog.json
++++ b/app/catalog.json
+@@ -16,6 +16,13 @@
+         "icon": "security",
+         "page": "security"
+       },
++      {
++        "id": "displays",
++        "title": "Displays",
++        "detail": "External monitor mode and scale",
++        "icon": "display",
++        "page": "displays"
++      },
+       {
+         "id": "about",
+         "title": "About this device",
+@@ -36,5 +43,9 @@
+   "security": {
+     "title": "Security",
+     "rows": []
++  },
++  "displays": {
++    "title": "Displays",
++    "rows": []
+   }
+ }
+diff --git a/app/resources.qrc b/app/resources.qrc
+--- a/app/resources.qrc
++++ b/app/resources.qrc
+@@ -5,5 +5,6 @@
+     <file>SecurityPage.qml</file>
+     <file>icons/security.svg</file>
++    <file>DisplaysPage.qml</file>
+     <file>DisplayPage.qml</file>
+     <file>icons/display.svg</file>
+     <file>catalog.json</file>
+diff --git a/backends/displays.sh b/backends/displays.sh
+new file mode 100644
+--- /dev/null
++++ b/backends/displays.sh
+@@ -0,0 +1,238 @@
++#!/bin/bash
++# SPDX-License-Identifier: MIT
++# List Hyprland outputs and apply/persist a mode and scale for external outputs.
++set -euo pipefail
++set +x
++exec /usr/bin/python3 -I - "$@" <<'PY'
++import json
++import os
++import pathlib
++import re
++import stat
++import subprocess
++import sys
++import tempfile
++
++HYPRCTL = "/usr/bin/hyprctl"
++START = "-- BEGIN omamobile-settings displays"
++END = "-- END omamobile-settings displays"
++NAME_RE = re.compile(r"[A-Za-z0-9_.-]{1,32}\Z")
++MODE_RE = re.compile(r"([0-9]{3,5})x([0-9]{3,5})@([0-9]{1,3}(?:\.[0-9]{1,3})?)(?:Hz)?\Z")
++SCALES = {"1", "1.25", "1.5", "1.75", "2", "2.25", "2.5", "2.75", "3"}
++
++
++def fail(message):
++    print(json.dumps({"error": message}, separators=(",", ":")))
++    raise SystemExit(2)
++
++
++def canonical_mode(value):
++    match = MODE_RE.fullmatch(str(value))
++    if not match:
++        return None
++    width, height, refresh = match.groups()
++    return f"{int(width)}x{int(height)}@{float(refresh):g}"
++
++
++def monitors():
++    try:
++        result = subprocess.run([HYPRCTL, "-j", "monitors", "all"], capture_output=True,
++                                text=True, timeout=4, check=False)
++        if result.returncode or len(result.stdout) > 262144:
++            fail("Hyprland could not list displays")
++        raw = json.loads(result.stdout)
++        if not isinstance(raw, list):
++            fail("Hyprland returned invalid display data")
++    except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
++        fail("Hyprland could not list displays")
++    output = []
++    for item in raw[:16]:
++        if not isinstance(item, dict):
++            continue
++        name = item.get("name", "")
++        if not isinstance(name, str) or not NAME_RE.fullmatch(name):
++            continue
++        try:
++            width = int(item.get("width", 0))
++            height = int(item.get("height", 0))
++            scale = float(item.get("scale", 1))
++            refresh = float(item.get("refreshRate", 0))
++        except (TypeError, ValueError):
++            continue
++        available = []
++        modes = item.get("availableModes", [])
++        if isinstance(modes, list):
++            for mode in modes[:128]:
++                normalized = canonical_mode(mode)
++                if normalized and normalized not in available:
++                    available.append(normalized)
++        current = canonical_mode(f"{width}x{height}@{refresh}") if width and height and refresh else ""
++        output.append({
++            "name": name,
++            "width": width,
++            "height": height,
++            "currentMode": current or "",
++            "scale": f"{scale:g}",
++            "availableModes": available,
++            "internal": name.startswith(("DSI-", "eDP-")),
++        })
++    return output
++
++
++def ensure_config_dir(home):
++    for directory in (home / ".config", home / ".config" / "hypr"):
++        try:
++            info = directory.lstat()
++        except FileNotFoundError:
++            directory.mkdir(mode=0o700)
++            info = directory.lstat()
++        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
++            fail("Hyprland config directory is unsafe")
++    return home / ".config" / "hypr" / "monitors.lua"
++
++
++def read_config(path):
++    try:
++        info = path.lstat()
++    except FileNotFoundError:
++        return "", {}, None
++    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_size > 262144:
++        fail("Hyprland monitor config is unsafe")
++    try:
++        text = path.read_text(encoding="utf-8")
++    except (OSError, UnicodeError):
++        fail("Hyprland monitor config cannot be read")
++    start = text.count(START)
++    end = text.count(END)
++    if start != end or start > 1:
++        fail("Hyprland monitor config has an invalid managed section")
++    records = {}
++    if not start:
++        return text, records, stat.S_IMODE(info.st_mode)
++    begin = text.index(START)
++    finish = text.index(END, begin) + len(END)
++    block = text[begin:finish]
++    managed = block.splitlines()[1:-1]
++    if len(managed) % 2:
++        fail("Hyprland monitor config has an invalid managed section")
++    for index in range(0, len(managed), 2):
++        line = managed[index]
++        rule = managed[index + 1]
++        prefix = "-- omamobile-display: "
++        if not line.startswith(prefix):
++            fail("Hyprland monitor config has an invalid managed entry")
++        try:
++            record = json.loads(line[len(prefix):])
++        except json.JSONDecodeError:
++            fail("Hyprland monitor config has an invalid managed entry")
++        name = record.get("name") if isinstance(record, dict) else None
++        mode = canonical_mode(record.get("mode", "")) if isinstance(record, dict) else None
++        scale = str(record.get("scale", "")) if isinstance(record, dict) else ""
++        if not isinstance(name, str) or not NAME_RE.fullmatch(name) or not mode or scale not in SCALES:
++            fail("Hyprland monitor config has an invalid managed entry")
++        expected = f'hl.monitor({{ output = "{name}", mode = "{mode}", position = "auto", scale = {scale} }})'
++        if rule != expected:
++            fail("Hyprland monitor config has an invalid managed rule")
++        records[name] = {"name": name, "mode": mode, "scale": scale}
++    prefix_text = text[:begin]
++    suffix_text = text[finish:]
++    clean = prefix_text.rstrip("\n")
++    if clean and suffix_text:
++        clean += "\n\n" + suffix_text.lstrip("\n")
++    elif clean:
++        clean += "\n"
++    else:
++        clean = suffix_text.lstrip("\n")
++    return clean, records, stat.S_IMODE(info.st_mode)
++
++
++def atomic_write(path, content, mode):
++    fd, temporary = tempfile.mkstemp(prefix=".monitors.lua.", dir=path.parent)
++    try:
++        with os.fdopen(fd, "w", encoding="utf-8") as stream:
++            stream.write(content)
++            stream.flush()
++            os.fsync(stream.fileno())
++        os.chmod(temporary, mode)
++        os.replace(temporary, path)
++        directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
++        try:
++            os.fsync(directory_fd)
++        finally:
++            os.close(directory_fd)
++    finally:
++        try:
++            os.unlink(temporary)
++        except FileNotFoundError:
++            pass
++
++
++def render(base, records):
++    lines = [START]
++    for name in sorted(records):
++        record = records[name]
++        lines.append("-- omamobile-display: " + json.dumps(record, sort_keys=True, separators=(",", ":")))
++        lines.append(f'hl.monitor({{ output = "{name}", mode = "{record["mode"]}", position = "auto", scale = {record["scale"]} }})')
++    lines.append(END)
++    block = "\n".join(lines)
++    if START in base:
++        begin = base.index(START)
++        finish = base.index(END, begin) + len(END)
++        result = base[:begin] + block + base[finish:]
++    else:
++        result = base + ("\n" if base and not base.endswith("\n") else "")
++        result += ("\n" if result else "") + block + "\n"
++    return result
++
++
++def restore(path, previous, mode):
++    if previous is None:
++        try:
++            path.unlink()
++        except FileNotFoundError:
++            pass
++    else:
++        atomic_write(path, previous, mode)
++
++
++def main(args):
++    if args == ["get"]:
++        print(json.dumps({"monitors": monitors()}, separators=(",", ":")))
++        return
++    if len(args) != 4 or args[0] != "set":
++        fail("usage: get|set <name> <mode> <scale>")
++    _, name, requested_mode, scale = args
++    if not NAME_RE.fullmatch(name) or scale not in SCALES:
++        fail("invalid display selection")
++    mode = canonical_mode(requested_mode)
++    if not mode:
++        fail("invalid display mode")
++    outputs = monitors()
++    selected = next((monitor for monitor in outputs if monitor["name"] == name), None)
++    if not selected or selected["internal"]:
++        fail("the built-in panel is read-only or the display disconnected")
++    if mode not in selected["availableModes"]:
++        fail("that mode is not available on this display")
++
++    home = pathlib.Path.home()
++    path = ensure_config_dir(home)
++    base, records, file_mode = read_config(path)
++    previous = path.read_text(encoding="utf-8") if path.exists() else None
++    mode_bits = file_mode if file_mode is not None else 0o600
++    records[name] = {"name": name, "mode": mode, "scale": scale}
++    atomic_write(path, render(base, records), mode_bits)
++
++    lua = f'hl.monitor({{ output = "{name}", mode = "{mode}", position = "auto", scale = {scale} }})'
++    try:
++        result = subprocess.run([HYPRCTL, "eval", lua], capture_output=True, text=True,
++                                timeout=5, check=False)
++        if result.returncode or "error" in (result.stdout + result.stderr).lower():
++            raise RuntimeError
++    except (OSError, subprocess.SubprocessError, RuntimeError):
++        restore(path, previous, mode_bits)
++        fail("Hyprland did not accept the display settings")
++    print(json.dumps({"monitors": monitors(), "saved": True}, separators=(",", ":")))
++
++
++main(sys.argv[1:])
++PY
+diff --git a/install b/install
+--- a/install
++++ b/install
+@@ -10,7 +10,8 @@
+ install -Dm644 "$source_dir/org.omamobile.Settings.desktop" "$dest/usr/share/applications/org.omamobile.Settings.desktop"
+ install -Dm644 "$source_dir/org.omamobile.Settings.svg" "$dest/usr/share/icons/hicolor/scalable/apps/org.omamobile.Settings.svg"
+ install -Dm644 "$source_dir/LICENSE" "$dest/usr/share/licenses/omamobile-settings/LICENSE"
+ install -Dm755 "$source_dir/backends/display.sh" "$dest/usr/lib/omamobile-settings/backends/display.sh"
++install -Dm755 "$source_dir/backends/displays.sh" "$dest/usr/lib/omamobile-settings/backends/displays.sh"
+-
++
+ install -Dm755 "$source_dir/bin/credentials-helper" "$dest/usr/lib/omamobile-settings/credentials-helper"
+ install -Dm755 "$source_dir/bin/verify-lock-pin" "$dest/usr/lib/omamobile-settings/verify-lock-pin"
+diff --git a/test/all b/test/all
+--- a/test/all
++++ b/test/all
+@@ -5,6 +5,7 @@
+ build_dir=${OMAMOBILE_SETTINGS_TEST_BUILD_DIR:-"$source_dir/build/tests"}
+ "$source_dir/bin/build"
+ "$source_dir/test/display-backend.sh"
++/usr/bin/bash "$source_dir/test/displays-backend.sh"
+ "$source_dir/test/security-static.sh"
+ mkdir -p "$build_dir"
+ fixture=$(mktemp -d)
+diff --git a/test/displays-backend.sh b/test/displays-backend.sh
+new file mode 100755
+--- /dev/null
++++ b/test/displays-backend.sh
+@@ -0,0 +1,57 @@
++#!/bin/bash
++# SPDX-License-Identifier: MIT
++set -euo pipefail
++source_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
++tmp=$(mktemp -d)
++trap 'rm -rf -- "$tmp"' EXIT
++fixture="$tmp/monitors.json"
++calls="$tmp/calls"
++fake="$tmp/hyprctl"
++backend="$tmp/displays.sh"
++home="$tmp/home"
++mkdir -p "$home/.config/hypr"
++printf 'hl.config({ general = { layout = "dwindle" } })\n' >"$home/.config/hypr/monitors.lua"
++cat >"$fixture" <<'JSON'
++[
++  {"name":"DSI-1","width":1440,"height":3168,"x":0,"y":0,"scale":3,"refreshRate":120,"availableModes":["1440x3168@120.00Hz","1440x3168@60.00Hz"]},
++  {"name":"DP-1","description":"Dell U3219Q","width":3840,"height":2160,"x":1440,"y":0,"scale":1,"refreshRate":60,"availableModes":["3840x2160@60.00Hz","2560x1440@60.00Hz","1920x1080@60.00Hz"]}
++]
++JSON
++cat >"$fake" <<'FAKE'
++#!/bin/bash
++set -euo pipefail
++if [[ $1 == -j && $2 == monitors && $3 == all ]]; then
++  /usr/bin/cat "$OMAMOBILE_SETTINGS_MONITORS_FIXTURE"
++elif [[ $1 == eval ]]; then
++  /usr/bin/printf '%s\n' "$2" >>"$OMAMOBILE_SETTINGS_HYPRCTL_CALLS"
++  /usr/bin/printf 'ok\n'
++else
++  exit 2
++fi
++FAKE
++chmod 700 "$fake"
++sed "s|HYPRCTL = \"/usr/bin/hyprctl\"|HYPRCTL = \"$fake\"|" \
++  "$source_dir/backends/displays.sh" >"$backend"
++run() {
++  HOME="$home" OMAMOBILE_SETTINGS_MONITORS_FIXTURE="$fixture" \
++    OMAMOBILE_SETTINGS_HYPRCTL_CALLS="$calls" /usr/bin/bash "$backend" "$@"
++}
++result=$(run get)
++python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert [m["name"] for m in d["monitors"]] == ["DSI-1","DP-1"]; assert d["monitors"][0]["internal"] is True; assert d["monitors"][0]["availableModes"] == ["1440x3168@120", "1440x3168@60"]; assert d["monitors"][0]["currentMode"] == "1440x3168@120"; assert d["monitors"][1]["availableModes"] == ["3840x2160@60", "2560x1440@60", "1920x1080@60"]; assert d["monitors"][1]["currentMode"] == "3840x2160@60"' "$result"
++echo 'ok - connected displays include current mode and U3219Q modes; DSI-1 is read-only'
++if run set DSI-1 1440x3168@60 2 >/dev/null 2>&1; then
++  echo 'not ok - built-in panel can be changed' >&2; exit 1
++fi
++if run set DP-1 1280x720@60 1 >/dev/null 2>&1; then
++  echo 'not ok - unavailable mode can be selected' >&2; exit 1
++fi
++echo 'ok - internal panel and unavailable modes are rejected'
++run set DP-1 2560x1440@60 1.5 >/dev/null
++grep -Fq 'hl.monitor({ output = "DP-1", mode = "2560x1440@60", position = "auto", scale = 1.5 })' "$home/.config/hypr/monitors.lua"
++grep -Fq 'hl.config({ general = { layout = "dwindle" } })' "$home/.config/hypr/monitors.lua"
++grep -Fq '"2560x1440@60"' "$calls"
++echo 'ok - selected mode is applied through Lua eval and persisted for login'
++run set DP-1 1920x1080@60 2 >/dev/null
++[[ $(/usr/bin/grep -c '^-- omamobile-display:' "$home/.config/hypr/monitors.lua") == 1 ]]
++grep -Fq 'mode = "1920x1080@60", position = "auto", scale = 2' "$home/.config/hypr/monitors.lua"
++echo 'ok - changing a monitor updates its saved rule without replacing user config'
+diff --git a/test/security-static.sh b/test/security-static.sh
+--- a/test/security-static.sh
++++ b/test/security-static.sh
+@@ -3,7 +3,9 @@
+ set -eu
+ source_dir=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+ qmllint "$source_dir/app/SecurityPage.qml"
++qmllint "$source_dir/app/DisplaysPage.qml"
+ shellcheck "$source_dir/omamobile-settings.install" \
+   "$source_dir/test/security-static.sh" \
+-  "$source_dir/test/security-auth-container.sh"
++  "$source_dir/test/security-auth-container.sh" \
++  "$source_dir/test/displays-backend.sh"
+ python3 -m py_compile "$source_dir/bin/credentials-helper" "$source_dir/bin/verify-lock-pin"
+diff --git a/tests/core_tests.cpp b/tests/core_tests.cpp
+--- a/tests/core_tests.cpp
++++ b/tests/core_tests.cpp
+@@ -18,12 +18,16 @@ private slots:
+     void navigationRejectsUnknownAndHiddenActions() {
+         Backend backend;
+         QVERIFY(backend.catalogProblems().isEmpty());
+-        QCOMPARE(backend.rows().size(), 3);
++        QCOMPARE(backend.rows().size(), 4);
+         QVERIFY(!backend.navigate("recording"));
+         QVERIFY(backend.navigate("security"));
+         QCOMPARE(backend.page(), QString("security"));
+         backend.back();
+         QCOMPARE(backend.page(), QString("root"));
++        QVERIFY(backend.navigate("displays"));
++        QCOMPARE(backend.page(), QString("displays"));
++        backend.back();
++        QCOMPARE(backend.page(), QString("root"));
+         backend.activate("arbitrary-command");
+         QCOMPARE(backend.page(), QString("root"));
+         backend.activate("about");
+diff --git a/version b/version
+--- a/version
++++ b/version
+@@ -1 +1 @@
+-0.1.3
++0.1.4
