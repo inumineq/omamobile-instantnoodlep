@@ -37,3 +37,10 @@ Run the package checks on x86, lint the QML and shell scripts, and use
 `pamtester` with throwaway users in an isolated container to cover both modes,
 account-password separation, rollback, and lockout. No issue has been posted
 upstream.
+
+**Status 2026-11-18:** the offline part is done — `qmllint` on every QML file
+(0 errors), a clean `qmake6`/`make` build, static checks, a 61-check
+`pamtester` matrix in a throwaway archlinux container, and the patch's own
+Debian fixture all pass; commands and results in
+[`patches/omamobile-settings/README.md`](../../patches/omamobile-settings/README.md).
+Still pending: the real `pkexec` round trip and the phone lock session.
