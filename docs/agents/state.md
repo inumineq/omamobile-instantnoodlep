@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # State: where the port stands now
 
-Last updated: 2026-11-18 (USB and touchscreen LUKS2 prototypes; slim K3 RAM-boots; clang 19 builds freeze), claude on omabook.
+Last updated: 2026-11-18 afternoon (morning session: RAM tests of slim features, packages 0.0.6/1.2/0.1.3 installed, module-tree loss found and fixed), claude on omabook.
 
 The one page an agent reads first. Keep it short and current: it is
 overwritten, not appended to. History goes to `device/instantnoodlep/NOTES.md`
@@ -27,10 +27,17 @@ of it from `origin/main` plus the pushed branches.
 | M5 (Wi-Fi/BT, modem, GNSS, audio, sensors, power, camera, misc) | All plans written; the five original M5 plans cross-reviewed [V: `device/instantnoodlep/*-M5-PLAN.md`, `GNSS-M5-PLAN.md`, `CAMERA-PLAN.md`, `MISC-HW-PLAN.md`, `M5-REVIEW.md`]. Audio phase 2: TFA987x codec driver series compile-checked offline (clang 23.1.3, checkpatch/dt_binding_check clean), patches in `device/instantnoodlep/patches/audio-tfa987x/`, plan §10; first sound still phone-gated (PR #82 §9) [V: AUDIO-M5-PLAN §10] |
 | M5 Wi-Fi/BT | Daily on `boot_b`: Wi-Fi connects; BT works after `btmgmt public-addr` [V: NOTES 2026-11-17 night]. One persistent phone-local address helper and device package 0.0.4 are proposed in PR #92; phone qualification remains [I] in `DEVICE-PACKAGE-PLAN.md`. |
 | M5 modem/GNSS | Kernel candidate rebuilt on slim K3 with omabook clang 23.1.3: branch `instantnoodlep-k3-slim-modem` @ `7dc2ea318807`, release `7.3.0-rc6-instantnoodlep-k3-slim-modem-g7dc2ea318807`, `image_size` 0x1750000 (ceiling 0x2b60000), dtbs_check clean, RAM image `~/android/build/k3-slim-modem-ram/boot-slim-modem.img` [V: MODEM-M5-DELTA §6.2]. No handset test; private EFS/DDR policy still blocks first boot (gates A-C). The earlier MBP clang 19 candidate (`e9ff58528f8b`) is superseded. |
-| M5 power | P1 gauge works on a RAM boot; P2 charger image hangs early at boot (P2b in progress); no charging under any of our kernels [V: POWER-M5-PLAN §7.3-7.4] |
-| M5 camera (M-CAM1 front IMX471) | Kernel series rebuilt on slim K3 with omabook clang 23.1.3: branch `instantnoodlep-k3-slim-cam` @ `d53d0fd6baaa`, release `7.3.0-rc6-instantnoodlep-k3-slim-cam-gd53d0fd6baaa`, `image_size` 0x1720000 (ceiling 0x2b60000), dtbs_check clean, camera stack (CAMSS/camcc/CCI/imx471) as **modules** so a probe hang cannot block boot, one IMX471 on CCI1 master 1 to CSIPHY3 in the DTB, RAM image `~/android/build/k3-slim-cam-ram/boot-slim-cam.img` [V: CAMERA-PLAN §9.5]. No RAM boot or frame yet; coordinator gates C0-C5 pending. The earlier MBP clang 19 candidate (`g70d0761d1`, image_size 0x2cd0000, froze) is superseded. |
+| M5 power | Charger P2 (`slim-p2`, module loaded by hand) passed P2-5..P2-7 in RAM on 2026-11-18: charges from the laptop at SDP 500 mA, 15 min without a STOP, max 29.7 °C, unplug/replug correct. Not on `boot_b`; the daily K3 still does not charge [V: learning 2026-11-18 slim-all] |
+| M5 camera (M-CAM1 front IMX471) | `boot-slim-cam.img` hung before the root on 2026-11-18 (no journal, no USB); with the camera stack loaded the combined slim-all kernel died within a minute. Camera stays off; C2-C5 not reached [V: learning 2026-11-18 slim-all] |
+
+## Combined slim-all candidate (2026-11-18, not flashed)
+
+- [V] `instantnoodlep-k3-slim-all` @ `gc30e3f696707` (local `~/src/l-k3-slim-all`, omabook): slim-feat + p2 + typec + cam, plus fixes for typec (`op-sink-microwatt`, i2c15 on, xHCI), haptics on, camera off. RAM image `~/android/build/k3-slim-all-ram/v3/boot-slim-all.img`. Passes R checks, haptics buzz, typec T1/T2, DP picture on a USB-C monitor.
+- [V] Blockers before `boot_b`: after DP alt mode the USB gadget dies until reboot (QMP combo PHY init timeout, `ep0out`), and USB2 behind a 4-lane DP monitor does not enumerate (keyboard/mouse). Learning 2026-11-18 slim-all.
 
 ## The phone right now
+
+- [V] Daily K3 on `boot_b` again boots in ~9 s with Wi-Fi after its module tree was restored and pinned in `/usr/lib/modules/.omamobile-pinned`; upstream `omamobile-modules-cleanup` had deleted it at 09:10 (learning 2026-11-18 pin). Packages: device 0.0.6-1, shell 0.2.133-1.2, settings 0.1.3-1 (unsigned, `pacman -U`).
 
 - [V] Slot B active, successful, stock `dtbo_b`
   (B5 redone after the second dtbo try). The Arch root on `userdata`
