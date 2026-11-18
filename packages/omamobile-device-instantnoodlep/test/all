@@ -10,8 +10,11 @@ scripts=(
   install
   omamobile-device-instantnoodlep.install
   bin/omamobile-bt-public-addr
+  bin/omamobile-instantnoodlep-mobile-profile
+  bin/omamobile-instantnoodlep-app-launcher
   test/all
   test/bt-public-addr
+  test/mobile-profile.sh
 )
 bash -n "${scripts[@]}"
 shellcheck "${scripts[@]}"
@@ -20,6 +23,7 @@ trap 'rm -f "$srcinfo"' EXIT
 makepkg --printsrcinfo > "$srcinfo"
 grep -q "^pkgbase = omamobile-device-instantnoodlep$" "$srcinfo"
 ./test/bt-public-addr
+./test/mobile-profile.sh
 
 stage=$(mktemp -d)
 trap 'rm -rf "$stage" "$srcinfo"' EXIT
@@ -30,6 +34,13 @@ cmp -s firmware.map ../../device/instantnoodlep/firmware.map
 test -f "$stage/usr/share/uwsm/env.d/90-omamobile-instantnoodlep-graphics"
 test -f "$stage/usr/lib/environment.d/50-omamobile-back.conf"
 test -f "$stage/usr/lib/systemd/system/omamobile-bt-public-addr@.service"
+test -f "$stage/usr/share/omamobile/instantnoodlep-mobile-profile/instantnoodlep.conf"
+test -f "$stage/usr/share/omamobile/instantnoodlep-mobile-profile/apps.conf"
+test -x "$stage/usr/bin/omamobile-instantnoodlep-mobile-profile"
+test -x "$stage/usr/bin/omamobile-instantnoodlep-app-launcher"
+test -f "$stage/usr/lib/systemd/user/omamobile-instantnoodlep-mobile-profile.service"
+test -L "$stage/usr/lib/systemd/user/graphical-session-pre.target.wants/omamobile-instantnoodlep-mobile-profile.service"
+test "$(readlink "$stage/usr/lib/systemd/user/graphical-session-pre.target.wants/omamobile-instantnoodlep-mobile-profile.service")" = ../omamobile-instantnoodlep-mobile-profile.service
 test -f "$stage/usr/lib/udev/rules.d/80-omamobile-bt-public-addr.rules"
 test -L "$stage/etc/systemd/system/systemd-firstboot.service"
 test "$(readlink "$stage/etc/systemd/system/systemd-firstboot.service")" = /dev/null

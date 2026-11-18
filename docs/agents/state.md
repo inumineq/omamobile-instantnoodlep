@@ -75,3 +75,4 @@ See `docs/agents/active/`. Vibe workers on omabook: power P2b, kona, misc-hw, au
   udev match, geometry and vconsole behavior remain unverified on the phone.
   PR #92 supersedes #76 and #77; those PRs are closed. PR #79 remains open
   for the shell's phone verification.
+- [V] Chromium and app profile implementation plus x86 self-checks are in this branch; PR review pending. [I] OnePlus UA/scale, per-app exceptions, optional touch/scroll/pinch and Ozone choices await the morning phone survey in `MOBILE-UX-RESEARCH.md`; no phone testing was done.
