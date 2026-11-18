@@ -4,6 +4,47 @@
 Newest first. Findings that matter beyond one subsystem go here; subsystem
 detail lives in the *-PLAN.md files.
 
+## 2026-11-18 (evening, omabook): feature kernels on slim K3 built offline as 5 RAM candidates
+
+- [V] Branches in `inumineq/linux-omarchy-mobile`:
+  `instantnoodlep-k3-slim-p2` @ `16aef753f820` (slim `78f38a2acc99` + the 16
+  PM8150B charger commits of `instantnoodlep-k3-power`, gauge commit
+  excluded as already in the base) and `instantnoodlep-k3-slim-feat` @
+  `48f4edd637f6` (slim + misc `54e78db29e38` + audio `a91c151bd3c7` +
+  sensors `31f48b0d15b3` + kona `48f4edd637f6`; only the DTS alias hunks
+  conflicted, resolved by keeping both sides). Built on the MBP Docker
+  `k3arch` (clang 23.1.5, `make ARCH=arm64 LLVM=1 -j10 Image.gz dtbs
+  modules`, rc=0 each).
+- [V] `image_size` (od -An -tx8 -j16 -N8 Image): p2 0x1720000, misc
+  0x1720000, audio 0x1720000, sensors 0x1740000, kona 0x1720000 — all far
+  under the 0x2b60000 ABL ceiling (KERNEL-SIZE §1). The P2 series that
+  froze as `k3-power-p2` (0x2b70000) fits on slim because the charger is a
+  module (`CONFIG_CHARGER_QCOM_SMB5=m`, P2b tip) and slim's base is 15 MB
+  smaller.
+- [V] Config diffs vs the slim `.config` after in-container olddefconfig:
+  p2 adds only `CHARGER_QCOM_SMB5=m`; misc only `INPUT_AW8695_HAPTICS=m`;
+  audio and kona add nothing; sensors adds the in-tree
+  `kernel/configs/instantnoodlep-sensors.config` =y set. `LOCALVERSION` was
+  pinned per step (the MBP tree has no git, so `LOCALVERSION_AUTO` cannot
+  append `-g<sha>`).
+- [V] `CHECK_DTBS=y` on the board DTB: exit 0, no diagnostics, all five
+  steps (dtschema venv on omabook). Modules tarballs: `INSTALL_MOD_STRIP=1`,
+  `build`/`source` links removed (0 in the archive).
+- [V] RAM images built with `tools/build-instantnoodlep-probe`, exact
+  daily-manifest flags (`--boot 2 --root userdata --debug-shell`, stock
+  entry-16 overlay + `--ufdt-apply`), builder read-back OK:
+  `~/android/build/k3-slim-p2-ram/boot-slim-p2.img` (sha256
+  `e64d16af3f1f…f8e55b`) and in `~/android/build/k3-slim-feat-ram/`
+  `boot-slim-feat-misc.img` (`d9d49fbdf008…235e64b7`),
+  `boot-slim-feat-audio.img` (`dd1167f5f02a…85d12ff`),
+  `boot-slim-feat-sensors.img` (`d2c063e6ec11…20edf2d`),
+  `boot-slim-feat-kona.img` (`e4eb5b1b383b…3d64849`). Full hashes in each
+  image's `.SHA256SUMS`. The kona probe DTB is byte-identical to daily's
+  (`d869935b…`): the kona revert restores the `qcom,sm8250` root compatible.
+- [V] Runbook: `docs/runbooks/SLIM-FEAT-RUNBOOK.md` (Part R of
+  DAILY-K3-RUNBOOK per candidate + each feature's gated steps from PR
+  #69/#83/#82/#81/#84). No phone step ran; nothing was flashed.
+
 ## 2026-11-17 (night): daily K3 on boot_b, B5 set
 
 - [V] Part R (RAM boot of `boot-daily.img`) passed: `running`, panel
