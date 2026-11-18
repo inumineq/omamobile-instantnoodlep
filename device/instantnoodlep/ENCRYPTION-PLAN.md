@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # ENCRYPTION-PLAN: LUKS2 on instantnoodlep `userdata`
 
-Status (2026-11-18): **design only. No code or phone changes have been made.** This plan adapts derekross/omarchy-mobile's [SECURITY-PLAN.md](https://github.com/derekross/omarchy-mobile/blob/main/docs/SECURITY-PLAN.md) to the OnePlus 8 Pro (`instantnoodlep`) port. The bootloader remains unlocked (orange state); this plan does not propose relocking it. It covers an encrypted root on `userdata`, the boot unlock path, a two-secret proposal for upstream, and preserving the current ext4 root during migration.
+Status (2026-11-18): **offline prototype in progress; no phone changes or device tests.** This plan adapts derekross/omarchy-mobile's [SECURITY-PLAN.md](https://github.com/derekross/omarchy-mobile/blob/main/docs/SECURITY-PLAN.md) to the OnePlus 8 Pro (`instantnoodlep`) port. The bootloader remains unlocked (orange state); this plan does not propose relocking it. It covers an encrypted root on `userdata`, the boot unlock path, a two-secret proposal for upstream, and preserving the current ext4 root during migration.
 
 Evidence marks: **[V]** checked against a file, issue, or cited upstream document; **[I]** inference or a device fact that still needs a read-only check. Recommendations and proposed work are design choices, not claims of completed implementation.
 
@@ -47,11 +47,12 @@ Why split them: the upstream plan identifies offline guessing of a short PIN fro
 Add the required options to the instantnoodlep kernel configuration, then verify dependencies and the final merged config against the kernel tree's Kconfig (do not assume a symbol name or default from another kernel version):
 
 - `CONFIG_BLK_DEV_DM=y` and `CONFIG_DM_CRYPT=y` for device mapper and dm-crypt.
-- `CONFIG_CRYPTO_AES=y`, `CONFIG_CRYPTO_XTS=y`, and the selected ARM64 AES implementation/accelerator. Upstream records `CONFIG_CRYPTO_AES_ARM64_CE_BLK=y` in its reference config [V: upstream SECURITY-PLAN.md §2]; confirm the exact symbol and dependencies in this kernel tree before using it [I].
+- `CONFIG_KERNEL_MODE_NEON=y`, `CONFIG_CRYPTO_AES=y`, `CONFIG_CRYPTO_XTS=y`, and the ARM64 AES implementation. Upstream records `CONFIG_CRYPTO_AES_ARM64_CE_BLK=y` in its reference config [V: upstream SECURITY-PLAN.md §2]; confirm the exact symbol and dependencies in this kernel tree before using it [I].
+- `CONFIG_CRYPTO_SHA256=y` and `CONFIG_CRYPTO_SHA2_ARM64_CE=y` provide the SHA-2 generic and ARMv8 CE paths; the CE option selects the arm64 SHA-256 provider in Linux v6.12 Kconfig [V: `arch/arm64/crypto/Kconfig`, v6.12 lines 50-64]. Confirm that this symbol still exists in the port's kernel version [I].
 - Enable any hash/crypto providers cryptsetup's chosen LUKS2 setup requires, and retain the UFS, SCSI, block, and ext4 support already needed to find and mount `userdata`.
 - Prefer built-in support for the initramfs path so unlock does not depend on loading modules from the still-encrypted root. If any required component is modular, include matching modules and dependencies in the initramfs and prove they load before `cryptsetup open`.
 
-These are candidate requirements [I] until validated against the actual kernel tree and a built `.config`. Benchmark AES-XTS and the selected PBKDF on the phone before choosing a cost. Record both the kernel `Image` header `image_size` and initramfs size; hard stop if `image_size` exceeds `0x2b60000`, and target `0x2560000` or below [V: KERNEL-SIZE.md]. If crypto support exceeds the budget, remove unrelated built-in features with review; do not silently omit encryption support or boot an over-limit image.
+The fragment adds those symbols to `kernel-slim.config`. Estimated built-in `image_size` increase: **0x10000–0x40000 (64–256 KiB) [I]**, including dm-crypt and the AES/SHA/XTS providers; the exact figure depends on the kernel tree, selected providers and linker alignment. This is a planning estimate, not a build measurement. The recorded slim baseline is `0x1720000` [V: `docs/agents/state.md` slim K3 row]; measure the merged kernel before RAM boot. The hard stop is `image_size > 0x2b60000`, with `0x2560000` or below preferred [V: KERNEL-SIZE.md]. If crypto support exceeds the budget, remove unrelated built-in features with review; do not silently omit encryption support or boot an over-limit image.
 
 ### 4.2 Initramfs unlock path
 
@@ -60,6 +61,14 @@ These are candidate requirements [I] until validated against the actual kernel t
 3. Initial implementation: boot to initramfs, bring up the existing USB gadget and dropbear, authenticate with the owner's SSH key from a trusted laptop, and run `cryptsetup open` interactively on the `userdata` block device. Do not put the passphrase in a command argument, environment variable, shell history, or log. A PTY prompt over USB SSH is the temporary input route; do not expose dropbear on Wi-Fi [I].
 4. Mount the mapped device as ext4, run filesystem checks/resizing against the mapping (never raw `userdata`), then continue the existing `switch_root` path [I]. Fail closed on missing mapper, wrong LUKS UUID, or failed filesystem check; never fall back to mounting raw `userdata` as ext4.
 5. Later shared upstream work: add an on-screen passphrase entry UI in the initramfs. Keep USB SSH as an owner/debug mode only until touch input, screen privacy, retry behavior, and shell removal have been reviewed. The UI must not expose the entered secret in logs or kernel command line [I].
+
+The offline prototype adds `--luks2` to `tools/build-instantnoodlep-probe`, a `cryptroot-unlock` command that discovers the partition by `PARTNAME=userdata`, and a fail-closed init handoff that waits for `/dev/mapper/omamobile-root` and verifies its source before filesystem checks/mount. An x86_64 QEMU test is provided at `tests/instantnoodlep-cryptroot-qemu`; it formats an isolated GPT/LUKS2 image through a host loop device and checks open/mount in a VM. The QEMU gate is pending until run with the test's required QEMU kernel and host tools [I].
+
+### 4.3 Persistent initramfs Dropbear host key
+
+At install time, run `scripts/provision-initramfs-dropbear-host-key.sh` as root on the phone. It creates an Ed25519 host key once at `/etc/dropbear/dropbear_ed25519_host_key` on the rootfs, retains it on later runs, and writes the matching `.pub` file. Copy the private key to a protected path outside this repository, then pass it to `scripts/prepare-initramfs-root.sh --dropbear-host-key <copy>`; the recipe installs the key only into the external initramfs build root at `/etc/dropbear`. Building with `--luks2` requires that key and changes Dropbear from `-R` ephemeral-key generation to the explicit key file. No private host key belongs in Git, a PR, a manifest or a public log.
+
+The public key must be installed in the laptop's `known_hosts` from a separately trusted source before entering the LUKS passphrase. The first boot needed to generate the phone key still uses the existing ephemeral initramfs host key; no passphrase should be sent through an unauthenticated SSH session. The phone-generation/export and known-host enrollment steps remain device gates, not verified behavior [I].
 
 The two-secret lock-screen PAM service is a separate userspace change. It must use its own hash, impose a 10-try lockout, and not modify the long account password. Test lock, unlock, `sudo`, polkit, faillock reset policy, and account recovery before rollout [I].
 
@@ -142,15 +151,15 @@ Before W2, rollback is simply stop and retain the existing ext4. After W2, the e
 
 ## 6. Phases and upstream proposal
 
-1. **P0, read-only facts:** confirm current initramfs dropbear contents/key handling, device-mapper and UFS behavior, exact root backup size, PAM service/hash behavior, and available recovery path.
-2. **P1, offline kernel/initramfs work:** add config, cryptsetup packaging and mapper-aware init; measure kernel `image_size` and initramfs sizes; test on host images before any phone boot.
-3. **P2, gated migration:** execute W1-W4 only with the owner's per-step go and a verified backup. W4 is RAM-only; a persistent slot-B install remains blocked on the upstream qcom-abl update path.
+1. **P0, read-only facts:** confirm the on-phone key generation/export and known-host enrollment flow; inspect the merged kernel config; record the exact root backup size, PAM/hash behavior and recovery path.
+2. **P1, offline prototype (code in this PR):** crypto config fragment, cryptsetup package in the initramfs recipe, persistent Dropbear key import, mapper-aware `--luks2` boot path, and the x86_64 QEMU/loop test. Run `tests/instantnoodlep-encryption`, the QEMU test when dependencies/kernel are available, and `scripts/trail-lite lint`. The image-size estimate remains unmeasured until the correct kernel tree is built.
+3. **P2, gated migration:** execute W1-W3 only with the owner's per-write go and a verified backup; W4 is a RAM-only test after the independent host key is enrolled. A persistent slot-B install remains blocked on the upstream qcom-abl update path.
 4. **P3, two-secret proposal:** send upstream a design proposal for the long disk/account passphrase plus a separate short lock-screen PIN hash/service with a 10-try lockout. Keep this proposal distinct from changing the upstream SECURITY-PLAN's default boot credential; no upstream posting is part of this plan.
 5. **P4, on-screen boot entry:** implement after USB SSH unlock has been validated; share the UI design upstream.
 
 ## 7. Open questions [I]
 
-1. What independent channel will authenticate the per-boot dropbear host key? The existing probe generates a new key each boot and disables known-host checks [V: `device/instantnoodlep/NOTES.md:426-430`]. Does the exact initramfs image bind dropbear only to USB?
+1. Does phone-side host-key generation, secure export, and known-host enrollment work across reinstall/rebuild without putting the private key in Git or an unauthenticated SSH session?
 2. Which crypto options are selected in the actual merged slim `.config`, which are needed by cryptsetup for LUKS2 on this kernel, and what is their built-in `Image` size cost?
 3. Does the phone's UFS/ABL path expose `userdata` early enough for dm-crypt, and does its partition remain writable under the existing guard when the mapper is created?
 4. Can the current initramfs run cryptsetup's LUKS2 Argon2id PBKDF with enough memory and acceptable latency? What measured time/memory settings are safe at boot?

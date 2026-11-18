@@ -8,8 +8,11 @@ Usage: tools/build-instantnoodlep-probe --kernel Image.gz --dtb board.dtb \
          --initramfs-root /path/to/aarch64-alpine-root \
          --stock-overlay dtbo-entry16.dtbo --boot 1 --out out/boot.img
 
---initramfs-root is a prepared, offline aarch64 Alpine root with BusyBox,
-Dropbear, iproute2, util-linux and kmod, plus qcom_wdt matching the kernel.
+-initramfs-root is a prepared, offline aarch64 Alpine root with BusyBox,
+Dropbear, cryptsetup, iproute2, util-linux and kmod, plus qcom_wdt matching
+the kernel. `--luks2` requires the phone-generated Dropbear host key imported
+under etc/dropbear by prepare-initramfs-root.sh; key material stays outside
+the repository and is included only in the private boot image artifact.
 The builder executes none of its aarch64 binaries. It overlays the shared
 initramfs/init from --omarchy-mobile, adds only the supplied public key and
 RAM-probe settings, and packs with the host cpio and gzip. This follows the
@@ -156,8 +159,8 @@ def validate_public_key(path):
         raise BuildError("invalid SSH public key") from error
 
 
-def patch_init(text):
-    """Apply the dipper-style SM8250 watchdog patch to the shared init."""
+def patch_init(text, *, luks2=False, persistent_host_key=False):
+    """Patch the shared init for the watchdog and optional LUKS2 root."""
     anchor = "hostname omamobile\n"
     replacement = """# SM8250's watchdog keeps running until a driver claims it.
 modprobe qcom_wdt || echo "omamobile: qcom watchdog module failed" >/dev/kmsg
@@ -172,6 +175,42 @@ hostname omamobile
     if patched.count("modprobe qcom_wdt") != 1 or \
             patched.count("watchdog -t 5 -T 30 /dev/watchdog0") != 1:
         raise BuildError("watchdog patch did not apply exactly once")
+    if persistent_host_key:
+        dropbear = 'dropbear -R -E -p 22 2>/dev/null && say "ssh: root@172.16.42.1"'
+        static_dropbear = ('dropbear -E -p 22 -r '
+                           '/etc/dropbear/dropbear_ed25519_host_key '
+                           '2>/dev/null && say "ssh: root@172.16.42.1"')
+        if patched.count(dropbear) != 1:
+            raise BuildError("shared init changed: dropbear launch anchor is not unique")
+        patched = patched.replace(dropbear, static_dropbear)
+    if luks2:
+        part_anchor = '  [ -n "$dev" ] || { say "arch: no userdata partition"; return 1; }\n'
+        cryptroot = part_anchor + '''  if [ -e /etc/omamobile-root-luks2 ]; then
+    cryptsetup isLuks --type luks2 "$dev" || {
+      say "arch: userdata is not LUKS2; staying in the initramfs"; return 1;
+    }
+    local rawdev="$dev" mapper=/dev/mapper/omamobile-root status i=0
+    if [ ! -b "$mapper" ]; then
+      say "arch: encrypted userdata; run cryptroot-unlock over USB SSH"
+      while [ "$i" -lt 1800 ] && [ ! -b "$mapper" ]; do
+        sleep 1; i=$((i + 1))
+      done
+    fi
+    [ -b "$mapper" ] || {
+      say "arch: encrypted root was not unlocked; staying in the initramfs"; return 1;
+    }
+    status=$(cryptsetup status omamobile-root) || {
+      say "arch: cannot verify the root mapping; staying in the initramfs"; return 1;
+    }
+    echo "$status" | grep -F "device: $rawdev" >/dev/null || {
+      say "arch: root mapping is not backed by userdata; staying in the initramfs"; return 1;
+    }
+    dev="$mapper"
+  fi
+'''
+        if patched.count(part_anchor) != 1:
+            raise BuildError("shared init changed: userdata partition anchor is not unique")
+        patched = patched.replace(part_anchor, cryptroot)
     return patched
 
 
@@ -249,7 +288,31 @@ def assert_allowlist(ramdisk, root):
             raise BuildError(f"--root userdata image must not contain /{extra}")
 
 
-def build_initramfs(rootfs, shared_init, key, output, work, root="none"):
+def assert_luksroot(ramdisk):
+    names = cpio_names(ramdisk)
+    required = (
+        "etc/omamobile-root-luks2",
+        "etc/dropbear/dropbear_ed25519_host_key",
+        "usr/local/sbin/cryptroot-unlock",
+        "sbin/cryptsetup",
+    )
+    for name in required:
+        if name not in names and not any(name == path for path in names):
+            # Alpine can place cryptsetup in /usr/sbin instead of /sbin.
+            if name != "sbin/cryptsetup" or "usr/sbin/cryptsetup" not in names:
+                raise BuildError(f"--luks2 initramfs lacks /{name}")
+    if cpio_file(ramdisk, "etc/omamobile-root-luks2").decode().strip() != "luks2":
+        raise BuildError("invalid LUKS2 root marker")
+    if not cpio_file(ramdisk, "etc/dropbear/dropbear_ed25519_host_key"):
+        raise BuildError("persistent Dropbear host key is empty")
+    init = cpio_file(ramdisk, "init").decode()
+    if "/etc/dropbear/dropbear_ed25519_host_key" not in init or "dropbear -R" in init:
+        raise BuildError("LUKS2 initramfs does not use the persistent Dropbear key")
+    if "cryptroot-unlock" not in init:
+        raise BuildError("LUKS2 initramfs does not wait for cryptroot-unlock")
+
+
+def build_initramfs(rootfs, shared_init, key, output, work, root="none", *, luks2=False):
     stage = work / "rootfs"
     shutil.copytree(rootfs, stage, symlinks=True)
     (stage / "proc").mkdir(exist_ok=True)
@@ -271,6 +334,24 @@ def build_initramfs(rootfs, shared_init, key, output, work, root="none"):
                  "omamobile-bringup-probe", "omamobile-root-label",
                  "omamobile-root-mode"):
         remove_file(etc / name)
+    if luks2:
+        host_key = etc / "dropbear/dropbear_ed25519_host_key"
+        if not host_key.is_file() or host_key.is_symlink():
+            raise BuildError("--luks2 requires the phone-generated Dropbear host key in the initramfs root")
+        if host_key.stat().st_mode & 0o077:
+            raise BuildError("Dropbear host key must have no group/other permissions")
+        if not any((stage / path).is_file() for path in
+                   ("sbin/cryptsetup", "usr/sbin/cryptsetup", "usr/bin/cryptsetup")):
+            raise BuildError("--luks2 requires cryptsetup in the prepared initramfs root")
+        unlock_source = Path(__file__).resolve().parents[1] / \
+            "device/instantnoodlep/initramfs/cryptroot-unlock"
+        if not unlock_source.is_file():
+            raise BuildError("cryptroot-unlock script is missing from the repository")
+        unlock = stage / "usr/local/sbin/cryptroot-unlock"
+        unlock.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(unlock_source, unlock)
+        unlock.chmod(0o755)
+        (etc / "omamobile-root-luks2").write_text("luks2\n")
     if root == "userdata":
         (etc / "omamobile-ufs-rw").write_text(ROOT_ALLOWLIST + "\n")
         (etc / "omamobile-root-label").write_text(ROOT_LABEL + "\n")
@@ -278,10 +359,15 @@ def build_initramfs(rootfs, shared_init, key, output, work, root="none"):
     (etc / "omamobile-usb-product").write_text(
         "OnePlus 8 Pro RAM-only probe\n" if root == "none"
         else "OnePlus 8 Pro tethered Omarchy Mobile\n")
-    (stage / "init").write_text(patch_init(shared_init.read_text()))
+    (stage / "init").write_text(patch_init(
+        shared_init.read_text(), luks2=luks2,
+        persistent_host_key=luks2 or
+        (etc / "dropbear/dropbear_ed25519_host_key").is_file()))
     (stage / "init").chmod(0o755)
     pack_rootfs(stage, output)
     assert_allowlist(output, root)
+    if luks2:
+        assert_luksroot(output)
 
 
 def fdt_get(dtb, node, prop, kind="s"):
@@ -625,6 +711,8 @@ def build(args):
         raise BuildError("--root must be none or userdata")
     if args.root == "userdata" and args.boot != 2:
         raise BuildError("--root userdata needs --boot 2 (UFS enabled)")
+    if args.luks2 and args.root != "userdata":
+        raise BuildError("--luks2 needs --root userdata")
     if args.debug_shell and args.root != "userdata":
         raise BuildError("--debug-shell needs --root userdata")
     cmdline = boot_cmdline(args.root, args.debug_shell)
@@ -650,6 +738,8 @@ def build(args):
     needed = ["bin/busybox", "usr/sbin/dropbear"]
     if args.root == "userdata":
         needed += ["e2fsck", "dumpe2fs", "resize2fs"]
+    if args.luks2:
+        needed += ["cryptsetup"]
     for relative in needed:
         if "/" not in relative:
             if not any((args.initramfs_root / d / relative).exists()
@@ -663,6 +753,15 @@ def build(args):
     validate_public_key(args.ssh_key)
     if args.ufdt_apply is not None and not os.access(args.ufdt_apply, os.X_OK):
         raise BuildError(f"--ufdt-apply is not executable: {args.ufdt_apply}")
+    if args.luks2:
+        host_key = args.initramfs_root / "etc/dropbear/dropbear_ed25519_host_key"
+        if not host_key.is_file() or host_key.is_symlink():
+            raise BuildError("--luks2 requires a phone-generated Dropbear host key in --initramfs-root")
+        repository = Path(__file__).resolve().parents[1]
+        if host_key.resolve().is_relative_to(repository):
+            raise BuildError("private Dropbear host keys must stay outside the repository")
+        if host_key.stat().st_mode & 0o077:
+            raise BuildError("Dropbear host key must have no group/other permissions")
     labels = overlay_labels(args.stock_overlay)
     if args.mkbootimg.name != "mkbootimg.py":
         raise BuildError("--mkbootimg must name AOSP mkbootimg.py")
@@ -677,7 +776,7 @@ def build(args):
             check_overlay_applies(args.ufdt_apply, staged["dtb"],
                                   args.stock_overlay, work)
         build_initramfs(args.initramfs_root, shared_init, args.ssh_key,
-                        staged["ramdisk"], work, args.root)
+                        staged["ramdisk"], work, args.root, luks2=args.luks2)
         expected_size = check_image_sizes(
             args.kernel.stat().st_size, staged["ramdisk"].stat().st_size,
             staged["dtb"].stat().st_size, kernel_image_size(args.kernel))
@@ -689,6 +788,8 @@ def build(args):
             staged["boot"], args.mkbootimg, args.kernel,
             staged["ramdisk"], staged["dtb"], work, args.root, cmdline)
         verify_probe_dtb(unpacked / "dtb", args.boot, labels)
+        if args.luks2:
+            assert_luksroot(unpacked / "ramdisk")
 
         outputs = {}
         for name in ("boot", "dtb", "ramdisk"):
@@ -701,6 +802,7 @@ def build(args):
             "device": "instantnoodlep",
             "boot": args.boot,
             "root": args.root,
+            "luks2": args.luks2,
             "debug_shell": args.debug_shell,
             "header": info,
             "boot_image_limit": {
@@ -752,6 +854,8 @@ def main(argv=None):
     parser.add_argument("--root", default="none",
                         help="none (RAM probe) or userdata: tethered M2, hand over "
                              "to Arch on userdata with an allowlist of userdata only")
+    parser.add_argument("--luks2", action="store_true",
+                        help="with --root userdata, unlock LUKS2 via cryptroot-unlock over USB SSH")
     parser.add_argument("--debug-shell", action="store_true",
                         help="with --root userdata: add " + DEBUG_SHELL)
     parser.add_argument("--out", type=Path, required=True,
