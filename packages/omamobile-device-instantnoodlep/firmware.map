@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: MIT
+# firmware.map for instantnoodlep (OnePlus 8 Pro IN2023, SM8250). DRAFT (FIRMWARE-PLAN F6).
+#
+# Names only: no firmware bytes live in this repository (AGENTS.md rule 8).
+# Each line is  <image>:<member>|<destination>
+#   <image>        partition image dumped from the owner's own verified OTA
+#                  payload.bin (vendor = EROFS; modem/bluetooth = FAT16;
+#                  dsp filesystem still to verify if sensor-library rows land)
+#   <member>       absolute path inside that image
+#   <destination>  path under /lib/firmware
+# A .mdt member mapped to a .mbn destination means: join the .mdt and its
+# .bNN segments with pil-squasher. Upstream's format is
+# `source-in-vendor|destination` (U/docs/RELEASES.md:166); the `<image>:`
+# prefix extends it because this phone keeps its firmware in three images.
+#
+# Never mapped: per-unit DDR training, identity or calibration data
+# (modem:/image/sdx55m/mdmddr.mbn, modem:/image/sdx55m/efs*.bin,
+# modem:/image/sdx55m/modemr.jsn, vendor:/firmware/wlan/qca_cld/qca6390/wlan_mac.bin).
+
+# GPU zap shader, vendor-signed (M3). Path as in D kernel patch 0004.
+vendor:/firmware/a650_zap.mdt|qcom/sm8250/OnePlus/instantnoodlep/a650_zap.mbn
+
+# SoC remoteprocs, vendor-signed (M5). Per-device dir as mainline elish does
+# (sm8250-xiaomi-elish-common.dtsi: qcom/sm8250/xiaomi/elish/*.mbn).
+modem:/image/adsp.mdt|qcom/sm8250/OnePlus/instantnoodlep/adsp.mbn
+modem:/image/cdsp.mdt|qcom/sm8250/OnePlus/instantnoodlep/cdsp.mbn
+modem:/image/slpi.mdt|qcom/sm8250/OnePlus/instantnoodlep/slpi.mbn
+modem:/image/venus.mdt|qcom/sm8250/OnePlus/instantnoodlep/venus.mbn
+
+# SDX55 modem over MHI (M5). pci_generic hardcodes qcom/sdx55m/sbl1.mbn.
+modem:/image/sdx55m/sbl1.mbn|qcom/sdx55m/sbl1.mbn
+modem:/image/sdx55m/acdb.mbn|qcom/sdx55m/acdb.mbn
+modem:/image/sdx55m/aop.mbn|qcom/sdx55m/aop.mbn
+modem:/image/sdx55m/apdp.mbn|qcom/sdx55m/apdp.mbn
+modem:/image/sdx55m/apps.mbn|qcom/sdx55m/apps.mbn
+modem:/image/sdx55m/devcfg.mbn|qcom/sdx55m/devcfg.mbn
+modem:/image/sdx55m/hyp.mbn|qcom/sdx55m/hyp.mbn
+modem:/image/sdx55m/multi_image.mbn|qcom/sdx55m/multi_image.mbn
+modem:/image/sdx55m/multi_image_qti.mbn|qcom/sdx55m/multi_image_qti.mbn
+modem:/image/sdx55m/qdsp6sw.mbn|qcom/sdx55m/qdsp6sw.mbn
+modem:/image/sdx55m/sec.elf|qcom/sdx55m/sec.elf
+modem:/image/sdx55m/tz.mbn|qcom/sdx55m/tz.mbn
+modem:/image/sdx55m/xbl_cfg.elf|qcom/sdx55m/xbl_cfg.elf
+
+# Wi-Fi QCA6390 hw2.0, ath11k (M5). Board data (bdwlan.*) is not mapped
+# until it is encoded into board-2.bin (FIRMWARE-PLAN §7 item 4).
+modem:/image/qca6390/amss20.bin|ath11k/QCA6390/hw2.0/amss.bin
+modem:/image/qca6390/m3.bin|ath11k/QCA6390/hw2.0/m3.bin
+
+# Bluetooth QCA6390, hci_qca/btqca requests qca/htbtfw%02x.tlv and qca/htnv%02x.bin.
+bluetooth:/image/htbtfw20.tlv|qca/htbtfw20.tlv
+bluetooth:/image/htnv20.bin|qca/htnv20.bin

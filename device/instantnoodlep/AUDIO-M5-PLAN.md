@@ -286,3 +286,64 @@ capture, and a working USB-C headphone path recorded; PipeWire/WirePlumber
 on the installed slot-B system expose the card with the device UCM profile;
 slot flags unchanged; results appended to NOTES.md with dates. Kernel
 commits 1-6 exist in `~/src/l` with gates rerun per commit.
+
+## 10. Phase 2 driver: TFA987x codec (2026-11-18, this branch)
+
+The phase-2 design lives in PR #82 §8-§9 (branch `instantnoodlep-k3-audio`);
+this section records what the phase-2 driver work delivered and what remains
+phone-gated. No phone was touched and nothing was flashed; all gates below
+ran offline on omabook.
+
+Delivered in the kernel tree `~/src/l-k3-audio`, branch
+`instantnoodlep-k3-tfa987x` (commit `bf29d8b47`) on top of
+`instantnoodlep-k3-audio` (`edc18c3cd`, PR #82):
+
+- `sound/soc/codecs/tfa987x.c` + Kconfig/Makefile/MAINTAINERS: an upstreamable
+  ASoC codec driver for `nxp,tfa9872/9873/9874`. The DT binding
+  `nxp,tfa987x.yaml` (with the `nxp,tfa9874` enum) already exists at
+  `edc18c3cd` and needed no changes: the driver uses exactly its
+  `reset-gpios` (active-high), `vddd-supply`, `sound-channel`,
+  `sound-name-prefix` and `#sound-dai-cells` properties.
+- Driver behavior, mapped to the PR #82 §8 [I] list: managed VDDD regulator
+  and reset GPIO (active-high, released after VDDD settles); chip revision
+  validated against the compatible (die byte 0x72/0x73/0x74); after the I2C
+  soft reset every managed register is written as a full 16-bit safe default
+  (powered down, amplifier off, boost converter off at reset defaults,
+  16-bit single-slot TDM on the `sound-channel` slot); the amp starts muted
+  with gain 0; a raw `Playback Volume` gain control (no dB conversion
+  claimed) and a `Playback Switch` mute switch; hardware enable requires
+  DAPM power + switch + unmuted stream, serialized under a mutex, with a
+  latched control-bus fault that holds the amp in reset until rebind;
+  regmap with readable/writeable/volatile ranges (key register write-only,
+  revision register read-only/volatile, rbtree cache); component
+  suspend/resume (power down on suspend, defaults restored on resume with
+  the user gain kept); unbind silences the amp before reset/VDDD removal.
+- Community-driver defects from PR #82 §8 are fixed by construction: no
+  optional boost DT properties exist (the binding deliberately excludes
+  them), so no uninitialized DCDC value can ever be read or written; the
+  TFA9873/74 second-voltage-to-CTRL0 mixup cannot occur because registers
+  are written whole; reset/supply handling and volume control are added.
+  Register field definitions are credited to the public GPL-2.0-only
+  community `tfa987x.c` (Nura `3c5440e9dd3c`, NXP 2014-2020 register
+  definitions); no leaked or decompiled vendor code is used (rule 5).
+- Patch copy: `device/instantnoodlep/patches/audio-tfa987x/`.
+
+Verified offline [V] (2026-11-18, omabook, clang 23.1.3, dtschema 2026.9):
+
+- `make ARCH=arm64 LLVM=1 O=~/android/build/k3-tfa M=sound/soc/codecs
+  tfa987x.o` (defconfig + `SND_SOC_TFA987X=m`, `prepare`): exit 0, zero
+  errors/warnings, `tfa987x.o` produced for `--target=aarch64-linux-gnu`.
+  Only that file was built; no full kernel build was run.
+- `make ... DT_SCHEMA_FILES=Documentation/devicetree/bindings/sound/nxp,tfa987x.yaml
+  dt_binding_check`: CHKDT, LINT, STYLE, DTEX, DTC [C] all clean, no warnings.
+- `scripts/checkpatch.pl --strict` on the series: 0 errors, 0 warnings,
+  0 checks (651 lines).
+
+Not verified, phone-gated [I] (PR #82 §9 runbook, unchanged): i2c15 probe
+of 0x34/0x35 and the revision line, the register writes, the
+`Top Speaker/Bottom Speaker Playback Switch/Volume` controls reading 0 at
+probe, suspend/resume behavior, and first sound — one speaker at a time,
+-60 dBFS host PCM, raw gain 0, boost off, RAM boot, separate explicit owner
+go. The phase-2 DTS enablement (i2c15 + nodes `okay`, tertiary-MI2S speaker
+link) is still not implemented; this work is driver + binding only.
+
