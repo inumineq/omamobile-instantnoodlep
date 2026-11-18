@@ -171,3 +171,17 @@ Definition of done for this branch: offline gates pass; T1 and T2 pass
 with pasted (masked) output — that is the RAM-boot qualification this
 branch claims; T3/T4 are owner-gated phone steps recorded in NOTES when
 run. `trail-lite lint` clean; branch pushed; PR open.
+
+## Coordinator change 2026-11-18: sink 5 V only
+
+The ported connector node advertised the stock sink PDOs 5 V/3 A, 9 V/3 A and
+12 V/2.25 A. This kernel binds no driver that programs the PM8150B charger, so
+a PD charger or dock must not raise VBUS above 5 V yet. Kernel commit
+`ed709a578` keeps only `PDO_FIXED(5000, 3000, PDO_FIXED_USB_COMM)` [V: probe
+DTB `sink-pdos = <0x401912c>`]. Only the DTB changed; the Image and modules
+(`7.3.0-rc6-instantnoodlep-k3-slim-typec-g8930ae7af4b6`) are unchanged.
+
+Use `~/android/build/k3-slim-typec-ram5v/boot-typec-5v.img` (sha256
+`1ea62c7675956544b946bf9881211c80a863117860584fae7241b557aae9cf8f`) for T1-T4
+instead of `boot-typec.img`. Restore the 9 V/12 V PDOs only together with the
+qualified charger (POWER-M5-PLAN P2/P3) and its owner gate.
