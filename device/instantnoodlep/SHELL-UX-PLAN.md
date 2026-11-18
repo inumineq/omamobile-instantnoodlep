@@ -131,7 +131,7 @@ stays below it. Squeekboard draws the key surface itself; the launcher strip
 and language sheet use bottom/side insets, while key layout geometry remains
 owned by Squeekboard.
 
-[I] `device/instantnoodlep/device-ui.conf` provisionally proposes 144 physical
+[I] (superseded 2026-11-18, see below) `device-ui.conf` provisionally proposed 144 physical
 pixels on each side (48 logical pixels at scale 3) and a 96 physical-pixel
 gesture width. The observed x minimum around 144 is anecdotal and is not a
 measurement of active panel area or symmetric right-edge touch; do not install
@@ -187,3 +187,41 @@ list is upstream's, with `Back.qml` and `WifiPanel.qml` the only changed files.
 [V] Patch 0002 alone fails `test/back-surfaces.py`; 0003 is the missing test
 entry. [I] Nothing is installed or run on the phone yet: steps 3-6 are the
 coordinator's.
+
+## Launcher regression and fix (2026-11-18, shell 0.2.133-1.3, device 0.0.7)
+
+[V] Shell `0.2.133-1.2` (patch 0004 as first written) put
+`anchors.{top,bottom,left,right}Margin` on eight `PanelWindow`s. Quickshell's
+window `anchors` group holds only the four booleans, so `Launcher.qml`,
+`LanguageWindow.qml` and `RecordPanel.qml` failed to load on the phone
+("Cannot assign to non-existent property", quickshell log). The launcher owns
+the dock and the home strip, so apps covered the whole screen with no way out.
+[V] The package's `test/all` passed anyway: its render/touch harnesses turn
+each window into an `Item`, where `anchors.*Margin` is valid.
+
+Fix, in patch 0004: window margins use `margins { ... }` (the upstream form,
+`Voice.qml`), and the six harnesses drop that window-level line the way
+`test/voice-render` already does. Guard: `tools/lint-panelwindow-margins`
+flags `anchors.*Margin` beside boolean window anchors; it reports all 32 lines
+of the old patch and nothing in upstream's tree. Run it on the patched
+`plugins/` before every shell build.
+
+[V] Phone after `pacman -U` of shell `0.2.133-1.3` (sha256 `66beb248…`) and
+device `0.0.7-1` (`5f0a508a…`): no QML load errors; `omamobile-launcher`,
+`omamobile-dock` (home screen) and `omamobile-home-strip` (480x44 at the bottom,
+`reserved` bottom grows by 44 with an app open) are mapped; `test/all` 332 ok,
+0 not ok on omabook.
+
+Values from the edge calibration (`edge-cal.txt`: taps at x=19..79 left and
+1365..1413 right of 0..1439) now ship in the device package:
+`safe_insets_px=24,0,30,0`, `gesture_edge_width_px=96` and
+`OMAMOBILE_BACK_EDGE_INSET=0`, so the Back strip covers 0..32 logical px from
+each edge instead of 48..80. [I] The inset env applies from the next login.
+
+[V] Owner-attended 2026-11-18 evening, after `omarchy-restart-shell` with the
+0.0.7 inset: Back strips 64 logical px wide at x=0 and x=416, home strip
+462x44 at y=1012, 0 QML load errors. The owner confirmed swipe up (home),
+swipe-and-hold (recents), Back from both edges and no Back on ordinary taps
+near the edge. [I] Some UI lag remains; the daily kernel lacks the kona
+cpufreq fallbacks, so judge it again on the consolidated kernel. Persistent
+Back/Home/Recents buttons are not needed for now.

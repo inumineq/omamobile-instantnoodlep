@@ -185,3 +185,50 @@ Use `~/android/build/k3-slim-typec-ram5v/boot-typec-5v.img` (sha256
 `1ea62c7675956544b946bf9881211c80a863117860584fae7241b557aae9cf8f`) for T1-T4
 instead of `boot-typec.img`. Restore the 9 V/12 V PDOs only together with the
 qualified charger (POWER-M5-PLAN P2/P3) and its owner gate.
+
+## 7. Recovery candidates after DP disconnect
+
+Updated 2026-11-18 after the slim-all DP and replug observations. Research:
+[`docs/research/typec-dp-usb-recovery.md`](../../docs/research/typec-dp-usb-recovery.md).
+Both candidates branch from `instantnoodlep-k3-slim-all` and use the base
+`~/android/configs/slim-all.config`. They have separate images and module
+trees. The coordinator packs the boot images from the artifacts. Use the checksums
+and release strings in the research report to verify the input before packing.
+For each candidate, the coordinator runs the corresponding RAM boot command
+with the phone selected by serial and the owner present.
+
+```sh
+fastboot -s "{{SERIAL}}" boot ~/android/build/k3-typec-fix1/boot-typec-fix1.img
+# Separately, after exiting the first RAM boot and returning to the bootloader:
+fastboot -s "{{SERIAL}}" boot ~/android/build/k3-typec-fix2/boot-typec-fix2.img
+```
+
+Expect fastboot to report `OKAY` for sending and booting, then confirm the
+candidate release with `uname -r` before testing. Before connecting the
+monitor, confirm a plain laptop replug still enumerates at baseline. Keep the
+same cables, plug orientation, and U3219Q setting for each comparison.
+Read the active pin assignment from the bracketed value in
+`/sys/bus/typec/devices/*/displayport/pin_assignment` while DP is up.
+C/E confirms four-lane DP. D/F confirms the shared DP/USB configuration.
+Use `lsusb -t` on the phone for the monitor hub and on the laptop for the
+phone gadget. Capture logs on both ends. Use a local phone journal or a
+separate phone log path that spans the interval without the gadget.
+Keep captures private as in §5.
+
+| Step | Candidate and action | Pass evidence | Stop condition | Rollback |
+| --- | --- | --- | --- | --- |
+| T6 | Candidate 1. **OWNER** connects the Dell U3219Q in High Resolution mode, confirms DP picture and four-lane DP, unplugs the monitor, then reconnects the laptop cable. | The laptop `dmesg` shows a new high-speed or SuperSpeed USB device and `cdc_ncm` or `cdc_ether` binds. SSH returns over NCM. Sysfs reports `data_role=device` and the DWC3 role switch reports `device`. Phone `dmesg` has no `phy initialization timed-out` or DWC3 `ep0out` error. | DP never enters or exits, the phone stops responding, or the USB gadget does not return within 2 min. A replug timeout, new `ep0out` errors, or a stuck role fail the recovery gate. | **OWNER** unplugs the cable and holds Power+VolUp 10-30 s to leave the RAM boot. Daily K3 remains on `boot_b`. Do not flash. |
+| T7 | Candidate 2. **OWNER** connects the U3219Q in High Resolution mode, then plugs a keyboard and mouse into the monitor hub. Unplug the monitor and reconnect the laptop cable after the hub check. | `lsusb -t` shows the hub at `480M` with the keyboard and mouse below it at their own speeds; `dmesg` shows the hub's `new high-speed USB device` and HID enumeration and no `connect-debounce failed`. The DP picture remains. The laptop gadget returns after the monitor is removed. Compare the laptop link speed before and after DP. | Hub still fails to enumerate, `connect-debounce failed` repeats, the phone stops responding, or DP or gadget recovery fails. | **OWNER** unplugs the cable and holds Power+VolUp 10-30 s to leave the RAM boot. Daily K3 remains on `boot_b`. Do not flash. |
+
+Run T6 and T7 independently from the same baseline. Record `uname -r`,
+`image_size`, role values, `lsusb -t`, and the masked DP/QMP/DWC3 log lines.
+T6 tests observable USB recovery. The candidate config disables dynamic
+debug, so confirming whether QMP took its deferred path needs a debug build.
+If a timeout or `gcc_usb3_prim_phy_pipe_clk already disabled` warning
+appears, mark whether it preceded DP entry, followed detach, or occurred
+on laptop replug. A repeat of the known entry error fails full qualification.
+If the phone and display stay responsive, record detach and replug as a
+separate result. For T7, record functional keyboard and mouse events
+and watch for a SuperSpeed regression from static UTMI selection. As a
+separate display-menu control, repeat the baseline with High Data Speed
+and record the negotiated assignment.

@@ -4,6 +4,17 @@
 Newest first. Findings that matter beyond one subsystem go here; subsystem
 detail lives in the *-PLAN.md files.
 
+## 2026-11-18: two offline Type-C recovery candidates
+
+- [V] Both slim-all derivatives built with clang/LLD 23.1.6 on macbookpro
+  and have arm64 header `image_size=0x1780000`. Fix1 queues the QMP mode
+  change until DP powers off (`d3b1dfc5c376`). Fix2 selects the UTMI pipe
+  clock statically on the DWC3 wrapper (`255b48e80527`). See the build
+  checksums and source findings in
+  [Type-C recovery research](../../docs/research/typec-dp-usb-recovery.md).
+- [I] Gadget recovery and USB2 hub enumeration await independent
+  RAM-boot gates T6 and T7 in `TYPEC-DP-PLAN.md` §7.
+
 ## 2026-11-18: screen-off idle audit and camera-hang bisect prepared offline
 
 - [V: task-provided 15-minute gauge sample] Screen-off daily-kernel draw was
