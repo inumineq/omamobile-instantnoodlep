@@ -1,0 +1,278 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""End-to-end LUKS2 unlock/mount test in an x86_64 QEMU guest.
+
+Requires root, cryptsetup, losetup, sfdisk, e2fsprogs, qemu-system-x86_64,
+BusyBox, cpio, gzip, and an x86_64 kernel with the checked-in options below
+built in (=y). QEMU reads a GPT image created on a host loop device; no phone
+or repository key material is used. Set QEMU_KERNEL and QEMU_KERNEL_CONFIG to
+an appropriate kernel/config pair when the running host kernel is unsuitable.
+"""
+
+import os
+from pathlib import Path
+import re
+import select
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+
+ROOT = Path(__file__).resolve().parents[1]
+UNLOCK = ROOT / "device/instantnoodlep/initramfs/cryptroot-unlock"
+PASSPHRASE = b"qemu-only-test-passphrase"
+REQUIRED_CONFIG = (
+    "CONFIG_BLK_DEV_DM",
+    "CONFIG_DM_CRYPT",
+    "CONFIG_CRYPTO_AES",
+    "CONFIG_CRYPTO_XTS",
+    "CONFIG_EXT4_FS",
+    "CONFIG_BLK_DEV_INITRD",
+    "CONFIG_DEVTMPFS",
+    "CONFIG_PROC_FS",
+    "CONFIG_SYSFS",
+    "CONFIG_VIRTIO",
+    "CONFIG_VIRTIO_PCI",
+    "CONFIG_VIRTIO_BLK",
+    "CONFIG_SERIAL_8250_CONSOLE",
+    "CONFIG_EFI_PARTITION",
+)
+
+
+def need(*commands):
+    missing = [command for command in commands if shutil.which(command) is None]
+    if missing:
+        raise RuntimeError("missing host tools: " + ", ".join(missing))
+
+
+def kernel_inputs():
+    kernel = Path(os.environ.get("QEMU_KERNEL", f"/boot/vmlinuz-{os.uname().release}"))
+    config = Path(os.environ.get("QEMU_KERNEL_CONFIG", f"/boot/config-{os.uname().release}"))
+    if not kernel.is_file() or not config.is_file():
+        raise RuntimeError("set QEMU_KERNEL and QEMU_KERNEL_CONFIG to an x86_64 kernel/config pair")
+    values = {}
+    for line in config.read_text().splitlines():
+        if line.startswith("CONFIG_") and "=" in line:
+            name, value = line.split("=", 1)
+            values[name] = value
+    missing = [name for name in REQUIRED_CONFIG if values.get(name) != "y"]
+    if missing:
+        raise RuntimeError("QEMU kernel needs these built-in options: " + ", ".join(missing))
+    return kernel
+
+
+def copy_runtime(binary, root):
+    destination = root / binary.lstrip("/")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(binary, destination)
+    result = subprocess.run(["ldd", str(binary)], text=True,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    if result.returncode not in (0, 1):
+        raise RuntimeError(f"ldd failed for {binary}: {result.stdout}")
+    for line in result.stdout.splitlines():
+        match = re.search(r"(/[^\s()]+)", line)
+        if not match:
+            continue
+        library = Path(match.group(1))
+        if not library.is_file():
+            continue
+        target = root / library.relative_to("/")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not target.exists():
+            shutil.copy2(library, target)
+
+
+def make_initramfs(root):
+    busybox = Path(shutil.which("busybox"))
+    cryptsetup = Path(shutil.which("cryptsetup"))
+    copy_runtime(busybox, root)
+    copy_runtime(cryptsetup, root)
+    (root / "bin/sh").parent.mkdir(parents=True, exist_ok=True)
+    (root / "bin/sh").symlink_to("busybox")
+    applets = subprocess.check_output([busybox, "--list"], text=True).splitlines()
+    for applet in ("mount", "mkdir", "mknod", "sleep", "grep", "cat",
+                   "setsid", "cttyhack", "mdev", "poweroff", "sh"):
+        if applet not in applets:
+            raise RuntimeError(f"BusyBox lacks required applet {applet}")
+        path = root / "bin" / applet
+        if applet != "sh" and not path.exists():
+            path.symlink_to("busybox")
+    (root / "usr/local/sbin").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(UNLOCK, root / "usr/local/sbin/cryptroot-unlock")
+    (root / "usr/local/sbin/cryptroot-unlock").chmod(0o755)
+    init = r'''#!/bin/sh
+PATH=/bin:/sbin:/usr/sbin:/usr/local/sbin
+export PATH
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+mkdir -p /dev/mapper /mnt/root
+[ -c /dev/mapper/control ] || mknod /dev/mapper/control c 10 236
+for i in 1 2 3 4 5; do
+  [ -r /sys/block/vda/vda1/uevent ] && break
+  sleep 1
+done
+grep -qx 'PARTNAME=userdata' /sys/block/vda/vda1/uevent || {
+  echo QEMU_CRYPTROOT_FAIL_NO_PARTNAME; poweroff -f
+}
+echo QEMU_CRYPTROOT_READY
+setsid cttyhack /usr/local/sbin/cryptroot-unlock
+unlock_status=$?
+if [ "$unlock_status" -ne 0 ]; then
+  echo QEMU_CRYPTROOT_FAIL_UNLOCK
+  poweroff -f
+fi
+mdev -s
+mount -t ext4 -o ro /dev/mapper/omamobile-root /mnt/root || {
+  echo QEMU_CRYPTROOT_FAIL_MOUNT; poweroff -f
+}
+grep -qx 'qemu-luks-mounted' /mnt/root/.cryptroot-qemu-test || {
+  echo QEMU_CRYPTROOT_FAIL_CONTENT; poweroff -f
+}
+echo QEMU_CRYPTROOT_PASS
+poweroff -f
+'''
+    (root / "init").write_text(init)
+    (root / "init").chmod(0o755)
+    for name in ("proc", "sys", "dev", "mnt", "run"):
+        (root / name).mkdir(exist_ok=True)
+
+
+def make_archive(root, output):
+    command = "find . -print0 | sort -z | cpio --null -o -H newc --owner=0:0"
+    with output.open("wb") as stream:
+        cpio = subprocess.Popen(["bash", "-c", command], cwd=root,
+                                stdout=subprocess.PIPE)
+        gzip = subprocess.Popen(["gzip", "-n"], stdin=cpio.stdout, stdout=stream)
+        cpio.stdout.close()
+        gzip_status = gzip.wait()
+        cpio_status = cpio.wait()
+    if cpio_status or gzip_status:
+        raise RuntimeError("failed to pack QEMU test initramfs")
+
+
+def create_luks_image(temp):
+    image = temp / "userdata.img"
+    with image.open("wb") as stream:
+        stream.truncate(72 * 1024 * 1024)
+    table = (b"label: gpt\n, +64M, "
+             b"0FC63DAF-8483-4772-8E79-3D69D8477DE4, userdata\n")
+    subprocess.run(["sfdisk", str(image)], input=table, check=True,
+                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    loop = subprocess.check_output(["losetup", "--find", "--show", "--partscan", str(image)],
+                                   text=True).strip()
+    part = Path(loop + "p1")
+    try:
+        for _ in range(50):
+            if part.exists():
+                break
+            time.sleep(0.1)
+        if not part.exists():
+            raise RuntimeError("loop partition node did not appear")
+        subprocess.run(["cryptsetup", "luksFormat", "--type", "luks2",
+                        "--pbkdf", "pbkdf2", "--iter-time", "25",
+                        "--batch-mode", "--key-file", "-", str(part)],
+                       input=PASSPHRASE, check=True,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(["cryptsetup", "open", "--type", "luks2", "--key-file", "-",
+                        str(part), "omamobile-qemu-seed"],
+                       input=PASSPHRASE, check=True,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            subprocess.run(["mkfs.ext4", "-q", "/dev/mapper/omamobile-qemu-seed"], check=True)
+            mount_dir = temp / "seed"
+            mount_dir.mkdir()
+            subprocess.run(["mount", "/dev/mapper/omamobile-qemu-seed", str(mount_dir)], check=True)
+            try:
+                (mount_dir / ".cryptroot-qemu-test").write_text("qemu-luks-mounted\n")
+                subprocess.run(["sync"], check=True)
+            finally:
+                subprocess.run(["umount", str(mount_dir)], check=True)
+        finally:
+            subprocess.run(["cryptsetup", "close", "omamobile-qemu-seed"], check=False)
+    except Exception:
+        subprocess.run(["losetup", "--detach", loop], check=False)
+        raise
+    subprocess.run(["losetup", "--detach", loop], check=True)
+    return image
+
+
+def run_qemu(kernel, initrd, image):
+    args = [
+        shutil.which("qemu-system-x86_64"), "-accel", "tcg", "-m", "512",
+        "-kernel", str(kernel), "-initrd", str(initrd),
+        "-append", "console=ttyS0,115200n8 rdinit=/init panic=-1",
+        "-drive", f"file={image},format=raw,if=virtio,snapshot=on",
+        "-display", "none", "-serial", "stdio", "-monitor", "none", "-no-reboot",
+    ]
+    process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                               stderr=subprocess.STDOUT, bufsize=0)
+    transcript = bytearray()
+    sent = False
+    deadline = time.monotonic() + 90
+    try:
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                break
+            readable, _, _ = select.select([process.stdout], [], [], 0.2)
+            if not readable:
+                continue
+            chunk = os.read(process.stdout.fileno(), 4096)
+            if not chunk:
+                break
+            transcript.extend(chunk)
+            if not sent and b"Enter passphrase for" in transcript:
+                process.stdin.write(PASSPHRASE + b"\n")
+                process.stdin.flush()
+                sent = True
+            if b"QEMU_CRYPTROOT_PASS" in transcript:
+                return
+            if b"QEMU_CRYPTROOT_FAIL" in transcript:
+                break
+        safe = bytes(transcript).replace(PASSPHRASE, b"<redacted>").decode("utf-8", "replace")
+        raise RuntimeError("QEMU LUKS2 open/mount test failed:\n" + safe[-5000:])
+    finally:
+        if process.poll() is None:
+            process.send_signal(signal.SIGTERM)
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+
+
+def main():
+    try:
+        system_paths = ["/usr/sbin", "/sbin"]
+        os.environ["PATH"] = os.pathsep.join(
+            [os.environ.get("PATH", "")] +
+            [path for path in system_paths if Path(path).is_dir()])
+        need("cryptsetup", "losetup", "sfdisk", "mkfs.ext4", "mount", "umount",
+             "qemu-system-x86_64", "busybox", "ldd", "cpio", "gzip", "bash", "sort")
+        if os.geteuid() != 0:
+            raise RuntimeError("run as root (loop devices and mount are required)")
+        kernel = kernel_inputs()
+        with tempfile.TemporaryDirectory(prefix="omamobile-cryptroot-qemu-") as directory:
+            temp = Path(directory)
+            image = create_luks_image(temp)
+            root = temp / "initramfs"
+            root.mkdir()
+            make_initramfs(root)
+            initrd = temp / "initramfs.cpio.gz"
+            make_archive(root, initrd)
+            run_qemu(kernel, initrd, image)
+        print("PASS - cryptroot-unlock opened LUKS2 userdata and mounted ext4 in x86_64 QEMU")
+        return 0
+    except RuntimeError as error:
+        print(f"SKIP - {error}", file=sys.stderr)
+        return 77
+    except subprocess.CalledProcessError as error:
+        detail = error.stderr.decode("utf-8", "replace") if error.stderr else str(error)
+        print("FAIL - " + detail, file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
