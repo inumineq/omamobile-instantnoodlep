@@ -40,6 +40,9 @@ It is still a RAM boot; the tool never writes the phone.
 --boot 1 disables the UFS host. --boot 2 enables it. Both disable every
 remoteproc node and force USB peripheral mode without a role switch. The
 initramfs never contains /etc/omamobile-ufs-rw, so there is no write allowlist.
+--typec keeps the real Type-C graph instead (dr_mode otg, usb-role-switch,
+role-switch-default-mode peripheral, PM8150B Type-C port with connector);
+it is for Type-C/DP feature kernels and is verified, not just kept.
 
 The 64 MiB image cap is [I], a conservative limit until stage 0 records the
 IN2023 boot partition size. It is not a measured device limit. The separate
@@ -99,6 +102,7 @@ DTB_LOAD_GAP = 2 * 1024 * 1024 + PAGE
 # docs/research/abl-kernel-size.md.
 KERNEL_REGION = 0x05600000 - 0x00080000
 USB_NODE = "/soc@0/usb@a6f8800/usb@a600000"
+TYPEC_NODE = "/soc@0/spmi@c440000/pmic@2/typec@1500"
 UFS_NODE = "/soc@0/ufshc@1d84000"
 # PM8150 PON: reboot-mode magics so `reboot bootloader` lands in fastboot
 # instead of passing through stock (BRINGUP-M1b-PLAN 4). The values are
@@ -428,6 +432,13 @@ def fdt_children(dtb, node):
     return text.splitlines()
 
 
+def node_present(dtb, node):
+    result = subprocess.run(
+        ["fdtget", "-l", str(dtb), node],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return result.returncode == 0
+
+
 def remoteproc_nodes(dtb):
     found = []
 
@@ -451,13 +462,28 @@ def property_present(dtb, node, prop):
     return result.returncode == 0
 
 
-def verify_probe_dtb(dtb, boot, labels):
+def verify_probe_dtb(dtb, boot, labels, typec=False):
     require_identity(dtb)
     verify_overlay_sink(dtb, labels)
-    if fdt_get(dtb, USB_NODE, "dr_mode") != "peripheral":
-        raise BuildError("probe USB dr_mode is not peripheral")
-    if property_present(dtb, USB_NODE, "usb-role-switch"):
-        raise BuildError("probe USB role switch was not removed")
+    if typec:
+        if not node_present(dtb, TYPEC_NODE):
+            raise BuildError("--typec needs the PM8150B Type-C port present")
+        if fdt_get(dtb, USB_NODE, "dr_mode") != "otg":
+            raise BuildError("--typec needs USB dr_mode otg")
+        if not property_present(dtb, USB_NODE, "usb-role-switch"):
+            raise BuildError("--typec needs the USB role switch kept")
+        if not property_present(dtb, USB_NODE, "role-switch-default-mode") or \
+                fdt_get(dtb, USB_NODE, "role-switch-default-mode") != "peripheral":
+            raise BuildError("--typec needs the default role to stay peripheral")
+        if fdt_get(dtb, TYPEC_NODE, "status") != "okay":
+            raise BuildError("--typec needs the PM8150B Type-C port enabled")
+        if fdt_get(dtb, TYPEC_NODE + "/connector", "compatible") != "usb-c-connector":
+            raise BuildError("--typec needs the usb-c-connector child")
+    else:
+        if fdt_get(dtb, USB_NODE, "dr_mode") != "peripheral":
+            raise BuildError("probe USB dr_mode is not peripheral")
+        if property_present(dtb, USB_NODE, "usb-role-switch"):
+            raise BuildError("probe USB role switch was not removed")
     remotes = remoteproc_nodes(dtb)
     for node in remotes:
         if fdt_get(dtb, node, "status") != "disabled":
@@ -560,12 +586,13 @@ def check_overlay_applies(ufdt_apply, dtb, overlay, work):
         raise BuildError("post-overlay DTB exceeds ABL's 2 MiB DTB window")
 
 
-def make_probe_dtb(source, output, boot, labels):
+def make_probe_dtb(source, output, boot, labels, typec=False):
     require_identity(source)
     shutil.copyfile(source, output)
-    run(["fdtput", "-t", "s", output, USB_NODE, "dr_mode", "peripheral"])
-    if property_present(output, USB_NODE, "usb-role-switch"):
-        run(["fdtput", "-d", output, USB_NODE, "usb-role-switch"])
+    if not typec:
+        run(["fdtput", "-t", "s", output, USB_NODE, "dr_mode", "peripheral"])
+        if property_present(output, USB_NODE, "usb-role-switch"):
+            run(["fdtput", "-d", output, USB_NODE, "usb-role-switch"])
     for node in remoteproc_nodes(output):
         run(["fdtput", "-t", "s", output, node, "status", "disabled"])
     run(["fdtput", "-t", "s", output, UFS_NODE, "status",
@@ -573,7 +600,7 @@ def make_probe_dtb(source, output, boot, labels):
     for name, value in PON_MODES.items():
         run(["fdtput", "-t", "u", output, PON_NODE, name, str(value)])
     add_overlay_sink(output, labels)
-    verify_probe_dtb(output, boot, labels)
+    verify_probe_dtb(output, boot, labels, typec)
 
 
 def padded(size):
@@ -802,7 +829,7 @@ def build(args):
             prefix=".instantnoodlep-probe-", dir=paths["boot"].parent) as temp:
         work = Path(temp)
         staged = {name: work / path.name for name, path in paths.items()}
-        make_probe_dtb(args.dtb, staged["dtb"], args.boot, labels)
+        make_probe_dtb(args.dtb, staged["dtb"], args.boot, labels, args.typec)
         if args.ufdt_apply is not None:
             check_overlay_applies(args.ufdt_apply, staged["dtb"],
                                   args.stock_overlay, work)
@@ -819,7 +846,7 @@ def build(args):
         info, unpacked = read_back_boot(
             staged["boot"], args.mkbootimg, args.kernel,
             staged["ramdisk"], staged["dtb"], work, args.root, cmdline)
-        verify_probe_dtb(unpacked / "dtb", args.boot, labels)
+        verify_probe_dtb(unpacked / "dtb", args.boot, labels, args.typec)
         if args.luks2:
             assert_luksroot(unpacked / "ramdisk")
             if args.touch_unlock:
@@ -898,6 +925,10 @@ def main(argv=None):
                         help="with --luks2, run the optional framebuffer/evdev passphrase UI at boot")
     parser.add_argument("--debug-shell", action="store_true",
                         help="with --root userdata: add " + DEBUG_SHELL)
+    parser.add_argument("--typec", action="store_true",
+                        help="keep the real USB Type-C graph (dr_mode otg, "
+                             "usb-role-switch, PM8150B port) instead of forcing "
+                             "peripheral mode; the default role must stay peripheral")
     parser.add_argument("--out", type=Path, required=True,
                         help="new boot.img path; sibling artifacts derive from its name")
     args = parser.parse_args(argv)
