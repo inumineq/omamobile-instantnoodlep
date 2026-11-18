@@ -136,6 +136,31 @@ DTS = r'''/dts-v1/;
 
 # A stock-like overlay: fragments target labels the base does not define, so
 # dtc -@ records them in __fixups__ (stock entry 16 has 156 of these).
+# The same board with a PM8150B Type-C port, like the Type-C feature DTBs.
+TYPEC_DTS = DTS.replace(
+    """            pmic@0 {
+                pon@800 {
+                    compatible = "qcom,pm8998-pon";
+                };
+            };""",
+    """            pmic@0 {
+                pon@800 {
+                    compatible = "qcom,pm8998-pon";
+                };
+            };
+            pmic@2 {
+                typec@1500 {
+                    compatible = "qcom,pm8150b-typec";
+                    status = "okay";
+                    connector {
+                        compatible = "usb-c-connector";
+                    };
+                };
+            };""").replace(
+    'dr_mode = "otg";',
+    'dr_mode = "otg";\n                role-switch-default-mode = "peripheral";')
+
+
 OVERLAY_DTS = r'''/dts-v1/;
 /plugin/;
 &pm8150_gpios { qcom,downstream = "x"; };
@@ -505,6 +530,60 @@ def test_full(work, private, public):
     print("ok - generated-DTB refusals, boot 1 and 2, tethered root, edits, headers and sha256")
 
 
+def test_typec(work, private, public):
+    kernel = work / "Image.dummy"
+    kernel.write_bytes(b"dummy kernel, not executed\n")
+    global OVERLAY
+    OVERLAY = make_overlay(work)
+    rootfs = make_rootfs(work / "input")
+    typec_dtb = make_dtb(work, "typec", TYPEC_DTS)
+    plain_dtb = make_dtb(work, "plain", DTS)
+
+    out = Path("output/typec.img")
+    result = call_builder(*builder_args(kernel, typec_dtb, public, rootfs, 2, out),
+                          "--typec", cwd=work)
+    require(result.returncode == 0, f"--typec build failed: {result.stderr}")
+    paths = probe.artifact_paths(work / out)
+    require(probe.fdt_get(paths["dtb"], probe.USB_NODE, "dr_mode") == "otg",
+            "--typec did not keep dr_mode otg")
+    require(probe.property_present(paths["dtb"], probe.USB_NODE, "usb-role-switch"),
+            "--typec dropped the role switch")
+    require(probe.fdt_get(paths["dtb"], probe.USB_NODE, "role-switch-default-mode")
+            == "peripheral", "--typec default role is not peripheral")
+    require(probe.fdt_get(paths["dtb"], probe.TYPEC_NODE, "status") == "okay",
+            "--typec lost the Type-C port")
+    probe.verify_probe_dtb(paths["dtb"], 2, OVERLAY_LABELS, typec=True)
+
+    out = Path("output/typec-forced.img")
+    result = call_builder(*builder_args(kernel, typec_dtb, public, rootfs, 2, out),
+                          cwd=work)
+    require(result.returncode == 0, f"plain build failed: {result.stderr}")
+    paths = probe.artifact_paths(work / out)
+    require(probe.fdt_get(paths["dtb"], probe.USB_NODE, "dr_mode") == "peripheral",
+            "plain build did not force peripheral")
+    require(not probe.property_present(paths["dtb"], probe.USB_NODE,
+                                       "usb-role-switch"),
+            "plain build kept the role switch")
+
+    result = call_builder(*builder_args(kernel, plain_dtb, public, rootfs, 2,
+                                         "output/typec-refused.img"),
+                          "--typec", cwd=work)
+    require(result.returncode != 0 and "--typec needs the PM8150B Type-C port"
+            in result.stderr,
+            f"--typec without a port was not refused: {result.stderr}")
+    peripheral_dtb = make_dtb(work, "peripheral", TYPEC_DTS.replace(
+        'dr_mode = "otg";', 'dr_mode = "peripheral";'))
+    result = call_builder(*builder_args(kernel, peripheral_dtb, public, rootfs, 2,
+                                         "output/typec-refused2.img"),
+                          "--typec", cwd=work)
+    require(result.returncode != 0 and "--typec needs USB dr_mode otg"
+            in result.stderr,
+            f"--typec on a peripheral DTB was not refused: {result.stderr}")
+    require(not (work / "output/typec-refused.img").exists(),
+            "refused --typec left an image")
+    print("ok - --typec keeps and verifies the Type-C graph")
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix="instantnoodlep-probe-test-") as temp:
         work = Path(temp)
@@ -555,6 +634,9 @@ def main():
             full = work / "full"
             full.mkdir()
             test_full(full, *key)
+            typec_work = work / "typec"
+            typec_work.mkdir()
+            test_typec(typec_work, *key)
         else:
             reasons = []
             if dt_tools:
