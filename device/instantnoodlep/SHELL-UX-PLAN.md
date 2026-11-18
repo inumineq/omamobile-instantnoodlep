@@ -218,6 +218,10 @@ Values from the edge calibration (`edge-cal.txt`: taps at x=19..79 left and
 `OMAMOBILE_BACK_EDGE_INSET=0`, so the Back strip covers 0..32 logical px from
 each edge instead of 48..80. [I] The inset env applies from the next login.
 
-Open, owner-attended: swipe up on the strip (home), swipe-and-hold (recents),
-Back from both edges. Persistent Back/Home/Recents buttons wait until the
-owner has used the restored strip.
+[V] Owner-attended 2026-11-18 evening, after `omarchy-restart-shell` with the
+0.0.7 inset: Back strips 64 logical px wide at x=0 and x=416, home strip
+462x44 at y=1012, 0 QML load errors. The owner confirmed swipe up (home),
+swipe-and-hold (recents), Back from both edges and no Back on ordinary taps
+near the edge. [I] Some UI lag remains; the daily kernel lacks the kona
+cpufreq fallbacks, so judge it again on the consolidated kernel. Persistent
+Back/Home/Recents buttons are not needed for now.
