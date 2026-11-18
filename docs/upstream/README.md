@@ -44,5 +44,8 @@ worker has no phone access and supplies no guessed service name.
 [V] The native Settings Security proposal is `patches/omamobile-settings/`
 for upstream `omamobile-settings` 0.1.2 at the pinned source revision above.
 It adds the account/PIN page, an opt-in distinct lock PIN PAM service, x86
-static checks, and a container PAM test. Application and PAM checks are
-pending before the proposal is ready for upstream review.
+static checks, and a container PAM test. Offline verification passed on
+2026-11-18 (qmllint on all QML, qmake6 build, 61-check archlinux pamtester
+container, shipped Debian fixture): exact commands and results are in
+`patches/omamobile-settings/README.md`; PR #100 carries the summary. Phone
+verification of the lock session remains pending.

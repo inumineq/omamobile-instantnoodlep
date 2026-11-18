@@ -175,7 +175,7 @@ index 0000000..1fcbbf2
 +            Switch { id: keypad; objectName: "securityKeypadToggle"; text: qsTr("Use numeric keypad on lock screen"); checked: credentialsController.keypadEnabled; onToggled: credentialsController.setKeypadEnabled(checked) }
 +            Switch { id: separatePin; objectName: "securitySeparatePinToggle"; text: qsTr("Use a separate lock-screen PIN"); checked: credentialsController.separatePinEnabled; onToggled: {
 +                if (checked) {
-+                    if (!/^\\d{4,12}$/.test(pin.text) || pin.text !== pinAgain.text) {
++                    if (!/^\d{4,12}$/.test(pin.text) || pin.text !== pinAgain.text) {
 +                        page.errorText = pin.text === pinAgain.text ? qsTr("Use 4 to 12 digits before enabling separate PIN mode.") : qsTr("PINs do not match.")
 +                        separatePin.checked = false; return
 +                    }
@@ -784,7 +784,7 @@ new file mode 100755
 index 0000000..4d8bb27
 --- /dev/null
 +++ b/test/security-auth-container.sh
-@@ -0,0 +1,56 @@
+@@ -0,0 +1,67 @@
 +#!/bin/bash
 +# SPDX-License-Identifier: MIT
 +set -euo pipefail
@@ -805,6 +805,17 @@ index 0000000..4d8bb27
 +auth required pam_unix.so
 +account required pam_unix.so
 +PAM
++# Throwaway fixture only: Debian runs pam_pwquality on the chpasswd path and
++# would refuse the 4-digit test PIN as account password. The target system
++# (Arch) has no quality gate there, so pin a plain pam_unix password stack.
++cat >/etc/pam.d/chpasswd <<'PAM'
++#%PAM-1.0
++auth required pam_permit.so
++account required pam_permit.so
++password required pam_unix.so yescrypt
++PAM
++# Debian keeps chpasswd in /usr/sbin; the helper targets Arch's /usr/bin path.
++ln -sf /usr/sbin/chpasswd /usr/bin/chpasswd
 +useradd -m settings-test
 +useradd -m lockout-test
 +useradd -m ordinary-test
@@ -827,8 +838,8 @@ index 0000000..4d8bb27
 +printf '{"secret":"1357","confirm":"1357"}' | run_helper "$uid" set-separate-pin >/dev/null
 +test "$(stat -c '%u:%g:%a' /var/lib/omamobile/lock-pin/"$uid")" = "0:$(id -g settings-test):640" || fail 'separate hash is root-owned, group-readable to private primary group, mode 0640'
 +expect_auth omarchy-lock-password settings-test 1357 'separate PIN authenticates lock service'
-+expect_reject omarchy-lock-password settings-test Account-long-Password-1 'account password does not fall through to lock PIN'
-+expect_auth system-auth settings-test Account-long-Password-1 'account password remains valid for sudo PAM service'
++expect_reject omarchy-lock-password settings-test 2468 'account password does not fall through to lock PIN'
++expect_auth system-auth settings-test 2468 'account password remains valid for sudo PAM service'
 +printf '{"secret":"Updated-account-password-2","confirm":"Updated-account-password-2"}' | run_helper "$uid" set-account-password >/dev/null
 +expect_auth omarchy-lock-password settings-test 1357 'account password change leaves separate lock PIN unchanged'
 +expect_auth system-auth settings-test Updated-account-password-2 'sudo PAM checks the updated account password'
