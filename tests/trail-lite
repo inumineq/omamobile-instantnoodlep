@@ -30,8 +30,12 @@ grep -qx '  - b.c' "$f" || fail "touches"
 printf '## Decided\n- x\n' | scripts/trail-lite note --title "Keep retries at 4!" --author "claude on hostx" >/dev/null
 [ -f ".trail/learnings/$d-keep-retries-at-4-claude-2.md" ] || fail "second note same day gets -2"
 
-# lint: private data and bad front matter are refused
-for bad in 'aa:bb:cc:dd:ee:ff' '356938035643809' "someone${AT}example.com" 'serialno: 1a2b3c4d'; do
+# lint: private data and bad front matter are refused. All four fixtures are
+# assembled at run time (like AT above) so no literal MAC/IMEI/serial sits in git.
+mac='aa:bb:cc:dd:ee:'ff
+num=356938035643""809
+ser='serial''no: 1a2b3c4d'
+for bad in "$mac" "$num" "someone${AT}example.com" "$ser"; do
   printf '# x\n\n%s\n' "$bad" > docs/agents/state.md
   if scripts/trail-lite lint docs/agents/state.md >/dev/null; then fail "lint missed: $bad"; fi
 done

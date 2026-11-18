@@ -4,6 +4,13 @@
 Newest first. Findings that matter beyond one subsystem go here; subsystem
 detail lives in the *-PLAN.md files.
 
+## 2026-11-18: mask vconsole setup in the device package
+
+- [V: owner report, 2026-11-18] `systemd-vconsole-setup.service` hung two
+  boots. The device package now masks it with a `/dev/null` symlink.
+- [I] The cause of the hangs is unknown; the package install and rollback
+  remain unverified on the phone (`DEVICE-PACKAGE-PLAN.md`).
+
 ## 2026-11-18 (evening, omabook): feature kernels on slim K3 built offline as 5 RAM candidates
 
 - [V] Branches in `inumineq/linux-omarchy-mobile`:

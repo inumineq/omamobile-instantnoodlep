@@ -223,7 +223,10 @@ built offline; nothing has run on the phone.
 `7.3.0-rc6-instantnoodlep-k3-gaa996bae0695`), series
 `patches/instantnoodlep/kernel-modem/0001-0004`, branch
 `instantnoodlep-k3-modem` at `e9ff58528f8b`. Do not mix in the hanging power
-P2 branch.
+P2 branch. [V] 2026-11-18 update: the series is re-based onto the slim K3 tip
+`78f38a2acc99` as branch `instantnoodlep-k3-slim-modem` at `7dc2ea318807`
+(built on omabook with clang 23.1.3, §6.2) — that is now the candidate; the
+`e9ff58528f8b` build in §6.1 stays as the historical clang 19 reference.
 
 ### 6.1 Offline artefacts (macbookpro, LLVM=1, arm64)
 
@@ -276,6 +279,54 @@ transport; it is a parser/bounds test, not DMA or lifecycle testing.
 [I] The coordinator builds the RAM image on omabook from the same series; the
 artefacts above are the reference build, not a transferable file. Rebuild
 there with the same fragment and check the release string before use.
+**Done 2026-11-18**: rebuilt on slim K3 on omabook with clang 23.1.3 — see
+§6.2 for the current candidate artefacts and hashes.
+
+### 6.2 Offline artefacts (2026-11-18, omabook, clang 23.1.3, slim K3 base)
+
+[V] The four-commit series was re-based onto the slim K3 tip `78f38a2acc99`
+(branch `instantnoodlep-k3-slim-modem`, tip `7dc2ea318807` in
+`~/src/l-k3-slim`, fetched from macbookpro `instantnoodlep-k3-modem` via git
+bundle; the board DTS commit was merge-resolved against the daily tip's
+Wi-Fi/BT/gauge DTS additions — `&intc`, `&pcie2`, `&pcie2_phy` are additions,
+the Wi-Fi `pcie0` nodes unchanged). Release:
+`7.3.0-rc6-instantnoodlep-k3-slim-modem-g7dc2ea318807`.
+
+[V] Config: the slim `.config` (`~/android/build/k3-slim/.config`) merged with
+the SDX55 section of `device/instantnoodlep/kernel.config` +
+`CONFIG_LOCALVERSION="-instantnoodlep-k3-slim-modem"`, then `olddefconfig`.
+The diff against the slim `.config` is only the fragment's symbols:
+`MHI_BUS`, `MHI_BUS_PCI_GENERIC`, `MHI_BUS_SAHARA`, `MHI_NET`,
+`MHI_WWAN_CTRL`, `WWAN`, `QRTR`, `QRTR_MHI`, `PHY_QCOM_QMP_PCIE` go `m`→`y`,
+`GNSS` and its serial drivers become unset, plus `LOCALVERSION`.
+`CONFIG_MHI_BUS_SAHARA=y` is present, so the series applied (the §3
+failed-gate check).
+
+[V] Build: `nice -n 5 make O=~/android/build/k3-slim-modem ARCH=arm64 LLVM=1
+-j8 Image.gz qcom/sm8250-oneplus-instantnoodlep.dtb modules` with clang/lld
+23.1.3, RC=0 (`sahara.o` and `pci_generic.o` built in). `image_size`
+(`od -An -tx8 -j16 -N8 Image`) = **0x1750000** — 0x30000 over slim (the
+built-in MHI/QRTR transport) and far under the ABL ceiling 0x2b60000
+(KERNEL-SIZE §1); the 2026-11-17 clang 19 build is no longer the candidate
+(learning `l-e03ff7fe`). `CHECK_DTBS=y` (dtschema venv): clean.
+
+[V] Decompiled DTB: `pcie@1c10000` (pcie2) `okay` with `msi-parent =
+<&intc>`, root-port `reset-gpios` TLMM 85 / `wake-gpios` TLMM 87
+`GPIO_ACTIVE_LOW`, one `modem@0,0` (`pci17cb,306`, `reg = <0x10000 0x0 0x0
+0x0 0x0>`, `qcom,flashless`); `phy@1c16000` (pcie2_phy) `okay` with the
+L5A/L9A supplies; `intc` carries `mbi-ranges = <832 32>` and `mbi-alias =
+<0x0 0x17a10000>`; `pcie0`/Wi-Fi nodes unchanged.
+
+| Artefact | Path (private, omabook) | sha256 |
+| --- | --- | --- |
+| kernel | `~/android/build/k3-slim-modem/arch/arm64/boot/Image.gz` | `1c2cbe4dfb14fb99a311cd89d2d16cb59cfc27ee39b99c9bf1e902033ca57778` |
+| board dtb | `~/android/build/k3-slim-modem/arch/arm64/boot/dts/qcom/sm8250-oneplus-instantnoodlep.dtb` | `651136af5a3507c4fa0c28342bf5981b2b1da5bd84b04c2bdd95e82dec819efa` |
+| modules | `~/android/build/k3-slim-modem/modules-7.3.0-rc6-instantnoodlep-k3-slim-modem-g7dc2ea318807.tar.gz` (1113 modules, `INSTALL_MOD_STRIP=1`) | `5952f74a8ee3b1ddf53a96b3e4c3f3533e66b455f8bb2f2a83c2546ad7e17a06` |
+| merged config | `~/android/build/k3-slim-modem/.config` | `36997eadf593a163ab876e8ffe31eb0c4d4c44a1e6210e7a3ad270fd2011f522` |
+| RAM image | `~/android/build/k3-slim-modem-ram/boot-slim-modem.img` (builder flags identical to `boot-daily.manifest.json`: `--boot 2 --root userdata --debug-shell`; manifest and `SHA256SUMS` beside it) | `ea68defc1973583be8724ea1c4cd40414b2135507670ecf1880a784ab424beb2` |
+
+[V] Gates A-C below are unchanged and still block any RAM boot; gate D/F use
+the §6.2 release and image above.
 
 | Gate | Command / review | Expect | Stop | Rollback |
 | --- | --- | --- | --- | --- |
@@ -295,26 +346,30 @@ means neither it nor its sidecars exists. The builder's `--root userdata`
 permits ordinary rootfs writes; it does not imply a read-only phone test
 [V: tools/build-instantnoodlep-probe:31-42,root allowlist constants].
 
-[V] `$ART` is the artefact directory of §6.1 (`~/android/build/k3-modem` on
-macbookpro, or the coordinator's own build on omabook). The modules tarball
+[V] `$ART` is the artefact directory of §6.2
+(`~/android/build/k3-slim-modem` on omabook; the §6.1 macbookpro directory is
+the superseded clang 19 reference). The RAM image is already built:
+`~/android/build/k3-slim-modem-ram/boot-slim-modem.img` (sha256 above,
+manifest beside it). The modules tarball
 must be unpacked into the rootfs before the RAM boot, or the release will not
 match and udev will load nothing:
 
 ```sh
-ART="$HOME/android/build/k3-modem"
-REL=7.3.0-rc6-instantnoodlep-k3-modem-ge9ff58528f8b
-sha256sum "$ART/Image.gz" "$ART/sm8250-oneplus-instantnoodlep.dtb" \
+ART="$HOME/android/build/k3-slim-modem"
+REL=7.3.0-rc6-instantnoodlep-k3-slim-modem-g7dc2ea318807
+sha256sum "$ART/arch/arm64/boot/Image.gz" \
+  "$ART/arch/arm64/boot/dts/qcom/sm8250-oneplus-instantnoodlep.dtb" \
   "$ART/modules-$REL.tar.gz"
 # On the rootfs (userdata), as root, before the RAM boot:
 #   tar -xzf modules-$REL.tar.gz -C / && depmod -a "$REL"
 
 tools/build-instantnoodlep-probe \
-  --kernel "$ART/Image.gz" \
-  --dtb "$ART/sm8250-oneplus-instantnoodlep.dtb" \
+  --kernel "$ART/arch/arm64/boot/Image.gz" \
+  --dtb "$ART/arch/arm64/boot/dts/qcom/sm8250-oneplus-instantnoodlep.dtb" \
   --ssh-key "$SSH_PUBLIC_KEY" --mkbootimg "$MKBOOTIMG" \
   --omarchy-mobile "$OMARCHY_MOBILE" --initramfs-root "$INITRAMFS_ROOT" \
   --stock-overlay "$STOCK_ENTRY16" --ufdt-apply "$UFDT_APPLY" \
-  --boot 2 --root userdata --out "$M5_IMG"
+  --boot 2 --root userdata --debug-shell --out "$M5_IMG"
 sha256sum "$M5_IMG"
 ```
 
