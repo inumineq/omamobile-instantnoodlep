@@ -1,0 +1,29 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Add only a measured per-app override, then exec the original desktop command.
+set -euo pipefail
+
+profile_dir=${OMAMOBILE_INSTANTNOODLEP_PROFILE_DIR:-/usr/share/omamobile/instantnoodlep-mobile-profile}
+app=${1:?Usage: omamobile-instantnoodlep-app-launcher DESKTOP_ID -- COMMAND [ARG...]}
+shift
+[[ ${1:-} == -- ]] || { echo "expected -- before the desktop command" >&2; exit 2; }
+shift
+command=${1:?missing desktop command}
+shift
+
+row=$(awk -F '|' -v id="$app" '$1 == id { print $2 "|" $3 "|" $4; exit }' "$profile_dir/apps.conf")
+[[ -n $row ]] || { echo "no mobile profile for desktop ID: $app" >&2; exit 2; }
+IFS='|' read -r runtime scale_factor ozone_platform <<<"$row"
+case $runtime in chromium|electron) ;; *) echo "invalid runtime for $app" >&2; exit 2 ;; esac
+
+args=()
+if [[ $scale_factor != inherit ]]; then
+  [[ $scale_factor =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "invalid scale factor for $app" >&2; exit 2; }
+  args+=("--force-device-scale-factor=$scale_factor")
+fi
+case $ozone_platform in
+  auto) ;;
+  wayland) args+=(--ozone-platform=wayland) ;;
+  *) echo "invalid Ozone policy for $app" >&2; exit 2 ;;
+esac
+exec "$command" "${args[@]}" "$@"

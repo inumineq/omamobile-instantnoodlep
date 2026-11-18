@@ -14,6 +14,7 @@ this plan are local repository files unless named otherwise.
 | `/usr/lib/environment.d/50-omamobile-back.conf` | Provisional shell edge inset 48 and strip width 32 logical px | [I: `SHELL-UX-PLAN.md` §1; geometry not yet calibrated] |
 | `/usr/bin/omamobile-bt-public-addr`, one udev rule and one systemd oneshot | On QCA UART controller add, assigns a phone-local BT public address with `btmgmt public-addr`; the helper stores it only in `/var/lib/omamobile/bt-public-addr`, mode 600, and does not print it | [V: package helper and host test; runtime trigger assumptions remain [I]] |
 | `/etc/systemd/system/systemd-vconsole-setup.service` | Masked by the package | [V: owner report, 2026-11-18: service hung two boots; [I] cause unknown] |
+| `/usr/share/omamobile/instantnoodlep-mobile-profile/` | Candidate Chromium and per-app profiles; user service applies after upstream setup-user. Revert with the package helper. | [V: upstream setup-user at `c4623572be1c141d602cf99a83ae0bf9e3eea09c`, lines 313-378; every OnePlus value and app result is [I].] |
 
 The package follows the upstream device-package shape (`PKGBUILD`, `install`,
 `version`, `README.md`, package hook, `device.conf`). I read upstream's
@@ -99,7 +100,7 @@ After approval, install the built package using the phone's existing package
 workflow, then check `pacman -Q omamobile-device-instantnoodlep`,
 `systemctl is-enabled systemd-vconsole-setup.service`, and
 `readlink /etc/systemd/system/systemd-vconsole-setup.service`. Expect version
-0.0.4-1, `masked`, and `/dev/null`. Stop if the package version differs or
+0.0.4-2, `masked`, and `/dev/null`. Stop if the package version differs or
 the mask is absent. Roll back by reinstalling the recorded prior package;
 confirm the service mask state matches the prior manifest before rebooting.
 
@@ -108,3 +109,22 @@ match, controller readiness, resulting address, and that no address appears
 in the journal under `DAILY-K3-PLAN.md` §5.5. The address file must remain on
 the phone at `/var/lib/omamobile/bt-public-addr`, mode 600; never capture its
 value in notes or logs. [I: runtime behavior until that gate passes.]
+
+## Mobile browser profile survey gate
+
+Package release 0.0.4-2 applies after the existing user profile marker and
+after upstream's `omamobile-setup-user.service`. The upstream script's
+`--no-first-run`, mobile UA, scale and IME seeds are at
+`packages/omamobile-shell/bin/omamobile-setup-user:313-378` in upstream commit
+`c4623572be1c141d602cf99a83ae0bf9e3eea09c`. This package replaces only the
+Pixel UA with the OnePlus candidate, keeps one scale and IME switch, and does
+not force touch emulation, overlay scrollbars, pinch or Ozone Wayland while
+their settings are `auto`. [I: the OnePlus UA, scale, optional feature
+choices, and every app-specific scale remain unmeasured.]
+
+The user helper stores original flags and launcher files under
+`~/.local/state/omamobile/instantnoodlep-mobile-profile/`; backups stay on the
+phone. `reset` restores exact originals only when no post-apply edits are
+detected. Per-app scale overrides are in `apps.conf`; defaults are `inherit`,
+so all eight launchers share the global Chromium profile or keep their
+Electron defaults until the survey finds a concrete need.
