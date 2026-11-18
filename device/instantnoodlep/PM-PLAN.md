@@ -87,6 +87,26 @@ gates qualification. [V: [Linux sleep states](https://kernel.org/doc/html/latest
 | USB / Type-C | [V] Type-C wake IRQs are identified but Type-C node absent from current K2; no charging. [POWER-M5-PLAN.md:105-112,146](POWER-M5-PLAN.md#L105) | Test attach wake only after node is enabled in a reviewed kernel and charging/thermal limits are safe. |
 | Hall / alert slider | [V] Alert slider unknown. [MISC-HW-PLAN.md:77](MISC-HW-PLAN.md#L77) | Not a required wake source for first policy; don't create a binding from guesses. |
 
+### 3.1 Wake-source qualification switches
+
+The device package has no upstream-compatible per-source profile syntax.
+Linux exposes a per-device `power/wakeup` control when a driver supports
+system wake; discover the actual device path after the corresponding gate.
+Keep that switch disabled while testing unrelated sources. Automatic sleep
+is a separate global switch in upstream Omarchy: the shell's one-time setup
+enables the user toggle only when `/usr/share/omamobile/auto-sleep-default`
+exists. This package does not install that marker before the complete wake
+matrix passes. [V: upstream `omamobile-setup-user:331-341` and Linux
+[device wakeup documentation](https://www.kernel.org/doc/html/latest/driver-api/pm/devices.html)]
+
+| Source | Qualification gate | Per-source switch after pass | State |
+| --- | --- | --- | --- |
+| Power key | B2 | Discovered PON/input device `power/wakeup`, if exposed; test resume before leaving enabled. | Unqualified |
+| RTC alarm | B3 | RTC device wake control, if exposed; schedule only after time sync. | Unqualified |
+| USB attach | POWER-M5 Type-C gate then existing G4 | Discovered Type-C/PMIC device wake control; do not add charger policy. | Unqualified |
+| Wi-Fi WoWLAN | Later Wi-Fi/PM-PLAN gate | Driver WoWLAN configuration plus PCIe/device `power/wakeup`, after AP test. | Unqualified |
+| Modem ring/SMS | MODEM-M5 end-to-end call/SMS gate | Modem/PCIe wake route only after resume and service delivery pass. | Unqualified |
+
 ## 4. Measurement plan
 
 ### 4.1 Controlled baseline
@@ -94,7 +114,7 @@ gates qualification. [V: [Linux sleep states](https://kernel.org/doc/html/latest
 Repeat the owner-reported ~180 mA screen-off/Wi-Fi baseline with stable
 network, no active SSH transfer, screen at confirmed DPMS/backlight-off,
 Wi-Fi associated, Bluetooth and modem state recorded, and no charging. Run
-at least 10 minutes after a 5-minute settle, at a recorded battery and
+at least 15 minutes after a 5-minute settle, at a recorded battery and
 ambient temperature. Use median and range, plus sample count. Change one
 factor per follow-up: Wi-Fi off, BT off, modem absent/present, GNSS, audio,
 screen, suspend. [I]
@@ -107,7 +127,14 @@ for p in /sys/class/power_supply/*; do
 done
 ```
 
-Small timestamped sampler (read-only):
+The checked-in timestamped sampler (read-only) is
+[`tools/instantnoodlep-pm-sample`](../../tools/instantnoodlep-pm-sample). It
+defaults to 15 minutes at 5-second intervals and writes a mode-0600 CSV under
+`/tmp`; rows include `current_now` (µA), `voltage_now` (µV), `temp` (0.1°C),
+and per-interval `wakeup_sources` and `/proc/interrupts` deltas. It prints no
+phone serial, IMEI or MAC address. [V: implementation and package self-test.]
+
+Equivalent minimal current-only loop (read-only):
 
 ```sh
 #!/bin/sh
@@ -132,7 +159,20 @@ thermal zones, modem status and gauge SOC/voltage. [V: Linux
 Debugfs remains diagnostic-only; no regmap/PMU access. [V: AGENTS.md safety
 rule in this workspace.]
 
-### 4.2 Owner gates (no run performed)
+### 4.2 Morning baseline and first suspend gate (owner-run; not executed)
+
+Before the morning run, select the running gauge path with the read-only
+discovery loop above, start an external log/recovery observer, and confirm the
+known RAM-boot kernel and wall-clock time. No phone access was performed while
+writing this plan.
+
+| Step | Exact command / action | Expect | Stop condition | Rollback |
+| --- | --- | --- | --- | --- |
+| B1: screen-off baseline | Display off, Wi-Fi connected, no audio/GNSS/download/charging; run `tools/instantnoodlep-pm-sample --duration 900 --interval 5` (battery supply is discovered automatically). Keep it screen-off for 15 min after the 5-min settle; do not use an active SSH transfer during the sample. | CSV under `/tmp` with current, voltage, temperature and interval wake/IRQ deltas; observer reports median/range and conditions without copying identifiers. | Gauge or debugfs counters missing, battery heating/current anomaly, unexpected activity, wrong kernel, or only USB SSH is available as observer. | Stop with Ctrl-C; remove the private temporary CSV after recording redacted aggregates; no device state changed. |
+| B2: power-key s2idle | After B1 is reviewed and owner separately approves, check `cat /sys/power/mem_sleep; cat /sys/power/state; systemd-inhibit --list`; then `systemctl suspend`. Owner waits 30 s and presses Power once, while external log/recovery observer remains ready. | s2idle entry and success count; power key resumes to usable lock screen; wake IRQ and no hang/oops. | No resume within 60 s, screen remains unrecoverable, kernel warning/oops, reboot, or unexplained wake loop. | Owner uses known recovery/hard reboot; stop and review logs before any repeat. |
+| B3: RTC wake | Only after B2 passes and trusted wall-clock is confirmed, arm `rtcwake -m no -s 30`; run `systemctl suspend`. Owner/observer waits 90 s maximum. | RTC wakes close to 30 s, suspend success increments, alarm clears and resumed system is usable. | RTC/time invalid, no wake by 90 s, alarm fires repeatedly, or wake reason is inconsistent. | Power-key wake; clear the one-shot test alarm after resume; do not repeat until RTC/time issue is understood. |
+
+### 4.3 Owner gates (no run performed)
 
 All test blocks require the owner's explicit go for that individual step.
 These tests change only volatile runtime state. Use a known RAM-boot image,
@@ -142,9 +182,9 @@ slot marking, charger probing, or modem NV access.
 | Gate | Exact command / action | Expect | Stop | Rollback |
 | --- | --- | --- | --- | --- |
 | G0: identify state | `adb shell 'uname -r; cat /sys/power/mem_sleep; cat /sys/power/state; cat /sys/power/wakeup_count; grep -H . /sys/class/power_supply/*/current_now'` | Correct daily/RAM image, s2idle present/selected, gauge responds with stable units. | Unexpected kernel, `deep` only, no gauge, or implausible current. | Read-only; stop and update plan/evidence. |
-| G1: baseline | Run the sampler for 10 min, display off and Wi-Fi on; collect only aggregate values. | Reproducible distribution and conditions noted. | Gauge path changes/vanishes or heating/current anomaly. | Stop sampler. |
-| G2: s2idle/power key | `systemctl suspend`; owner waits 30 s then presses power key once. Watch external kernel log and suspend counters. | `s2idle` entered, success increments, power key wakes panel/UI, no errors. | No wake by 60 s, hard hang, reboot or unexplained repeated wake. | Owner uses known hard-reboot method; do not retry before logs reviewed. |
-| G3: RTC | After trusted time sync, `rtcwake -m no -s 30`; then `systemctl suspend`. | Resume occurs near 30 s and alarm is no longer armed. | No wake by 90 s, RTC reports invalid time, or wrong clock. | Power-key wake; clear test alarm after resume. Stop RTC testing until time issue fixed. |
+| G1: baseline | Run the sampler for 15 min, display off and Wi-Fi on; collect only aggregate values. | Reproducible distribution and conditions noted. | Gauge path changes/vanishes or heating/current anomaly. | Stop sampler. |
+| G2: s2idle/power key | Same as B2 above. | `s2idle` entered, success increments, power key wakes panel/UI, no errors. | No wake by 60 s, hard hang, reboot or unexplained repeated wake. | Owner uses known hard-reboot method; do not retry before logs reviewed. |
+| G3: RTC | Same as B3 above. | Resume occurs near 30 s and alarm is no longer armed. | No wake by 90 s, RTC reports invalid time, or wrong clock. | Power-key wake; clear test alarm after resume. Stop RTC testing until time issue fixed. |
 | G4: USB attach wake | With owner present and known-safe 5 V source, unplug USB; `systemctl suspend`; reinsert cable after 30 s. | One wake on attach, stable thermal/current, no charger negotiation surprise. | No wake, heat/current abnormality, repeated attach wake or charge state unclear. | Unplug, wake by power key. Do not test higher PD voltage or charging. |
 | G5: wake storm | Capture `wakeup_sources`, suspend for 10 min with only qualified wake sources enabled, then power-key wake. | No unexplained IRQ/count growth; observed drain lower than screen-off idle. | Repeated dark resumes, continuously increasing wake counts, drain no better than idle. | Disable auto-suspend for session; return to screen-off idle and review top source. |
 

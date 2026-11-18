@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # OnePlus 8 Pro device package
 
-Version 0.0.5 stages the instantnoodlep descriptor, a names-only firmware
+Version 0.0.6 stages the instantnoodlep descriptor, a names-only firmware
 map, session environment settings, the Bluetooth address unit, and the
 USB0 network policy and firstboot mask already owned by the installed 0.0.3
 package. It also masks `systemd-vconsole-setup.service`: it hung two boots on
@@ -52,3 +52,24 @@ Hyprland dialog rules. Foot changes only known upstream defaults; app desktop
 files are copied to `~/.local/share/applications` only if no user entry
 already exists. All candidate values and app IDs are [I] pending the morning
 survey. The setup never writes toolkit scales to global `environment.d`.
+
+## Power profile
+
+The package selects `s2idle` in the systemd sleep drop-in and sets
+`OMAMOBILE_SLEEP_AFTER_OFF=30` in `environment.d`; upstream `omamobile-sleepd`
+reads the latter from the user's systemd environment. This is a 30-second
+delay after secure lock and display-off, not the compositor's display blank
+timeout. The upstream shell enables automatic sleep by default only when
+`/usr/share/omamobile/auto-sleep-default` exists; this package deliberately
+does not install that marker because no wake source has passed the handset
+gates. [V: upstream `omamobile-setup-user` at
+[`c462357`](https://github.com/derekross/omarchy-mobile/blob/c4623572be1c141d602cf99a83ae0bf9e3eea09c/packages/omamobile-shell/bin/omamobile-setup-user#L331),
+`omamobile-sleepd.service` and device sleep drop-ins.]
+
+Power key, RTC alarm, USB attach, Wi-Fi WoWLAN, and modem events each remain
+unqualified. Their individual enable switches are the respective discovered
+driver/device `power/wakeup` controls; enable only the one under test after
+its owner-gated PM-PLAN step passes, and do not assume an IRQ or sysfs device
+name before discovery. The global automatic-sleep switch is the upstream
+`auto-sleep-default` marker, which stays absent until the required wake
+matrix passes. [I: sysfs paths and end-to-end wake behavior remain unmeasured.]
