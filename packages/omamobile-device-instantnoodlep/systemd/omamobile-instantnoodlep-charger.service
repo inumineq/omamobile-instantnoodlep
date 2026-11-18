@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+# Load the PM8150B charger at boot. Its device table is not exported
+# (drivers/power/supply/qcom_pm8150b_charger.c), so udev never autoloads it.
+# Kernels without the module (the pre-daily2 daily) skip this unit instead of
+# failing it. The driver enforces its own limits; see POWER-M5-PLAN 7.4-7.5.
+[Unit]
+Description=Load the instantnoodlep PM8150B charger driver
+After=systemd-modules-load.service
+
+[Service]
+Type=oneshot
+ExecCondition=/usr/bin/modinfo -n qcom_pm8150b_charger
+ExecStart=/usr/bin/modprobe qcom_pm8150b_charger
+
+[Install]
+WantedBy=multi-user.target
