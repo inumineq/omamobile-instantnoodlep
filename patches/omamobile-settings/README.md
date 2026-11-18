@@ -168,6 +168,18 @@ pushed upstream and no phone was used. Throwaway test secrets only.
   while the body had more lines; `git apply` silently truncated the applied
   file. The header now matches the body (all 23 hunk headers re-validated).
 
+### Fix found by the 2026-11-18 aarch64 package build
+
+The first ALARM build of this patch failed the package's own `check()`:
+`CoreTests::navigationRejectsUnknownAndHiddenActions()` expected 2 root rows,
+but the Security row makes 3. `tests/core_tests.cpp` now expects 3 and
+navigates to `security` and back. The same build then failed to link
+`tests/session_app.pro` (`main.cpp` references `CredentialsController`, which
+only `omamobile-settings.pro` listed); the session test app now links
+`credentialscontroller.{h,cpp}` like the main app. The patch was regenerated
+from the applied tree (so every hunk header matches its body) and re-validated
+with `git apply --check` against pristine `c462357`.
+
 Not verified offline (still pending): the `pkexec`/polkit agent round trip on
 a real session, the lock screen itself on the phone, and the D-Bus single
 instance fixture in `test/all` (needs `shellcheck` on the build host; its
