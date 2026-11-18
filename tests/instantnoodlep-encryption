@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BUILDER = ROOT / "tools/build-instantnoodlep-probe"
 PROVISION = ROOT / "scripts/provision-initramfs-dropbear-host-key.sh"
 UNLOCK = ROOT / "device/instantnoodlep/initramfs/cryptroot-unlock"
+TOUCH_SOURCE = ROOT / "device/instantnoodlep/initramfs/cryptroot-touch-unlock.c"
 
 
 def require(value, message):
@@ -34,11 +35,13 @@ def test_config_and_scripts():
     config = (ROOT / "device/instantnoodlep/kernel-slim.config").read_text()
     for symbol in ("CONFIG_BLK_DEV_DM=y", "CONFIG_DM_CRYPT=y",
                    "CONFIG_CRYPTO_AES_ARM64_CE_BLK=y",
-                   "CONFIG_CRYPTO_SHA2_ARM64_CE=y", "CONFIG_CRYPTO_XTS=y"):
+                   "CONFIG_CRYPTO_SHA2_ARM64_CE=y", "CONFIG_CRYPTO_XTS=y",
+                   "CONFIG_INPUT_EVDEV=y"):
         require(symbol in config, f"kernel fragment lacks {symbol}")
     require("0x10000..0x40000" in config,
             "kernel fragment lacks the stated image_size estimate")
-    for script in (PROVISION, UNLOCK, ROOT / "scripts/prepare-initramfs-root.sh"):
+    for script in (PROVISION, UNLOCK, ROOT / "scripts/prepare-initramfs-root.sh",
+                   ROOT / "scripts/build-instantnoodlep-touch-unlock.sh"):
         result = subprocess.run(["sh", "-n", str(script)], capture_output=True)
         require(result.returncode == 0, f"shell syntax failed for {script}: {result.stderr!r}")
 
@@ -62,6 +65,13 @@ boot_arch() {
             "init does not wait for the USB SSH unlock command")
     require("device: $rawdev" in patched,
             "init does not verify the opened mapper source")
+    require("/etc/omamobile-touch-unlock" in patched and
+            "USB SSH remains available" in patched and
+            "cryptroot-touch-unlock \"$rawdev\" omamobile-root &" in patched,
+            "init does not preserve USB fallback when touch unlock is enabled")
+    require('execlp("cryptsetup"' in TOUCH_SOURCE.read_text() and
+            '"--key-file=-"' in TOUCH_SOURCE.read_text(),
+            "touch unlock does not pipe its secret to cryptsetup")
 
 
 def test_cli_and_key_import(temp):
@@ -74,6 +84,15 @@ def test_cli_and_key_import(temp):
     ], text=True, capture_output=True)
     require(result.returncode != 0 and "--luks2 needs --root userdata" in result.stderr,
             "builder did not require userdata root for --luks2")
+    touch_only = subprocess.run([
+        str(BUILDER), "--kernel", "missing", "--dtb", "missing",
+        "--ssh-key", "missing", "--mkbootimg", "missing",
+        "--omarchy-mobile", "missing", "--initramfs-root", "missing",
+        "--stock-overlay", "missing", "--boot", "2", "--root", "userdata",
+        "--touch-unlock", "--out", str(temp / "touch.img"),
+    ], text=True, capture_output=True)
+    require(touch_only.returncode != 0 and "--touch-unlock needs --luks2" in touch_only.stderr,
+            "builder did not keep touchscreen unlock opt-in under --luks2")
 
 
 def test_phone_key_helper():

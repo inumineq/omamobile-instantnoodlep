@@ -190,15 +190,29 @@ hostname omamobile
       say "arch: userdata is not LUKS2; staying in the initramfs"; return 1;
     }
     local rawdev="$dev" mapper=/dev/mapper/omamobile-root status i=0
+    local touch_pid=
+    if [ -e /etc/omamobile-touch-unlock ]; then
+      say "arch: touch unlock UI starting; USB SSH remains available"
+      /usr/local/sbin/cryptroot-touch-unlock "$rawdev" omamobile-root &
+      touch_pid=$!
+    fi
     if [ ! -b "$mapper" ]; then
       say "arch: encrypted userdata; run cryptroot-unlock over USB SSH"
       while [ "$i" -lt 1800 ] && [ ! -b "$mapper" ]; do
         sleep 1; i=$((i + 1))
       done
     fi
-    [ -b "$mapper" ] || {
-      say "arch: encrypted root was not unlocked; staying in the initramfs"; return 1;
-    }
+    if [ ! -b "$mapper" ]; then
+      if [ -n "$touch_pid" ]; then
+        kill "$touch_pid" 2>/dev/null || :
+        wait "$touch_pid" 2>/dev/null || :
+      fi
+      say "arch: encrypted root was not unlocked; staying in the initramfs"; return 1
+    fi
+    if [ -n "$touch_pid" ]; then
+      kill "$touch_pid" 2>/dev/null || :
+      wait "$touch_pid" 2>/dev/null || :
+    fi
     status=$(cryptsetup status omamobile-root) || {
       say "arch: cannot verify the root mapping; staying in the initramfs"; return 1;
     }
@@ -312,7 +326,8 @@ def assert_luksroot(ramdisk):
         raise BuildError("LUKS2 initramfs does not wait for cryptroot-unlock")
 
 
-def build_initramfs(rootfs, shared_init, key, output, work, root="none", *, luks2=False):
+def build_initramfs(rootfs, shared_init, key, output, work, root="none", *,
+                    luks2=False, touch_unlock=False):
     stage = work / "rootfs"
     shutil.copytree(rootfs, stage, symlinks=True)
     (stage / "proc").mkdir(exist_ok=True)
@@ -332,7 +347,7 @@ def build_initramfs(rootfs, shared_init, key, output, work, root="none", *, luks
     for name in ("omamobile-ufs-rw", "omamobile-ufs-rw-luns",
                  "omamobile-nfsroot", "omamobile-simplefb-trig",
                  "omamobile-bringup-probe", "omamobile-root-label",
-                 "omamobile-root-mode"):
+                 "omamobile-root-mode", "omamobile-touch-unlock"):
         remove_file(etc / name)
     if luks2:
         host_key = etc / "dropbear/dropbear_ed25519_host_key"
@@ -352,6 +367,13 @@ def build_initramfs(rootfs, shared_init, key, output, work, root="none", *, luks
         shutil.copyfile(unlock_source, unlock)
         unlock.chmod(0o755)
         (etc / "omamobile-root-luks2").write_text("luks2\n")
+    if touch_unlock:
+        if not luks2:
+            raise BuildError("--touch-unlock requires --luks2")
+        touch_binary = stage / "usr/local/sbin/cryptroot-touch-unlock"
+        if not touch_binary.is_file() or touch_binary.is_symlink():
+            raise BuildError("--touch-unlock requires a prepared static touch-unlock binary")
+        (etc / "omamobile-touch-unlock").write_text("enabled\n")
     if root == "userdata":
         (etc / "omamobile-ufs-rw").write_text(ROOT_ALLOWLIST + "\n")
         (etc / "omamobile-root-label").write_text(ROOT_LABEL + "\n")
@@ -368,6 +390,11 @@ def build_initramfs(rootfs, shared_init, key, output, work, root="none", *, luks
     assert_allowlist(output, root)
     if luks2:
         assert_luksroot(output)
+        if touch_unlock:
+            names = cpio_names(output)
+            if "usr/local/sbin/cryptroot-touch-unlock" not in names or \
+                    "etc/omamobile-touch-unlock" not in names:
+                raise BuildError("touch unlock files are missing from the initramfs")
 
 
 def fdt_get(dtb, node, prop, kind="s"):
@@ -713,6 +740,8 @@ def build(args):
         raise BuildError("--root userdata needs --boot 2 (UFS enabled)")
     if args.luks2 and args.root != "userdata":
         raise BuildError("--luks2 needs --root userdata")
+    if args.touch_unlock and not args.luks2:
+        raise BuildError("--touch-unlock needs --luks2")
     if args.debug_shell and args.root != "userdata":
         raise BuildError("--debug-shell needs --root userdata")
     cmdline = boot_cmdline(args.root, args.debug_shell)
@@ -740,6 +769,8 @@ def build(args):
         needed += ["e2fsck", "dumpe2fs", "resize2fs"]
     if args.luks2:
         needed += ["cryptsetup"]
+    if args.touch_unlock:
+        needed += ["usr/local/sbin/cryptroot-touch-unlock"]
     for relative in needed:
         if "/" not in relative:
             if not any((args.initramfs_root / d / relative).exists()
@@ -776,7 +807,8 @@ def build(args):
             check_overlay_applies(args.ufdt_apply, staged["dtb"],
                                   args.stock_overlay, work)
         build_initramfs(args.initramfs_root, shared_init, args.ssh_key,
-                        staged["ramdisk"], work, args.root, luks2=args.luks2)
+                        staged["ramdisk"], work, args.root, luks2=args.luks2,
+                        touch_unlock=args.touch_unlock)
         expected_size = check_image_sizes(
             args.kernel.stat().st_size, staged["ramdisk"].stat().st_size,
             staged["dtb"].stat().st_size, kernel_image_size(args.kernel))
@@ -790,6 +822,11 @@ def build(args):
         verify_probe_dtb(unpacked / "dtb", args.boot, labels)
         if args.luks2:
             assert_luksroot(unpacked / "ramdisk")
+            if args.touch_unlock:
+                names = cpio_names(unpacked / "ramdisk")
+                if "usr/local/sbin/cryptroot-touch-unlock" not in names or \
+                        "etc/omamobile-touch-unlock" not in names:
+                    raise BuildError("touch unlock files are missing after boot image readback")
 
         outputs = {}
         for name in ("boot", "dtb", "ramdisk"):
@@ -803,6 +840,7 @@ def build(args):
             "boot": args.boot,
             "root": args.root,
             "luks2": args.luks2,
+            "touch_unlock": args.touch_unlock,
             "debug_shell": args.debug_shell,
             "header": info,
             "boot_image_limit": {
@@ -856,6 +894,8 @@ def main(argv=None):
                              "to Arch on userdata with an allowlist of userdata only")
     parser.add_argument("--luks2", action="store_true",
                         help="with --root userdata, unlock LUKS2 via cryptroot-unlock over USB SSH")
+    parser.add_argument("--touch-unlock", action="store_true",
+                        help="with --luks2, run the optional framebuffer/evdev passphrase UI at boot")
     parser.add_argument("--debug-shell", action="store_true",
                         help="with --root userdata: add " + DEBUG_SHELL)
     parser.add_argument("--out", type=Path, required=True,

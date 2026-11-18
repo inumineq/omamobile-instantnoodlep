@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # State: where the port stands now
 
-Last updated: 2026-11-18 (offline LUKS2 prototype in progress; slim K3 RAM-boots; clang 19 builds freeze), claude on omabook.
+Last updated: 2026-11-18 (USB and touchscreen LUKS2 prototypes; slim K3 RAM-boots; clang 19 builds freeze), claude on omabook.
 
 The one page an agent reads first. Keep it short and current: it is
 overwritten, not appended to. History goes to `device/instantnoodlep/NOTES.md`
@@ -60,7 +60,7 @@ See `docs/agents/active/`. Vibe workers on omabook: power P2b, kona, misc-hw, au
    take (DTBO-PLAN §6).
 5. Power P2b (charger as a module), then P3 Type-C.
 6. Audio phase 1 (worker on macbookpro), kona upstream series (worker `kona`), UI issue drafts (worker on obsidian); modem/GNSS kernel side is built, gates A-C of MODEM-M5-DELTA §6 (stock wiring, packages, private-state policy) are the coordinator's.
-7. Disk encryption + boot passphrase / lock-screen PIN (issue #70): design plan merged; offline kernel/initramfs prototype and QEMU test in progress on `inumineq/enc-impl`; no phone work started.
+7. Disk encryption + boot passphrase / lock-screen PIN (issue #70): plan and USB unlock path merged. The optional static fbdev/evdev passphrase prototype and QMP-driven virtio GPU/tablet test are under review on `inumineq/enc-touch-unlock`; the QEMU gate is open pending a host with QEMU, cryptsetup, and a suitable kernel. No phone work started.
 
 ## Offline UI proposals
 

@@ -8,6 +8,7 @@
 # Usage:
 #   scripts/prepare-initramfs-root.sh [--root DIR] [--kernel-build DIR]
 #       [--dropbear-host-key PHONE_KEY_COPY] [--dry-run]
+#       [--touch-unlock-bin STATIC_AARCH64_BINARY]
 #
 # --root defaults to ~/android/build/initramfs-root and must stay outside
 # this repository; downloads are cached beside it in <root>.cache. Re-running
@@ -58,6 +59,7 @@ REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 OUT=$HOME/android/build/initramfs-root
 KERNEL_BUILD=
 DROPBEAR_HOST_KEY=
+TOUCH_UNLOCK_BIN=
 DRY=0
 
 usage() {
@@ -83,6 +85,11 @@ while [ "$#" -gt 0 ]; do
         --dropbear-host-key)
             [ "$#" -ge 2 ] || die "--dropbear-host-key needs a file path"
             DROPBEAR_HOST_KEY=$2
+            shift
+            ;;
+        --touch-unlock-bin)
+            [ "$#" -ge 2 ] || die "--touch-unlock-bin needs a binary path"
+            TOUCH_UNLOCK_BIN=$2
             shift
             ;;
         --root)
@@ -137,6 +144,20 @@ if [ -n "$DROPBEAR_HOST_KEY" ]; then
          END { exit !valid }' "$DROPBEAR_HOST_KEY.pub" ||
         die "matching .pub file must contain one ssh-ed25519 key"
 fi
+if [ -n "$TOUCH_UNLOCK_BIN" ]; then
+    [ -f "$TOUCH_UNLOCK_BIN" ] && [ ! -L "$TOUCH_UNLOCK_BIN" ] ||
+        die "--touch-unlock-bin must be a regular, non-symlink file"
+    TOUCH_UNLOCK_BIN=$(readlink -e "$TOUCH_UNLOCK_BIN") ||
+        die "--touch-unlock-bin does not exist"
+    case $TOUCH_UNLOCK_BIN in
+        "$REPO_ROOT"/*) die "touch-unlock binary input must stay outside the repository" ;;
+    esac
+    need file
+    file -b "$TOUCH_UNLOCK_BIN" | grep -q 'statically linked' ||
+        die "--touch-unlock-bin must be statically linked"
+    file -b "$TOUCH_UNLOCK_BIN" | grep -q 'ARM aarch64' ||
+        die "--touch-unlock-bin must target aarch64"
+fi
 
 APK_TOOLS_APK=apk-tools-static-$APK_TOOLS_VERSION.apk
 ALPINE_KEYS_APK=alpine-keys-$ALPINE_KEYS_VERSION.apk
@@ -163,12 +184,13 @@ Run the verified x86_64 apk.static with --arch aarch64 --root <root> --initdb
 Then create the busybox applet symlinks on the host from etc/busybox-paths.d.
 Kernel build: ${KERNEL_BUILD:-none given; only the Alpine package set}
 Dropbear host key: ${DROPBEAR_HOST_KEY:-not imported; initramfs dropbear will create ephemeral keys}
+Touch unlock binary: ${TOUCH_UNLOCK_BIN:-not imported; USB SSH path only}
 No aarch64 binary would be executed.
 EOF
     exit 0
 fi
 
-for tool in awk cat cp curl depmod dirname find grep make mkdir mktemp modinfo mv openssl rm sed sha256sum tar tr uname; do
+for tool in awk cat cp curl depmod dirname find grep install make mkdir mktemp modinfo mv openssl rm sed sha256sum tar tr uname; do
     need "$tool"
 done
 
@@ -264,6 +286,11 @@ if [ -n "$DROPBEAR_HOST_KEY" ]; then
     chmod 0600 "$OUT/etc/dropbear/dropbear_ed25519_host_key"
     chmod 0644 "$OUT/etc/dropbear/dropbear_ed25519_host_key.pub"
 fi
+if [ -n "$TOUCH_UNLOCK_BIN" ]; then
+    mkdir -p "$OUT/usr/local/sbin"
+    install -m 0755 "$TOUCH_UNLOCK_BIN" \
+        "$OUT/usr/local/sbin/cryptroot-touch-unlock"
+fi
 
 KERNEL_RELEASE=
 WDT_MODE=none
@@ -349,6 +376,7 @@ INFO=$OUT.prepare-initramfs-root
     printf 'KERNEL_RELEASE=%s\n' "$KERNEL_RELEASE"
     printf 'CONFIG_QCOM_WDT=%s\n' "$WDT_MODE"
     printf 'REQUESTED_PACKAGES=%s\n' "$PACKAGES"
+    printf 'TOUCH_UNLOCK=%s\n' "$([ -n "$TOUCH_UNLOCK_BIN" ] && echo yes || echo no)"
     printf 'INSTALLED_PACKAGES:\n'
     awk '/^P:/{name=substr($0,3)} /^V:/{print name "=" substr($0,3)}' \
         "$OUT/lib/apk/db/installed"
