@@ -67,7 +67,9 @@ test -L "$stage/etc/systemd/system/systemd-firstboot.service"
 test "$(readlink "$stage/etc/systemd/system/systemd-firstboot.service")" = /dev/null
 test -L "$stage/etc/systemd/system/systemd-vconsole-setup.service"
 test "$(readlink "$stage/etc/systemd/system/systemd-vconsole-setup.service")" = /dev/null
-firmware_blob=$(find . -type f \( -name '*.mbn' -o -name '*.mdt' -o -name '*.bin' -o -name '*.tlv' \) -print -quit)
+# Skip ./pkg: makepkg creates it mode 0111 during check(), and find must not
+# trip over it (set -e would fail the whole check).
+firmware_blob=$(find . -path ./pkg -prune -o -type f \( -name '*.mbn' -o -name '*.mdt' -o -name '*.bin' -o -name '*.tlv' \) -print -quit)
 test -z "$firmware_blob"
 
 printf '%s\n' 'all device package self-checks passed'

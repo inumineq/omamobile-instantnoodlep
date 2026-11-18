@@ -18,7 +18,16 @@ pacman -Rns --noconfirm linux-aarch64 >/dev/null 2>&1 || true
 userdel -r alarm >/dev/null 2>&1 || true
 useradd -m -u 1000 builder
 sed -i 's/^#\?MAKEFLAGS=.*/MAKEFLAGS="-j'"$(nproc)"'"/' /etc/makepkg.conf
-pacman -S --noconfirm --needed shellcheck >/dev/null
+# ALARM aarch64 ships no shellcheck package (no Haskell stack in extra), but
+# the package's check() runs test/all, which needs it: bootstrap the official
+# static aarch64 binary with a pinned archive hash.
+pacman -S --noconfirm --needed curl >/dev/null
+curl -fsSL -o /tmp/shellcheck.tar.xz \
+  https://github.com/koalaman/shellcheck/releases/download/v0.10.0/shellcheck-v0.10.0.linux.aarch64.tar.xz
+echo '324a7e89de8fa2aed0d0c28f3dab59cf84c6d74264022c00c22af665ed1a09bb  /tmp/shellcheck.tar.xz' | sha256sum -c -
+tar -xJf /tmp/shellcheck.tar.xz -C /usr/local/bin --strip-components=1 shellcheck-v0.10.0/shellcheck
+rm -f /tmp/shellcheck.tar.xz
+shellcheck --version | head -1
 cd /work/repo/packages/omamobile-device-instantnoodlep
 chown -R builder: /work/repo /out
 date -u +"makepkg %FT%TZ"
