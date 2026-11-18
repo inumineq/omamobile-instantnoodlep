@@ -3,7 +3,7 @@
 # Runs inside the Arch Linux ARM aarch64 container: keyrings, full upgrade,
 # base-devel and the check tools, then makepkg as "builder" on
 # /work/omamobile-shell. The source tree is prepared on the host with patches
-# 0001-0004 and local pkgrel=2 (see SHELL-UX-PLAN); this script only builds.
+# 0001-0004 and local pkgrel=1.2 (see SHELL-UX-PLAN); this script only builds.
 #
 #   docker run --rm --platform linux/arm64 \
 #     -v $B/work:/work -v $B/out:/out \

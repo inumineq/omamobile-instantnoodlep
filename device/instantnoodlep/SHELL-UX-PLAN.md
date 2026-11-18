@@ -149,8 +149,9 @@ device package must install this file at `/usr/share/omamobile/device-ui.conf`.
    reads input/sysfs and stores no samples. Risk: L.
 2. **Offline shell source.** In a disposable clone, check and apply patches
    `0001`, `0002`, `0003` and `0004` in order against upstream
-   `c4623572be1c141d602cf99a83ae0bf9e3eea09c`. Set local package `pkgrel=2`
-   (the prior local shell build was `0.2.133-1.1`); build through
+   `c4623572be1c141d602cf99a83ae0bf9e3eea09c`. Set local package
+   `pkgrel=1.2` so its version is `0.2.133-1.2` (the prior local shell build
+   was `0.2.133-1.1`); build through
    `device/instantnoodlep/tools/shellpkg-build-in-alarm.sh`. Expect all patches
    apply and `test/all`, QML lint/format checks pass in the build container.
    Stop on patch drift or any QML/test failure. Rollback: discard the clone.
