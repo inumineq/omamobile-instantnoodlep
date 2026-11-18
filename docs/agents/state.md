@@ -21,6 +21,7 @@ of it from `origin/main` plus the pushed branches.
 | M1b: K2 on slot B as the default boot, B5 success mark | Done [V: NOTES 2026-11-17 night, B4-B5] |
 | K3 (panel, touch, keys, GPU) | Superseded on `boot_b` by daily K3; combo stays the rollback image [V: NOTES 2026-11-17 night] |
 | Daily K3 (combo + Wi-Fi/BT + P1 gauge) | **On `boot_b`, B5 set**: boots from flash to Hyprland on the GPU, Wi-Fi connected, hci0 present [V: NOTES 2026-11-17 night] |
+| Daily2 candidate | [V] Built on macbookpro with clang/LLD 23.1.6, fixed USB peripheral mode, haptics and manual-load charger, `image_size=0x1750000`. [I] RAM qualification pending. Build evidence and checklist in DAILY-K3-PLAN §8. |
 | Slim K3 (daily minus foreign-SoC drivers, `-k3-slim-g78f38a2acc99`) | RAM boot passes on omabook clang 23.1.3: `image_size` 0x1720000 (ceiling `0x2b60000`), USB, `running`, panel, msm GL, Wi-Fi, hci0, gauge; modules on the rootfs. Base for new features; not flashed [V: 2026-11-18 RAM test]. the same tree built with MBP Docker clang 19 freezes on the splash (learning 2026-11-18); P2 froze because its `image_size` 0x2b70000 is over the ceiling |
 | Slim-all Type-C recovery | [V] Two clang/LLD 23.1.6 candidates built offline with `image_size=0x1780000`. [I] QMP DP-exit recovery and static UTMI for the USB2 hub await T6/T7 in [TYPEC-DP-PLAN §7](../../device/instantnoodlep/TYPEC-DP-PLAN.md#7-recovery-candidates-after-dp-disconnect). |
 | Neutral `dtbo_b` (DTBO-PLAN) | Parked: ABL rejected v1 (table) and v2 (raw FDT); stock dtbo back [V: DTBO-PLAN §6; learning `l-48e0c482`] |
