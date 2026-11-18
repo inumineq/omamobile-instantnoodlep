@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Use QMP virtio-tablet touches to unlock a LUKS2 image in an x86 guest."""
+import importlib.util
+import json
+import os
+from pathlib import Path
+import re
+import select
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+
+ROOT = Path(__file__).resolve().parents[1]
+SOURCE = ROOT / "device/instantnoodlep/initramfs/cryptroot-touch-unlock.c"
+BASE = ROOT / "tests/instantnoodlep-cryptroot-qemu"
+PASSWORD = b"ab"
+
+
+def main():
+    if not shutil.which("qemu-system-x86_64"):
+        print("SKIP - qemu-system-x86_64 is not installed")
+        return 77
+    spec = importlib.util.spec_from_file_location("cryptroot_qemu", BASE)
+    base = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(base)
+    base.PASSPHRASE = PASSWORD
+    if os.geteuid() != 0:
+        print("SKIP - root is required for loop devices and mounting the test image")
+        return 77
+    try:
+        base.need("cryptsetup", "losetup", "sfdisk", "mkfs.ext4", "mount", "umount",
+                  "busybox", "cpio", "gzip", "find", "sort", "ldd")
+    except RuntimeError as error:
+        print(f"SKIP - {error}")
+        return 77
+    cc = os.environ.get("CC", "cc")
+    if not shutil.which(cc):
+        print(f"SKIP - host C compiler {cc} is not installed")
+        return 77
+    try:
+        kernel = base.kernel_inputs()
+        config = Path(os.environ.get("QEMU_KERNEL_CONFIG", f"/boot/config-{os.uname().release}"))
+        values = {}
+        for line in config.read_text().splitlines():
+            if line.startswith("CONFIG_") and "=" in line:
+                name, value = line.split("=", 1)
+                values[name] = value
+        required = ("CONFIG_DRM", "CONFIG_DRM_VIRTIO_GPU", "CONFIG_DRM_FBDEV_EMULATION",
+                    "CONFIG_INPUT", "CONFIG_INPUT_EVDEV", "CONFIG_VIRTIO_INPUT")
+        missing = [name for name in required if values.get(name) != "y"]
+        if missing:
+            raise RuntimeError("QEMU kernel needs built-in options: " + ", ".join(missing))
+    except RuntimeError as error:
+        print(f"SKIP - {error}")
+        return 77
+
+    with tempfile.TemporaryDirectory(prefix="touch-unlock-qemu-") as tempdir:
+        temp = Path(tempdir)
+        binary = temp / "cryptroot-touch-unlock"
+        subprocess.run([cc, "-std=c11", "-Os", "-static", "-s", "-Wall", "-Wextra", "-Werror",
+                        str(SOURCE), "-o", str(binary)], check=True)
+        base.create_luks_image(temp)
+        root = temp / "root"
+        root.mkdir()
+        busybox, cryptsetup = Path(shutil.which("busybox")), Path(shutil.which("cryptsetup"))
+        base.copy_runtime(busybox, root)
+        base.copy_runtime(cryptsetup, root)
+        (root / "bin").mkdir(parents=True, exist_ok=True)
+        (root / "bin/sh").symlink_to("busybox")
+        applets = subprocess.check_output([busybox, "--list"], text=True).splitlines()
+        for applet in ("mount", "mkdir", "mknod", "sleep", "grep", "mdev", "poweroff", "sh"):
+            if applet not in applets:
+                raise RuntimeError(f"BusyBox lacks required applet {applet}")
+            if applet != "sh":
+                (root / "bin" / applet).symlink_to("busybox")
+        binary_path = root / "usr/local/sbin/cryptroot-touch-unlock"
+        binary_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(binary, binary_path)
+        init = r'''#!/bin/sh
+PATH=/bin:/sbin:/usr/sbin:/usr/local/sbin; export PATH
+mount -t proc proc /proc; mount -t sysfs sysfs /sys; mount -t devtmpfs devtmpfs /dev
+mkdir -p /dev/mapper /mnt/root
+[ -c /dev/mapper/control ] || mknod /dev/mapper/control c 10 236
+for i in 1 2 3 4 5; do [ -r /sys/block/vda/vda1/uevent ] && break; sleep 1; done
+grep -qx 'PARTNAME=userdata' /sys/block/vda/vda1/uevent || { echo TOUCH_TEST_FAIL_PARTNAME; poweroff -f; }
+/usr/local/sbin/cryptroot-touch-unlock /dev/vda1 omamobile-root || { echo TOUCH_TEST_FAIL_UNLOCK; poweroff -f; }
+mdev -s
+mount -t ext4 -o ro /dev/mapper/omamobile-root /mnt/root || { echo TOUCH_TEST_FAIL_MOUNT; poweroff -f; }
+grep -qx 'qemu-luks-mounted' /mnt/root/.cryptroot-qemu-test || { echo TOUCH_TEST_FAIL_CONTENT; poweroff -f; }
+echo TOUCH_TEST_PASS
+poweroff -f
+'''
+        (root / "init").write_text(init)
+        (root / "init").chmod(0o755)
+        for name in ("proc", "sys", "dev", "mnt", "run"):
+            (root / name).mkdir(exist_ok=True)
+        initrd = temp / "initramfs.cpio.gz"
+        base.make_archive(root, initrd)
+        qmp_path = temp / "qmp.sock"
+        command = ["qemu-system-x86_64", "-accel", "tcg", "-m", "512", "-kernel", str(kernel),
+                   "-initrd", str(initrd), "-append", "console=ttyS0,115200n8 rdinit=/init panic=-1",
+                   "-drive", f"file={temp / 'userdata.img'},format=raw,if=virtio,snapshot=on",
+                   "-device", "virtio-gpu-pci", "-device", "virtio-tablet-pci", "-display", "none",
+                   "-serial", "stdio", "-qmp", f"unix:{qmp_path},server=on,wait=off", "-no-reboot"]
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                   stdin=subprocess.DEVNULL, bufsize=0)
+        transcript = bytearray()
+        sock = None
+        try:
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                try:
+                    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    sock.connect(str(qmp_path))
+                    break
+                except (FileNotFoundError, ConnectionRefusedError):
+                    sock.close()
+                    sock = None
+                    time.sleep(.1)
+            if sock is None:
+                raise RuntimeError("QMP socket did not become ready")
+            reader = sock.makefile("rwb", buffering=0)
+            reader.readline()
+            reader.write(b'{"execute":"qmp_capabilities"}\r\n')
+            reader.readline()
+            ready = re.compile(rb"TOUCH_UNLOCK_READY (\d+) (\d+)")
+            deadline = time.monotonic() + 30
+            geometry = None
+            while time.monotonic() < deadline:
+                readable, _, _ = select.select([process.stdout], [], [], .2)
+                if readable:
+                    transcript.extend(os.read(process.stdout.fileno(), 4096))
+                    match = ready.search(transcript)
+                    if match:
+                        geometry = (int(match.group(1)), int(match.group(2)))
+                        break
+            if not geometry:
+                raise RuntimeError("touch UI did not become ready: " + transcript[-1000:].decode(errors="replace"))
+
+            def touch(rx, ry):
+                def send(events):
+                    payload = {"execute": "input-send-event", "arguments": {"events": events}}
+                    reader.write(json.dumps(payload).encode() + b"\r\n")
+                    while True:
+                        response = json.loads(reader.readline())
+                        if "error" in response:
+                            raise RuntimeError("QMP input-send-event failed: " + str(response["error"]))
+                        if "return" in response:
+                            return
+                events = [{"type": "abs", "data": {"axis": "x", "value": round(rx * 32767)}},
+                          {"type": "abs", "data": {"axis": "y", "value": round(ry * 32767)}},
+                          {"type": "button", "data": {"button": "left", "down": True}}]
+                send(events)
+                send([{"type": "button", "data": {"button": "left", "down": False}}])
+
+            for x, y in ((1 / 18, .625), (4.5 / 7, .725), (.8, .825)):
+                touch(x, y)
+                time.sleep(.15)
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                readable, _, _ = select.select([process.stdout], [], [], .2)
+                if readable:
+                    transcript.extend(os.read(process.stdout.fileno(), 4096))
+                    if b"TOUCH_TEST_PASS" in transcript:
+                        print("PASS - QMP touchscreen unlocked and mounted LUKS2 in the guest")
+                        return 0
+                    if b"TOUCH_TEST_FAIL" in transcript or b"TOUCH_UNLOCK_RETRY" in transcript:
+                        raise RuntimeError(transcript[-2000:].decode(errors="replace"))
+            raise RuntimeError("guest did not complete unlock and mount")
+        finally:
+            if sock:
+                sock.close()
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=5)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (OSError, subprocess.SubprocessError, RuntimeError) as error:
+        print(f"FAIL - {error}", file=sys.stderr)
+        sys.exit(1)

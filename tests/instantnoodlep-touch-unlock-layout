@@ -1,0 +1,21 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+set -eu
+
+[ "$(uname -m)" = x86_64 ] || {
+    echo "SKIP - touch layout host test uses x86_64 Linux syscalls"
+    exit 77
+}
+compiler=${CC:-clang}
+command -v "$compiler" >/dev/null 2>&1 || {
+    echo "SKIP - host compiler not found: $compiler"
+    exit 77
+}
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+temp=$(mktemp -d "${TMPDIR:-/tmp}/touch-layout-test.XXXXXX")
+trap 'python3 -c '\''import shutil,sys; shutil.rmtree(sys.argv[1], ignore_errors=True)'\'' "$temp"' EXIT
+
+"$compiler" --target=x86_64-linux-gnu -std=c11 -Wall -Wextra -Werror -O2 \
+    -fno-builtin -nostdlib -static -fuse-ld=lld -Wl,-e,_start \
+    "$root/tests/instantnoodlep-touch-unlock-layout.c" -o "$temp/test"
+"$temp/test"
