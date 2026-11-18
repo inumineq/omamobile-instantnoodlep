@@ -1,0 +1,68 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Per-user UI defaults; never writes global toolkit environment variables.
+set -euo pipefail
+
+share=${OMAMOBILE_SCALING_SHARE:-/usr/share/omamobile/instantnoodlep-scaling}
+data_home=${XDG_DATA_HOME:-"$HOME/.local/share"}
+config_home=${XDG_CONFIG_HOME:-"$HOME/.config"}
+desktop_dirs=${OMAMOBILE_DESKTOP_SOURCE_DIRS:-${XDG_DATA_DIRS:-/usr/local/share:/usr/share}}
+
+# Upstream seeds these settings for a 480 px logical phone. [I] Lower values
+# are OnePlus candidates only; preserve anything the user or setup has changed.
+foot=$config_home/foot/foot.ini
+if [[ -f $foot ]]; then
+  temp=$(mktemp "${foot}.XXXXXX")
+  awk '
+    /^font=JetBrainsMono Nerd Font:size=9$/ { print "font=JetBrainsMono Nerd Font:size=8"; next }
+    /^pad=6x6$/ { print "pad=4x4"; next }
+    /^\[scrollback\]$/ { in_scrollback=1; print; next }
+    /^\[/ { in_scrollback=0 }
+    in_scrollback && /^multiplier=3\.0$/ { print "multiplier=2.0"; next }
+    { print }
+  ' "$foot" > "$temp"
+  if ! cmp -s "$foot" "$temp"; then
+    chmod --reference="$foot" "$temp"
+    mv -f -- "$temp" "$foot"
+  else
+    rm -f -- "$temp"
+  fi
+fi
+
+# Upstream already adds [touch] long-press-delay=300. Do not duplicate or
+# overwrite it: the survey must establish selection behavior on this build.
+
+mkdir -p "$data_home/applications"
+while IFS=$'\t' read -r desktop key value; do
+  [[ -z $desktop || $desktop == \#* ]] && continue
+  [[ $desktop =~ ^[A-Za-z0-9._+-]+\.desktop$ && $key =~ ^(GDK_SCALE|QT_SCALE_FACTOR)$ && $value =~ ^[0-9]+([.][0-9]+)?$ ]] || continue
+  target=$data_home/applications/$desktop
+  [[ -e $target ]] && continue
+  source=
+  IFS=: read -r -a dirs <<< "$desktop_dirs"
+  for dir in "${dirs[@]}"; do
+    [[ -f $dir/applications/$desktop ]] && { source=$dir/applications/$desktop; break; }
+  done
+  [[ -n $source ]] || continue
+  temp=$(mktemp "$data_home/applications/.${desktop}.XXXXXX")
+  awk -v key="$key" -v value="$value" '
+    BEGIN { entry=1; exec_done=0 }
+    /^\[/ { entry=($0 == "[Desktop Entry]") }
+    entry && /^Exec=/ && !exec_done { sub(/^Exec=/, "Exec=env " key "=" value " "); exec_done=1 }
+    entry && /^\[Desktop Entry\]$/ { print; print "X-Omamobile-Scaling=I"; print "X-Omamobile-Scaling-Note=Pending morning survey"; next }
+    { print }
+    END { if (!exec_done) exit 42 }
+  ' "$source" > "$temp" || { rm -f "$temp"; continue; }
+  chmod 644 "$temp"
+  mv -- "$temp" "$target"
+done < "$share/apps.tsv"
+
+# Append a package-local include after upstream's phone.lua. Existing user
+# config is preserved; the include is added once to whichever setup-user loads.
+hypr=$config_home/hypr
+mkdir -p "$hypr"
+target_config=$hypr/looknfeel.lua
+[[ -f $target_config ]] || target_config=$hypr/hyprland.lua
+if [[ -f $target_config ]] && ! grep -Fq "$share/windowrules.lua" "$target_config"; then
+  printf '\n-- Device dialog sizing (provisional [I]).\ndofile("%s/windowrules.lua")\n' "$share" >> "$target_config"
+fi

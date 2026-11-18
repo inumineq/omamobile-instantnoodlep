@@ -12,9 +12,11 @@ scripts=(
   bin/omamobile-bt-public-addr
   bin/omamobile-instantnoodlep-mobile-profile
   bin/omamobile-instantnoodlep-app-launcher
+  bin/omamobile-instantnoodlep-scaling
   test/all
   test/bt-public-addr
   test/mobile-profile.sh
+  test/scaling.sh
 )
 bash -n "${scripts[@]}"
 shellcheck "${scripts[@]}"
@@ -24,6 +26,7 @@ makepkg --printsrcinfo > "$srcinfo"
 grep -q "^pkgbase = omamobile-device-instantnoodlep$" "$srcinfo"
 ./test/bt-public-addr
 ./test/mobile-profile.sh
+./test/scaling.sh
 
 stage=$(mktemp -d)
 trap 'rm -rf "$stage" "$srcinfo"' EXIT
@@ -41,6 +44,13 @@ test -x "$stage/usr/bin/omamobile-instantnoodlep-app-launcher"
 test -f "$stage/usr/lib/systemd/user/omamobile-instantnoodlep-mobile-profile.service"
 test -L "$stage/usr/lib/systemd/user/graphical-session-pre.target.wants/omamobile-instantnoodlep-mobile-profile.service"
 test "$(readlink "$stage/usr/lib/systemd/user/graphical-session-pre.target.wants/omamobile-instantnoodlep-mobile-profile.service")" = ../omamobile-instantnoodlep-mobile-profile.service
+test -f "$stage/usr/share/omamobile/instantnoodlep-scaling/apps.tsv"
+test -f "$stage/usr/share/omamobile/instantnoodlep-scaling/windowrules.lua"
+test -x "$stage/usr/bin/omamobile-instantnoodlep-scaling"
+test -f "$stage/usr/lib/systemd/user/omamobile-instantnoodlep-scaling.service"
+test -L "$stage/usr/lib/systemd/user/graphical-session-pre.target.wants/omamobile-instantnoodlep-scaling.service"
+test "$(readlink "$stage/usr/lib/systemd/user/graphical-session-pre.target.wants/omamobile-instantnoodlep-scaling.service")" = ../omamobile-instantnoodlep-scaling.service
+! grep -R -n -E 'GDK_SCALE|QT_SCALE_FACTOR' "$stage/usr/lib/environment.d" "$stage/usr/share/uwsm/env.d"
 test -f "$stage/usr/lib/udev/rules.d/80-omamobile-bt-public-addr.rules"
 test -L "$stage/etc/systemd/system/systemd-firstboot.service"
 test "$(readlink "$stage/etc/systemd/system/systemd-firstboot.service")" = /dev/null
