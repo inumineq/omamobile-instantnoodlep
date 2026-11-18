@@ -29,3 +29,9 @@ install -Dm755 bin/omamobile-instantnoodlep-app-launcher "$destination/usr/bin/o
 install -Dm644 systemd/user/omamobile-instantnoodlep-mobile-profile.service "$destination/usr/lib/systemd/user/omamobile-instantnoodlep-mobile-profile.service"
 install -d "$destination/usr/lib/systemd/user/graphical-session-pre.target.wants"
 ln -sfn ../omamobile-instantnoodlep-mobile-profile.service "$destination/usr/lib/systemd/user/graphical-session-pre.target.wants/omamobile-instantnoodlep-mobile-profile.service"
+
+install -Dm644 scaling/apps.tsv "$destination/usr/share/omamobile/instantnoodlep-scaling/apps.tsv"
+install -Dm644 hypr/windowrules.lua "$destination/usr/share/omamobile/instantnoodlep-scaling/windowrules.lua"
+install -Dm755 bin/omamobile-instantnoodlep-scaling "$destination/usr/bin/omamobile-instantnoodlep-scaling"
+install -Dm644 systemd/user/omamobile-instantnoodlep-scaling.service "$destination/usr/lib/systemd/user/omamobile-instantnoodlep-scaling.service"
+ln -sfn ../omamobile-instantnoodlep-scaling.service "$destination/usr/lib/systemd/user/graphical-session-pre.target.wants/omamobile-instantnoodlep-scaling.service"
