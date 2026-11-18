@@ -1,10 +1,12 @@
 <!-- SPDX-License-Identifier: MIT -->
-# Shell UI proposals, not posted upstream
+# Upstream UI proposals, not posted upstream
 
 [V] Research source: read-only clone of
 <https://github.com/derekross/omarchy-mobile> at
 `c4623572be1c141d602cf99a83ae0bf9e3eea09c`; its AGENTS.md and CONTRIBUTING.md
-were read. Issue drafts 001–003 are for owner review only.
+were read. Issue drafts 001–003 are for owner review only. The native Settings security
+proposal is an implementation patch with package notes and an unposted issue
+draft; no phone or upstream issue was used.
 
 [V] Patch 1 adds bounded environment configuration and a provisional device
 file; patch 2 registers the Wi-Fi picker with the existing BackLink dispatcher.
@@ -38,3 +40,9 @@ ordinary shell surfaces; changing its above-lock rules is not proposed.
 are in `device/instantnoodlep/SHELL-UX-PLAN.md`. Installation/restart is explicitly
 blocked on checking the actual phone layout and recovery command: this research
 worker has no phone access and supplies no guessed service name.
+
+[V] The native Settings Security proposal is `patches/omamobile-settings/`
+for upstream `omamobile-settings` 0.1.2 at the pinned source revision above.
+It adds the account/PIN page, an opt-in distinct lock PIN PAM service, x86
+static checks, and a container PAM test. Application and PAM checks are
+pending before the proposal is ready for upstream review.
