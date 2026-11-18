@@ -36,6 +36,9 @@ of it from `origin/main` plus the pushed branches.
 
 - [V] `instantnoodlep-k3-slim-all` @ `gc30e3f696707` (local `~/src/l-k3-slim-all`, omabook): slim-feat + p2 + typec + cam, plus fixes for typec (`op-sink-microwatt`, i2c15 on, xHCI), haptics on, camera off. RAM image `~/android/build/k3-slim-all-ram/v3/boot-slim-all.img`. Passes R checks, haptics buzz, typec T1/T2, DP picture on a USB-C monitor.
 - [V] Blockers before `boot_b`: after DP alt mode the USB gadget dies until reboot (QMP combo PHY init timeout, `ep0out`), and USB2 behind a 4-lane DP monitor does not enumerate (keyboard/mouse). Learning 2026-11-18 slim-all.
+| M5 power | P1 gauge works on a RAM boot; P2 charger image hangs early at boot (P2b in progress); no charging under any of our kernels [V: POWER-M5-PLAN §7.3-7.4]. Screen-off idle audit and PM1 diagnostic candidate are prepared offline; `image_size=0x1780000`, phone comparison pending [V: `docs/research/idle-power-sm8250.md`]. |
+| M5 camera (M-CAM1 front IMX471) | Kernel series rebuilt on slim K3 with omabook clang 23.1.3: branch `instantnoodlep-k3-slim-cam` @ `d53d0fd6baaa`, release `7.3.0-rc6-instantnoodlep-k3-slim-cam-gd53d0fd6baaa`, `image_size` 0x1720000 (ceiling 0x2b60000), dtbs_check clean, camera stack (CAMSS/camcc/CCI/imx471) as **modules** so a probe hang cannot block boot, one IMX471 on CCI1 master 1 to CSIPHY3 in the DTB, RAM image `~/android/build/k3-slim-cam-ram/boot-slim-cam.img` [V: CAMERA-PLAN §9.5]. No RAM boot or frame yet; coordinator gates C0-C5 pending. The earlier MBP clang 19 candidate (`g70d0761d1`, image_size 0x2cd0000, froze) is superseded. |
+| M5 camera hang bisect | Three built-in probe candidates are staged on `instantnoodlep-k3-cam-bisect` at B1/B2/B3 commits; CAMCC, then CCI with the sensor client disabled, then full CAMSS+IMX471. Releases, image sizes, hashes and exact deltas are in `device/instantnoodlep/CAMERA-BISECT.md`; all fit the ABL ceiling [V]. The first failing rung is still [I], pending owner RAM boots. |
 
 ## The phone right now
 
@@ -61,7 +64,7 @@ See `docs/agents/active/`. Vibe workers on omabook: power P2b, kona, misc-hw, au
 
 ## Next
 
-0. Feature kernels on slim K3 are built offline as 5 RAM candidates (P2 charger, misc, audio, sensors, kona; branches `instantnoodlep-k3-slim-p2`/`-feat` in inumineq/linux-omarchy-mobile, images in `~/android/build/k3-slim-p2-ram`/`k3-slim-feat-ram`, runbook `docs/runbooks/SLIM-FEAT-RUNBOOK.md`) [V: NOTES 2026-11-18 evening]. Next: coordinator runs Part R per candidate; camera and modem candidates still need slimming under the image_size ceiling. Daily K3 is on `boot_b`: implement the BT address unit (DAILY-K3-PLAN §5.3); fold further features into daily as they pass RAM tests.
+0. Feature kernels on slim K3 are built offline as 5 RAM candidates (P2 charger, misc, audio, sensors, kona; branches `instantnoodlep-k3-slim-p2`/`-feat` in inumineq/linux-omarchy-mobile, images in `~/android/build/k3-slim-p2-ram`/`k3-slim-feat-ram`, runbook `docs/runbooks/SLIM-FEAT-RUNBOOK.md`) [V: NOTES 2026-11-18 evening]. Next: coordinator runs Part R per candidate, then the PM1 idle comparison and camera B1-B3 RAM boot ladder. Daily K3 is on `boot_b`: implement the BT address unit (DAILY-K3-PLAN §5.3); fold further features into daily as they pass RAM tests.
 1. Owner: upstream proposal for freedreno in the omamobile Mesa (PR of
    `inumineq/gpu-mesa-freedreno`; draft in `~/claude/instantnoodlep/`).
 2. Power: battery gauge and charger (POWER-M5-PLAN), the daily-use blocker.

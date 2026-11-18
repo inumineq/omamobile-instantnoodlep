@@ -15,6 +15,35 @@ detail lives in the *-PLAN.md files.
 - [I] Gadget recovery and USB2 hub enumeration await independent
   RAM-boot gates T6 and T7 in `TYPEC-DP-PLAN.md` §7.
 
+## 2026-11-18: screen-off idle audit and camera-hang bisect prepared offline
+
+- [V: task-provided 15-minute gauge sample] Screen-off daily-kernel draw was
+  reported as 360 mA median with USB unplugged and Wi-Fi associated; the CSV is
+  private and is not committed.
+- [V: `PM-PLAN.md:21-23`] An older owner report said about 180 mA but had no
+  recorded test conditions; treat it as a separate observation, not the same
+  controlled baseline.
+- [V: `docs/research/idle-power-sm8250.md`] The slim-all source already describes
+  hierarchical PSCI core/cluster idle states, RPMh-RSC sleep TCS, SM8250
+  interconnect `sync_state`, and Adreno runtime PM. PM1 is a diagnostic TEO +
+  built-in QCOM sleep-statistics candidate, with no speculative DTS change.
+- [V: `docs/research/idle-power-sm8250.md`] PM1 built with clang/LLD 23.1.3
+  from `e13b631da615`: release
+  `7.3.0-rc6-instantnoodlep-k3-pm1-ge13b631da615`, `image_size=0x1780000`,
+  artifacts and hashes in `~/android/build/k3-pm1/`. The image is under the
+  `0x2b60000` ABL ceiling; it has not been RAM booted.
+- [V: `device/instantnoodlep/CAMERA-BISECT.md`] Camera bisect source rungs are
+  CAMCC built-in, then CCI built-in with IMX471 disabled, then built-in CAMSS
+  plus IMX471. B1 built offline with clang/LLD 23.1.3 at release
+  `7.3.0-rc6-instantnoodlep-k3-cam-b1-gb7274db8c79b`, header
+  `image_size=0x1780000`, under `~/android/build/k3-cam-b1/`; its full
+  SHA256 manifest is recorded in the bisect document. B2 and B3 also built
+  with matching stripped modules, release files, config diffs and hashes;
+  all three headers are within the ABL ceiling. Outputs and exact phone gates
+  are documented there. The candidates have not been RAM booted.
+- [I] The cause of elevated screen-off draw and the first camera-probe hang
+  rung remain phone-gated. No phone command was run by this worker.
+
 ## 2026-11-18: mask vconsole setup in the device package
 
 - [V: owner report, 2026-11-18] `systemd-vconsole-setup.service` hung two

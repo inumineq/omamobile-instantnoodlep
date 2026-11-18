@@ -1,0 +1,210 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Print read-only idle and power counters around a timed CPU-idle interval.
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: instantnoodlep-idle-report [--duration SECONDS]
+
+Take read-only counter snapshots, sleep without suspending the system, then
+take another snapshot. Run after the display is confirmed off and the phone
+has settled. The interval does not request system suspend.
+EOF
+}
+
+duration=60
+while (($#)); do
+  case $1 in
+    --duration)
+      (($# >= 2)) || { usage >&2; exit 2; }
+      duration=$2
+      shift 2
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+[[ $duration =~ ^[1-9][0-9]*$ ]] || { usage >&2; exit 2; }
+
+sysfs=${IDLE_REPORT_SYSFS:-/sys}
+debugfs=${IDLE_REPORT_DEBUGFS:-/sys/kernel/debug}
+
+read_attr() {
+  local path=$1
+  [[ -r $path ]] || return 0
+  local value
+  value=$(<"$path") || return 0
+  printf '  %s=%s\n' "${path##*/}" "$value"
+}
+
+snapshot_cpuidle() {
+  local cpu state
+  local found=0
+  echo 'Global cpuidle selection'
+  read_attr "$sysfs/devices/system/cpu/cpuidle/current_driver"
+  read_attr "$sysfs/devices/system/cpu/cpuidle/current_governor"
+  for cpu in "$sysfs"/devices/system/cpu/cpu[0-9]*; do
+    [[ -d $cpu/cpuidle ]] || continue
+    found=1
+    printf 'CPU %s\n' "${cpu##*cpu}"
+    read_attr "$cpu/online"
+    for state in "$cpu"/cpuidle/state[0-9]*; do
+      [[ -d $state ]] || continue
+      printf ' %s\n' "${state##*/}"
+      read_attr "$state/name"
+      read_attr "$state/desc"
+      read_attr "$state/latency"
+      read_attr "$state/residency"
+      read_attr "$state/usage"
+      read_attr "$state/time"
+      read_attr "$state/disable"
+    done
+  done
+  ((found)) || echo '  unavailable'
+}
+
+snapshot_genpd() {
+  local summary=$debugfs/pm_genpd/pm_genpd_summary
+  if [[ -r $summary ]]; then
+    cat "$summary"
+  else
+    echo '  unavailable'
+  fi
+}
+
+snapshot_qcom_stats() {
+  local path found=0
+  if [[ -d $debugfs/qcom_stats ]]; then
+    while IFS= read -r -d '' path; do
+      found=1
+      printf ' %s\n' "${path##*/}"
+      cat "$path"
+    done < <(find "$debugfs/qcom_stats" -maxdepth 1 -type f -readable -print0 | sort -z)
+  fi
+  ((found)) || echo '  unavailable'
+}
+
+snapshot_interconnect() {
+  local summary=$debugfs/interconnect/interconnect_summary
+  if [[ -r $summary ]]; then
+    cat "$summary"
+  else
+    echo '  unavailable'
+  fi
+}
+
+snapshot_runtime_pm() {
+  local power device driver label attr found=0
+  for power in "$sysfs"/bus/*/devices/*/power; do
+    [[ -d $power ]] || continue
+    device=${power%/power}
+    driver=
+    if [[ -L $device/driver ]]; then
+      driver=$(basename -- "$(readlink -f -- "$device/driver")")
+    fi
+    label=${device##*/}
+    if [[ ! ${label,,} =~ (gpu|adreno|msm|ath11k|wlan|wifi|pcie) &&
+          ! ${driver,,} =~ (gpu|adreno|msm|ath11k|wlan|wifi|pcie) ]]; then
+      continue
+    fi
+    found=1
+    printf ' %s (driver=%s)\n' "$label" "${driver:-unknown}"
+    for attr in control runtime_status runtime_active_time runtime_suspended_time \
+                autosuspend_delay_ms wakeup; do
+      read_attr "$power/$attr"
+    done
+  done
+  ((found)) || echo '  unavailable'
+}
+
+snapshot_devfreq() {
+  local path name found=0 attr
+  for path in "$sysfs"/class/devfreq/*; do
+    [[ -d $path ]] || continue
+    name=
+    [[ -r $path/name ]] && name=$(<"$path/name")
+    if [[ ! ${name,,} =~ (gpu|adreno|msm) &&
+          ! ${path##*/} =~ (gpu|adreno|msm) ]]; then
+      continue
+    fi
+    found=1
+    printf ' %s\n' "${name:-${path##*/}}"
+    for attr in governor cur_freq min_freq max_freq trans_stat; do
+      read_attr "$path/$attr"
+    done
+  done
+  ((found)) || echo '  unavailable'
+}
+
+snapshot_cpufreq() {
+  local path found=0 attr
+  for path in "$sysfs"/devices/system/cpu/cpufreq/policy*; do
+    [[ -d $path ]] || continue
+    found=1
+    printf ' %s\n' "${path##*/}"
+    for attr in scaling_driver scaling_governor scaling_cur_freq \
+                scaling_min_freq scaling_max_freq cpuinfo_cur_freq \
+                cpuinfo_min_freq cpuinfo_max_freq; do
+      read_attr "$path/$attr"
+    done
+    read_attr "$path/stats/time_in_state"
+  done
+  ((found)) || echo '  unavailable'
+}
+
+snapshot_wakeup_sources() {
+  local path=$debugfs/wakeup_sources
+  if [[ -r $path ]]; then
+    cat "$path"
+  else
+    echo '  unavailable'
+  fi
+}
+
+snapshot_interrupts() {
+  if [[ -r /proc/interrupts ]]; then
+    cat /proc/interrupts
+  else
+    echo '  unavailable'
+  fi
+}
+
+snapshot() {
+  echo "Snapshot time: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo 'CPU idle (sysfs cumulative counters)'
+  snapshot_cpuidle
+  echo 'Generic power domains (debugfs)'
+  snapshot_genpd
+  echo 'Qualcomm sleep statistics, if exposed (debugfs)'
+  snapshot_qcom_stats
+  echo 'Interconnect votes, if exposed (debugfs)'
+  snapshot_interconnect
+  echo 'GPU/Wi-Fi/PCIe runtime PM (sysfs)'
+  snapshot_runtime_pm
+  echo 'GPU devfreq (sysfs)'
+  snapshot_devfreq
+  echo 'CPU frequency policy (sysfs)'
+  snapshot_cpufreq
+  echo 'Wakeup sources (debugfs cumulative counters)'
+  snapshot_wakeup_sources
+  echo 'Interrupt counters (/proc/interrupts)'
+  snapshot_interrupts
+}
+
+echo '=== Before ==='
+snapshot
+printf '\nSleeping for %s seconds; no suspend requested.\n\n' "$duration"
+sleep "$duration"
+echo '=== After ==='
+snapshot
+echo
+echo 'Compare cumulative usage/time and sleep-stat deltas between snapshots.'
+echo 'These counters are software evidence; they do not directly measure rail power.'
+echo 'This script reads counters only; it does not change governor, runtime PM, or suspend state.'
