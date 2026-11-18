@@ -6,7 +6,8 @@
 # every target package against Alpine's published keys.
 #
 # Usage:
-#   scripts/prepare-initramfs-root.sh [--root DIR] [--kernel-build DIR] [--dry-run]
+#   scripts/prepare-initramfs-root.sh [--root DIR] [--kernel-build DIR]
+#       [--dropbear-host-key PHONE_KEY_COPY] [--dry-run]
 #
 # --root defaults to ~/android/build/initramfs-root and must stay outside
 # this repository; downloads are cached beside it in <root>.cache. Re-running
@@ -27,7 +28,12 @@
 # derekross/omarchy-mobile 6c11752ae4c3 (tools/build-flame-probe runs
 # alpine:3.22; tools/dipper/build defaults ALPINE to alpine:3.22). The package
 # set is dipper's: alpine-baselayout busybox busybox-extras dropbear iproute2
-# util-linux e2fsprogs e2fsprogs-extra kmod.
+# util-linux e2fsprogs e2fsprogs-extra kmod cryptsetup.
+#
+# --dropbear-host-key imports the Ed25519 private key generated on the phone
+# by scripts/provision-initramfs-dropbear-host-key.sh. Pass a secured copy of
+# the phone's /etc/dropbear/dropbear_ed25519_host_key; the private key is
+# copied only to OUT (which must be outside the repository), never tracked.
 #
 # apk-tools-static comes from the official Alpine CDN and is verified two
 # ways: the pinned SHA256 values below, recorded from dl-cdn.alpinelinux.org
@@ -46,11 +52,12 @@ APK_TOOLS_SHA256=d78d2a9ebadc8179b3b9063c3316e948f594c833db51eaeabe67f1d04424552
 APK_STATIC_SHA256=99b6de1fdd5725b22f316e00be64e80fb3c708c5eba4ffebbcfe18dcec469aee
 ALPINE_KEYS_VERSION=2.5-r0
 ALPINE_KEYS_SHA256=1069fa68769607690e46b0d689f1ad9b5e346be2752ece313685b4f29ec70e25
-PACKAGES='alpine-baselayout busybox busybox-extras dropbear iproute2 util-linux e2fsprogs e2fsprogs-extra kmod'
+PACKAGES='alpine-baselayout busybox busybox-extras dropbear iproute2 util-linux e2fsprogs e2fsprogs-extra kmod cryptsetup'
 
 REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 OUT=$HOME/android/build/initramfs-root
 KERNEL_BUILD=
+DROPBEAR_HOST_KEY=
 DRY=0
 
 usage() {
@@ -71,6 +78,11 @@ while [ "$#" -gt 0 ]; do
         --kernel-build)
             [ "$#" -ge 2 ] || die "--kernel-build needs a directory"
             KERNEL_BUILD=$2
+            shift
+            ;;
+        --dropbear-host-key)
+            [ "$#" -ge 2 ] || die "--dropbear-host-key needs a file path"
+            DROPBEAR_HOST_KEY=$2
             shift
             ;;
         --root)
@@ -104,6 +116,28 @@ case $CACHE/ in
 esac
 [ "$OUT" != / ] && [ -n "$OUT" ] || die "--root must not be / or empty"
 
+if [ -n "$DROPBEAR_HOST_KEY" ]; then
+    need stat
+    [ ! -L "$DROPBEAR_HOST_KEY" ] ||
+        die "--dropbear-host-key must not be a symlink"
+    DROPBEAR_HOST_KEY=$(readlink -e "$DROPBEAR_HOST_KEY") ||
+        die "--dropbear-host-key does not exist"
+    case $DROPBEAR_HOST_KEY in
+        "$REPO_ROOT"/*) die "private host keys must stay outside the repository" ;;
+    esac
+    [ -f "$DROPBEAR_HOST_KEY" ] ||
+        die "--dropbear-host-key must be a regular, non-symlink file"
+    [ "$(stat -c %a "$DROPBEAR_HOST_KEY")" = 600 ] ||
+        die "private host key mode must be 0600"
+    [ -f "$DROPBEAR_HOST_KEY.pub" ] && [ ! -L "$DROPBEAR_HOST_KEY.pub" ] ||
+        die "matching .pub file is required"
+    [ "$(stat -c %a "$DROPBEAR_HOST_KEY.pub")" = 644 ] ||
+        die "public host key mode must be 0644"
+    awk 'NR == 1 && $1 == "ssh-ed25519" && NF == 2 { valid=1 }
+         END { exit !valid }' "$DROPBEAR_HOST_KEY.pub" ||
+        die "matching .pub file must contain one ssh-ed25519 key"
+fi
+
 APK_TOOLS_APK=apk-tools-static-$APK_TOOLS_VERSION.apk
 ALPINE_KEYS_APK=alpine-keys-$ALPINE_KEYS_VERSION.apk
 APK_TOOLS_URL=$CDN/$ALPINE_RELEASE/main/x86_64/$APK_TOOLS_APK
@@ -128,6 +162,7 @@ Run the verified x86_64 apk.static with --arch aarch64 --root <root> --initdb
   --allow-untrusted, installing: $PACKAGES
 Then create the busybox applet symlinks on the host from etc/busybox-paths.d.
 Kernel build: ${KERNEL_BUILD:-none given; only the Alpine package set}
+Dropbear host key: ${DROPBEAR_HOST_KEY:-not imported; initramfs dropbear will create ephemeral keys}
 No aarch64 binary would be executed.
 EOF
     exit 0
@@ -221,6 +256,14 @@ for paths in "$OUT"/etc/busybox-paths.d/*; do
 done
 [ -e "$OUT/bin/busybox" ] || die "busybox did not land at bin/busybox"
 [ -e "$OUT/usr/sbin/dropbear" ] || die "dropbear did not land at usr/sbin/dropbear"
+
+if [ -n "$DROPBEAR_HOST_KEY" ]; then
+    mkdir -p "$OUT/etc/dropbear"
+    cp "$DROPBEAR_HOST_KEY" "$OUT/etc/dropbear/dropbear_ed25519_host_key"
+    cp "$DROPBEAR_HOST_KEY.pub" "$OUT/etc/dropbear/dropbear_ed25519_host_key.pub"
+    chmod 0600 "$OUT/etc/dropbear/dropbear_ed25519_host_key"
+    chmod 0644 "$OUT/etc/dropbear/dropbear_ed25519_host_key.pub"
+fi
 
 KERNEL_RELEASE=
 WDT_MODE=none
