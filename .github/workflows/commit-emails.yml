@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+name: commit-emails
+on: [pull_request, push]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Owner commits use the GitHub noreply address
+        run: |
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            scripts/check-commit-emails "origin/${{ github.base_ref }}..HEAD"
+          else
+            scripts/check-commit-emails "${{ github.event.before }}..${{ github.sha }}" || \
+            { [ "${{ github.event.before }}" = 0000000000000000000000000000000000000000 ] && scripts/check-commit-emails "HEAD~20..HEAD"; }
+          fi

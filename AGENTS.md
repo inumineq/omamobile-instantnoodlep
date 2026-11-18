@@ -27,6 +27,12 @@ House rules for work in this repository:
 4. **Captures are private.** `captures/` is gitignored on purpose. Serials,
    IMEI and MAC addresses never enter commits, comments or issues. Quote
    the fact, not the file.
+4a. **No personal contact details.** The repo is public. The owner's
+   commits use `6770514+inumineq@users.noreply.github.com`
+   (`git config user.email`, set per repo on every host); never write his
+   personal e-mail, phone or address into commits, patches, comments, issues
+   or PRs. `scripts/check-commit-emails` and the `commit-emails` workflow
+   enforce the commit side. (Owner decision 2026-11-18.)
 5. **Licences.** MIT with SPDX headers here; GPL-2.0 for kernel/DTS work.
    No leaked or decompiled proprietary code; describe protocols instead.
 6. **Plans before code.** A subsystem is not touched until its
