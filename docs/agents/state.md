@@ -77,4 +77,4 @@ See `docs/agents/active/`. Vibe workers on omabook: power P2b, kona, misc-hw, au
   PR #92 supersedes #76 and #77; those PRs are closed. PR #79 remains open
   for the shell's phone verification.
 - [V] Chromium and app profile implementation plus x86 self-checks are in PR #99. [I] OnePlus UA/scale, per-app exceptions, optional touch/scroll/pinch and Ozone choices await the morning phone survey in `MOBILE-UX-RESEARCH.md`; no phone testing was done.
-- [V] Signed local pacman-repo tooling, an ALARM rebuild recipe for Mesa/shell/device packages, and x86 dummy-package signing tests are in the local-repo branch. [I] Owner-key creation and phone repo switch/rollback are documented but not run; no phone or real key was used.
+- [V] Signed local pacman-repo tooling, an ALARM rebuild recipe for Mesa/shell/device packages, and x86 dummy-package signing tests are in PR #111. [I] Owner-key creation and phone repo switch/rollback are documented but not run; no phone or real key was used.
