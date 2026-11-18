@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+# [I] Candidate per-app scale; survey actual desktop IDs before relying on these.
+qv4l2.desktop	QT_SCALE_FACTOR	0.85
+qvidcap.desktop	QT_SCALE_FACTOR	0.85
+org.pinta_project.Pinta.desktop	GDK_SCALE	2
+libreoffice-writer.desktop	GDK_SCALE	2
+libreoffice-calc.desktop	GDK_SCALE	2
+libreoffice-impress.desktop	GDK_SCALE	2
+libreoffice-draw.desktop	GDK_SCALE	2
+libreoffice-startcenter.desktop	GDK_SCALE	2
+libreoffice-math.desktop	GDK_SCALE	2
+org.fcitx.Fcitx5.Config.desktop	QT_SCALE_FACTOR	0.85

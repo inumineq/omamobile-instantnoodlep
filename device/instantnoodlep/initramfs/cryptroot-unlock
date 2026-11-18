@@ -1,0 +1,36 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Open the LUKS2 userdata partition from an interactive USB SSH session.
+
+set -eu
+
+if [ ! -t 0 ] || [ ! -t 1 ]; then
+    echo "cryptroot-unlock: run from an interactive SSH session with a PTY" >&2
+    exit 2
+fi
+
+device=
+for partition in /sys/block/*/*; do
+    [ -r "$partition/uevent" ] || continue
+    if grep -qx 'PARTNAME=userdata' "$partition/uevent"; then
+        device=/dev/${partition##*/}
+        break
+    fi
+done
+
+if [ -z "$device" ] || [ ! -b "$device" ]; then
+    echo "cryptroot-unlock: userdata partition was not found" >&2
+    exit 1
+fi
+
+if ! cryptsetup isLuks --type luks2 "$device"; then
+    echo "cryptroot-unlock: userdata is not a LUKS2 device" >&2
+    exit 1
+fi
+
+if [ -e /dev/mapper/omamobile-root ]; then
+    echo "cryptroot-unlock: root mapping is already open" >&2
+    exit 1
+fi
+
+exec cryptsetup open --type luks2 "$device" omamobile-root

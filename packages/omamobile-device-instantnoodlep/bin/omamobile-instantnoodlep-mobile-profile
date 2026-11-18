@@ -1,0 +1,268 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Apply or revert the phone's Chromium flags and per-app launcher wrappers.
+set -euo pipefail
+umask 077
+
+profile_dir=${OMAMOBILE_INSTANTNOODLEP_PROFILE_DIR:-/usr/share/omamobile/instantnoodlep-mobile-profile}
+config_home=${XDG_CONFIG_HOME:-$HOME/.config}
+data_home=${XDG_DATA_HOME:-$HOME/.local/share}
+data_dirs=${XDG_DATA_DIRS:-/usr/local/share:/usr/share}
+state_dir=${XDG_STATE_HOME:-$HOME/.local/state}/omamobile/instantnoodlep-mobile-profile
+flags_file=$config_home/chromium-flags.conf
+mode=${1:-apply}
+
+value() {
+  awk -F= -v key="$1" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "$profile_dir/instantnoodlep.conf"
+}
+
+log() { printf 'instantnoodlep-mobile-profile: %s\n' "$*"; }
+fail() { printf 'instantnoodlep-mobile-profile: %s\n' "$*" >&2; exit 1; }
+
+flags_apply() {
+  local scale android model ime text_version overlay touch pinch ozone major ua pixel_prefix model_prefix custom_ua=0 line value_line
+  scale=$(value scale_factor)
+  android=$(value android_version)
+  model=$(value device_model)
+  ime=$(value wayland_ime)
+  text_version=$(value text_input_version)
+  overlay=$(value overlay_scrollbars)
+  touch=$(value touch_events)
+  pinch=$(value pinch_zoom)
+  ozone=$(value ozone_platform)
+  [[ $scale =~ ^[0-9]+([.][0-9]+)?$ ]] || fail "invalid device scale factor in profile"
+  [[ $android =~ ^[0-9]+$ && -n $model ]] || fail "invalid Android UA profile"
+  [[ $ime == enabled || $ime == auto ]] || fail "invalid IME policy"
+  [[ $text_version == 3 || $text_version == auto ]] || fail "invalid text-input version"
+  [[ $overlay == auto || $overlay == enabled ]] || fail "invalid overlay scrollbar policy"
+  [[ $touch == auto || $touch == enabled ]] || fail "invalid touch event policy"
+  [[ $pinch == auto || $pinch == enabled ]] || fail "invalid pinch policy"
+  [[ $ozone == auto || $ozone == wayland ]] || fail "invalid Ozone policy"
+
+  major=$(chromium --version 2>/dev/null | sed -n 's/^[^0-9]*\([0-9][0-9]*\).*/\1/p' | head -n1 || true)
+  [[ $major =~ ^[0-9]+$ ]] || major=153
+  ua="\"--user-agent=Mozilla/5.0 (Linux; Android $android; $model) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/$major.0.0.0 Mobile Safari/537.36\""
+  pixel_prefix='--user-agent=Mozilla/5.0 (Linux; Android 14; Pixel 7 Pro)'
+  model_prefix="--user-agent=Mozilla/5.0 (Linux; Android $android; $model)"
+  mkdir -p "$config_home" "$state_dir"
+  if [[ ! -e $state_dir/chromium-flags.original ]]; then
+    if [[ -e $flags_file ]]; then
+      cp -p "$flags_file" "$state_dir/chromium-flags.original"
+    else
+      : > "$state_dir/chromium-flags.was-absent"
+    fi
+  fi
+
+  # Keep user-defined UAs. Replace only upstream's Pixel seed or this profile's
+  # previous device UA, so the profile layers without duplicating either.
+  if [[ -f $flags_file ]]; then
+    while IFS= read -r line || [[ -n $line ]]; do
+      value_line=${line#\"}
+      value_line=${value_line%\"}
+      if [[ $value_line == --user-agent=* && $value_line != "$pixel_prefix"* && $value_line != "$model_prefix"* ]]; then
+        custom_ua=1
+        break
+      fi
+    done < "$flags_file"
+  fi
+
+  local tmp mode_bits
+  tmp=$(mktemp "$config_home/.chromium-flags.XXXXXX")
+  if [[ -f $flags_file ]]; then
+    mode_bits=$(stat -c '%a' "$flags_file")
+  else
+    mode_bits=600
+  fi
+  awk -v ua="$ua" -v scale="$scale" -v pixel="$pixel_prefix" -v model="$model_prefix" \
+      -v custom_ua="$custom_ua" -v ime="$ime" -v text_version="$text_version" '
+    function unquote(s) { sub(/^"/, "", s); sub(/"$/, "", s); return s }
+    {
+      line=$0; plain=unquote(line)
+      if (index(plain, "--user-agent=") == 1) {
+        if (index(plain, pixel) == 1 || index(plain, model) == 1) next
+        print line; next
+      }
+      if (index(line, "--force-device-scale-factor=") == 1) { scale_line=line; next }
+      if (line == "--enable-wayland-ime") { ime_seen=1; if (!ime_printed++) print line; next }
+      if (index(line, "--wayland-text-input-version=") == 1) { text_line=line; next }
+      print line
+    }
+    END {
+      if (scale_line != "") print scale_line; else print "--force-device-scale-factor=" scale
+      if (!custom_ua) print ua
+      if (ime == "enabled" && !ime_seen) print "--enable-wayland-ime"
+      if (text_line != "") print text_line
+      else if (text_version == "3") print "--wayland-text-input-version=3"
+    }
+  ' "$flags_file" 2>/dev/null > "$tmp" || :
+  # An absent input is valid and produces the managed defaults.
+  if [[ ! -f $flags_file ]]; then
+    : > "$tmp"
+    printf '%s\n' "--force-device-scale-factor=$scale" "$ua" >> "$tmp"
+    [[ $ime == enabled ]] && printf '%s\n' --enable-wayland-ime >> "$tmp"
+    [[ $text_version == 3 ]] && printf '%s\n' --wayland-text-input-version=3 >> "$tmp"
+  fi
+
+  # Experimental switches stay off while their values are [I]. They can be
+  # turned on in the system profile after the phone survey.
+  if [[ $overlay == enabled ]]; then
+    local feature_tmp
+    feature_tmp=$(mktemp "$config_home/.chromium-features.XXXXXX")
+    awk '
+      /^--enable-features=/ {
+        n=split(substr($0, 19), parts, ",")
+        for (i=1; i<=n; i++) if (parts[i] != "") {
+          split(parts[i], feature_parts, ":")
+          if (feature_parts[1] == "OverlayScrollbar") { overlay_seen=1; continue }
+          if (!seen[parts[i]]++) features=(features == "" ? parts[i] : features "," parts[i])
+        }
+        next
+      }
+      { print }
+      END {
+        features=(features == "" ? "OverlayScrollbar:mode/overlay" : features ",OverlayScrollbar:mode/overlay")
+        print "--enable-features=" features
+      }
+    ' "$tmp" > "$feature_tmp"
+    chmod "$mode_bits" "$feature_tmp"
+    mv -f "$feature_tmp" "$tmp"
+  fi
+  [[ $touch != enabled ]] || grep -qxF -- --touch-events=enabled "$tmp" || printf '%s\n' --touch-events=enabled >> "$tmp"
+  [[ $pinch != enabled ]] || grep -qxF -- --enable-pinch "$tmp" || printf '%s\n' --enable-pinch >> "$tmp"
+  if [[ $ozone == wayland ]] && ! grep -q '^--ozone-platform=' "$tmp"; then
+    printf '%s\n' --ozone-platform=wayland >> "$tmp"
+  fi
+  chmod "$mode_bits" "$tmp"
+  mv -f "$tmp" "$flags_file"
+  if [[ ! -e $state_dir/chromium-flags.applied ]]; then
+    cp -p "$flags_file" "$state_dir/chromium-flags.applied"
+  fi
+}
+
+find_launcher() {
+  local id=$1 dir path
+  dir=$data_home/applications
+  if [[ -d $dir ]]; then
+    path=$(find "$dir" -type f -name "$id.desktop" -print -quit)
+    [[ -n $path ]] && { printf '%s\n' "$path"; return 0; }
+  fi
+  IFS=: read -r -a dirs <<<"$data_dirs"
+  for dir in "${dirs[@]}"; do
+    [[ -d $dir/applications ]] || continue
+    path=$(find "$dir/applications" -type f -name "$id.desktop" -print -quit)
+    [[ -n $path ]] && { printf '%s\n' "$path"; return 0; }
+  done
+  return 1
+}
+
+launchers_apply() {
+  local app runtime scale ozone source dest backup kind tmp
+  mkdir -p "$data_home/applications" "$state_dir/launchers"
+  while IFS='|' read -r app runtime scale ozone; do
+    [[ -n $app && $app != \#* ]] || continue
+    case $runtime in chromium|electron) ;; *) log "invalid runtime for $app; leaving launcher unchanged"; continue ;; esac
+    dest=$data_home/applications/$app.desktop
+    if [[ -f $dest ]] && grep -q '^X-Omamobile-Instantnoodlep-Profile=1$' "$dest"; then
+      continue
+    fi
+    if [[ -f $dest ]]; then
+      source=$dest
+      kind=local
+    else
+      source=$(find_launcher "$app") || { log "launcher not found for $app; it will inherit the global profile"; continue; }
+      kind=system
+    fi
+    backup=$state_dir/launchers/$app.original.desktop
+    if [[ ! -e $backup ]]; then cp -p "$source" "$backup"; chmod 600 "$backup"; fi
+    [[ -e $state_dir/launchers/$app.kind ]] || printf '%s\n' "$kind" > "$state_dir/launchers/$app.kind"
+    tmp=$(mktemp "$data_home/applications/.$app.desktop.XXXXXX")
+    if ! awk -v app="$app" -v runtime="$runtime" '
+      BEGIN { section=0; execs=0; marker=0 }
+      /^\[Desktop Entry\]$/ { section=1; print; print "X-Omamobile-Instantnoodlep-Profile=1"; marker=1; next }
+      /^\[/ { section=0 }
+      section && /^Exec=/ {
+        command=substr($0, 6)
+        if (index(command, "/usr/bin/omamobile-instantnoodlep-app-launcher ") == 1) { print; execs++; next }
+        split(command, words, /[[:space:]]+/)
+        binary=words[1]; sub(/^"/, "", binary); sub(/"$/, "", binary); sub(/^.*\//, "", binary)
+        accepted=0
+        if (runtime == "chromium" && binary == "chromium") accepted=1
+        if (runtime == "electron" && app == "obsidian" && binary == "obsidian") accepted=1
+        if (runtime == "electron" && app == "Discord" && (binary == "discord" || binary == "Discord")) accepted=1
+        if (runtime == "electron" && app == "localsend" && (binary == "localsend" || binary == "localsend_app" || binary == "LocalSend")) accepted=1
+        if (accepted) {
+          print "Exec=/usr/bin/omamobile-instantnoodlep-app-launcher " app " -- " command
+          execs++
+        } else print
+        next
+      }
+      { print }
+      END { if (!execs || !marker) exit 1 }
+    ' "$backup" > "$tmp"; then
+      rm -f "$tmp"
+      log "no desktop Exec entry found for $app; leaving it unchanged"
+      continue
+    fi
+    chmod 644 "$tmp"
+    mv -f "$tmp" "$dest"
+    sha256sum "$dest" | awk '{print $1}' > "$state_dir/launchers/$app.applied-sha256"
+  done < "$profile_dir/apps.conf"
+}
+
+flags_reset() {
+  if [[ -e $state_dir/chromium-flags.was-absent ]]; then
+    if [[ -f $state_dir/chromium-flags.applied && -f $flags_file ]] && ! cmp -s "$flags_file" "$state_dir/chromium-flags.applied"; then
+      fail "Chromium flags changed after profile apply; preserved them at $flags_file (disable the profile and review manually)"
+    fi
+    rm -f "$flags_file"
+  elif [[ -f $state_dir/chromium-flags.original ]]; then
+    if [[ -f $state_dir/chromium-flags.applied && -f $flags_file ]] && ! cmp -s "$flags_file" "$state_dir/chromium-flags.applied"; then
+      fail "Chromium flags changed after profile apply; preserved them at $flags_file (disable the profile and review manually)"
+    fi
+    cp -p "$state_dir/chromium-flags.original" "$flags_file"
+  fi
+}
+
+launchers_reset() {
+  local app dest backup kind expected actual
+  while IFS='|' read -r app _; do
+    [[ -n $app && $app != \#* ]] || continue
+    dest=$data_home/applications/$app.desktop
+    backup=$state_dir/launchers/$app.original.desktop
+    [[ -f $dest && -f $backup ]] || continue
+    expected=$(cat "$state_dir/launchers/$app.applied-sha256" 2>/dev/null || true)
+    actual=$(sha256sum "$dest" | awk '{print $1}')
+    if [[ -n $expected && $actual == "$expected" ]]; then
+      kind=$(cat "$state_dir/launchers/$app.kind")
+      if [[ $kind == local ]]; then cp -p "$backup" "$dest"; else rm -f "$dest"; fi
+    else
+      log "preserving edited launcher $dest"
+    fi
+  done < "$profile_dir/apps.conf"
+}
+
+case $mode in
+  apply)
+    [[ ! -e $state_dir/disabled ]] || exit 0
+    flags_apply
+    launchers_apply
+    ;;
+  reset)
+    flags_reset
+    launchers_reset
+    mkdir -p "$state_dir"
+    : > "$state_dir/disabled"
+    log "reverted unchanged Chromium flags and app launchers; profile disabled for this user"
+    ;;
+  enable)
+    mkdir -p "$state_dir"
+    rm -f "$state_dir/disabled"
+    exec "$0" apply
+    ;;
+  disable)
+    mkdir -p "$state_dir"
+    : > "$state_dir/disabled"
+    log "profile disabled for this user; current flags and launchers are unchanged"
+    ;;
+  *) fail "Usage: $0 {apply|reset|enable|disable}" ;;
+esac

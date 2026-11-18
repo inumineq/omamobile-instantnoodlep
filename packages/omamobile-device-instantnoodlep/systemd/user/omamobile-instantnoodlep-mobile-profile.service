@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Apply instantnoodlep browser and app profiles
+After=omamobile-setup-user.service
+Before=graphical-session-pre.target
+ConditionPathExists=%h/.local/state/omarchy/done/omamobile-shell-profile
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-instantnoodlep-mobile-profile apply
+
+[Install]
+WantedBy=graphical-session-pre.target

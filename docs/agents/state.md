@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # State: where the port stands now
 
-Last updated: 2026-11-18 (slim K3 RAM-boots; clang 19 builds freeze; slim cam/modem candidates rebuilt with clang 23 on omabook), claude on omabook.
+Last updated: 2026-11-18 (offline LUKS2 path; slim K3 RAM-boots; clang 19 builds freeze; slim cam/modem rebuilt with clang 23), claude on omabook.
 
 The one page an agent reads first. Keep it short and current: it is
 overwritten, not appended to. History goes to `device/instantnoodlep/NOTES.md`
@@ -24,8 +24,8 @@ of it from `origin/main` plus the pushed branches.
 | Slim K3 (daily minus foreign-SoC drivers, `-k3-slim-g78f38a2acc99`) | RAM boot passes on omabook clang 23.1.3: `image_size` 0x1720000 (ceiling `0x2b60000`), USB, `running`, panel, msm GL, Wi-Fi, hci0, gauge; modules on the rootfs. Base for new features; not flashed [V: 2026-11-18 RAM test]. the same tree built with MBP Docker clang 19 freezes on the splash (learning 2026-11-18); P2 froze because its `image_size` 0x2b70000 is over the ceiling |
 | Neutral `dtbo_b` (DTBO-PLAN) | Parked: ABL rejected v1 (table) and v2 (raw FDT); stock dtbo back [V: DTBO-PLAN §6; learning `l-48e0c482`] |
 | M3 display stack on the device (hardware GL) | Hardware GL works under combo K3 with the freedreno Mesa (rootfs, not upstream yet) [V: NOTES 2026-11-17 day; learning `l-405b6773`] |
-| M5 (Wi-Fi/BT, modem, GNSS, audio, sensors, power, camera, misc) | All plans written; the five original M5 plans cross-reviewed [V: `device/instantnoodlep/*-M5-PLAN.md`, `GNSS-M5-PLAN.md`, `CAMERA-PLAN.md`, `MISC-HW-PLAN.md`, `M5-REVIEW.md`] |
-| M5 Wi-Fi/BT | Daily on `boot_b`: Wi-Fi connects; BT works after `btmgmt public-addr` (persistent address unit still to implement, DAILY-K3-PLAN §5) [V: NOTES 2026-11-17 night] |
+| M5 (Wi-Fi/BT, modem, GNSS, audio, sensors, power, camera, misc) | All plans written; the five original M5 plans cross-reviewed [V: `device/instantnoodlep/*-M5-PLAN.md`, `GNSS-M5-PLAN.md`, `CAMERA-PLAN.md`, `MISC-HW-PLAN.md`, `M5-REVIEW.md`]. Audio phase 2: TFA987x codec driver series compile-checked offline (clang 23.1.3, checkpatch/dt_binding_check clean), patches in `device/instantnoodlep/patches/audio-tfa987x/`, plan §10; first sound still phone-gated (PR #82 §9) [V: AUDIO-M5-PLAN §10] |
+| M5 Wi-Fi/BT | Daily on `boot_b`: Wi-Fi connects; BT works after `btmgmt public-addr` [V: NOTES 2026-11-17 night]. One persistent phone-local address helper and device package 0.0.4 are proposed in PR #92; phone qualification remains [I] in `DEVICE-PACKAGE-PLAN.md`. |
 | M5 modem/GNSS | Kernel candidate rebuilt on slim K3 with omabook clang 23.1.3: branch `instantnoodlep-k3-slim-modem` @ `7dc2ea318807`, release `7.3.0-rc6-instantnoodlep-k3-slim-modem-g7dc2ea318807`, `image_size` 0x1750000 (ceiling 0x2b60000), dtbs_check clean, RAM image `~/android/build/k3-slim-modem-ram/boot-slim-modem.img` [V: MODEM-M5-DELTA §6.2]. No handset test; private EFS/DDR policy still blocks first boot (gates A-C). The earlier MBP clang 19 candidate (`e9ff58528f8b`) is superseded. |
 | M5 power | P1 gauge works on a RAM boot; P2 charger image hangs early at boot (P2b in progress); no charging under any of our kernels [V: POWER-M5-PLAN §7.3-7.4] |
 | M5 camera (M-CAM1 front IMX471) | Kernel series rebuilt on slim K3 with omabook clang 23.1.3: branch `instantnoodlep-k3-slim-cam` @ `d53d0fd6baaa`, release `7.3.0-rc6-instantnoodlep-k3-slim-cam-gd53d0fd6baaa`, `image_size` 0x1720000 (ceiling 0x2b60000), dtbs_check clean, camera stack (CAMSS/camcc/CCI/imx471) as **modules** so a probe hang cannot block boot, one IMX471 on CCI1 master 1 to CSIPHY3 in the DTB, RAM image `~/android/build/k3-slim-cam-ram/boot-slim-cam.img` [V: CAMERA-PLAN §9.5]. No RAM boot or frame yet; coordinator gates C0-C5 pending. The earlier MBP clang 19 candidate (`g70d0761d1`, image_size 0x2cd0000, froze) is superseded. |
@@ -60,7 +60,7 @@ See `docs/agents/active/`. Vibe workers on omabook: power P2b, kona, misc-hw, au
    take (DTBO-PLAN §6).
 5. Power P2b (charger as a module), then P3 Type-C.
 6. Audio phase 1 (worker on macbookpro), kona upstream series (worker `kona`), UI issue drafts (worker on obsidian); modem/GNSS kernel side is built, gates A-C of MODEM-M5-DELTA §6 (stock wiring, packages, private-state policy) are the coordinator's.
-7. Backlog: disk encryption + boot passphrase / lock-screen PIN (issue #70).
+7. Disk encryption + boot passphrase / lock-screen PIN (issue #70): design plan merged; offline kernel/initramfs prototype and QEMU test in progress on `inumineq/enc-impl`; no phone work started.
 
 ## Offline UI proposals
 
@@ -68,3 +68,12 @@ See `docs/agents/active/`. Vibe workers on omabook: power P2b, kona, misc-hw, au
   issue drafts are in `patches/` and `docs/upstream/`; host applicability/model
   checks passed (details: `docs/upstream/README.md`). [I] Phone verification
   remains pending under `device/instantnoodlep/SHELL-UX-PLAN.md`.
+- [V] Device package 0.0.5 proposal adds per-user Foot, app scale exceptions,
+  and Hyprland dialog rules to package 0.0.4's BT address helper, descriptor,
+  names-only firmware map, uwsm GL selection, proposed shell edge geometry,
+  USB0 policy and boot-service masks. The x86 check script is in
+  `packages/omamobile-device-instantnoodlep/test/all`; [I] package install,
+  udev match, geometry and vconsole behavior remain unverified on the phone.
+  PR #92 supersedes #76 and #77; those PRs are closed. PR #79 remains open
+  for the shell's phone verification.
+- [V] Chromium and app profile implementation plus x86 self-checks are in PR #99. [I] OnePlus UA/scale, per-app exceptions, optional touch/scroll/pinch and Ozone choices await the morning phone survey in `MOBILE-UX-RESEARCH.md`; no phone testing was done.
