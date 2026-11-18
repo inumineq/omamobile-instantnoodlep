@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Sample battery telemetry and per-interval wake/interrupt deltas to a private CSV.
+set -euo pipefail
+
+usage() {
+  echo "Usage: instantnoodlep-pm-sample [--duration SECONDS] [--interval SECONDS] [--output /tmp/FILE.csv]" >&2
+  exit 2
+}
+
+duration=900
+interval=5
+output=
+while (($#)); do
+  case $1 in
+    --duration) (($# >= 2)) || usage; duration=$2; shift 2 ;;
+    --interval) (($# >= 2)) || usage; interval=$2; shift 2 ;;
+    --output) (($# >= 2)) || usage; output=$2; shift 2 ;;
+    --help|-h) usage ;;
+    *) usage ;;
+  esac
+done
+[[ $duration =~ ^[1-9][0-9]*$ && $interval =~ ^[1-9][0-9]*$ ]] || usage
+((interval <= duration)) || usage
+
+sysfs=${PM_SAMPLE_SYSFS:-/sys}
+proc_interrupts=${PM_SAMPLE_PROC_INTERRUPTS:-/proc/interrupts}
+wakeup_sources=${PM_SAMPLE_WAKEUP_SOURCES:-/sys/kernel/debug/wakeup_sources}
+power_supply=${PM_SAMPLE_POWER_SUPPLY:-}
+
+if [[ -z $power_supply ]]; then
+  for candidate in "$sysfs"/class/power_supply/*; do
+    [[ -r $candidate/type ]] || continue
+    if [[ $(<"$candidate/type") == Battery ]]; then
+      power_supply=$candidate
+      break
+    fi
+  done
+fi
+[[ -n $power_supply && -r $power_supply/current_now && -r $power_supply/voltage_now && -r $power_supply/temp ]] || {
+  echo "Battery current, voltage, and temperature telemetry is unavailable." >&2
+  exit 1
+}
+[[ -r $wakeup_sources && -r $proc_interrupts ]] || {
+  echo "Wakeup-source or interrupt counters are unavailable." >&2
+  exit 1
+}
+
+umask 077
+tmp=$(mktemp -d /tmp/instantnoodlep-pm-sample.XXXXXX)
+trap 'rm -rf -- "$tmp"' EXIT
+if [[ -z $output ]]; then
+  output=$(mktemp /tmp/instantnoodlep-pm-sample-XXXXXX.csv)
+  work_output=$output
+else
+  case $output in /tmp/*) ;; *) echo "Output must be a file under /tmp." >&2; exit 2 ;; esac
+  [[ ! -e $output && ! -L $output ]] || { echo "Output already exists; choose a new file." >&2; exit 2; }
+  work_output=$tmp/sample.csv
+fi
+
+snapshot_wakeup_sources() {
+  awk '
+    NR == 1 {
+      for (i = 1; i <= NF; i++) {
+        if ($i == "name") name_col = i
+        if ($i == "event_count") event_col = i
+        if ($i == "wakeup_count") wakeup_col = i
+      }
+      next
+    }
+    name_col && event_col && wakeup_col && NF >= wakeup_col {
+      print $name_col "\t" $event_col "\t" $wakeup_col
+    }
+  ' "$wakeup_sources"
+}
+
+snapshot_interrupts() {
+  awk '
+    /^[[:space:]]*[0-9]+:/ {
+      irq = $1
+      sub(/:$/, "", irq)
+      total = 0
+      for (i = 2; i <= NF; i++) {
+        if ($i ~ /^[0-9]+$/) total += $i
+        else break
+      }
+      print irq "\t" total
+    }
+  ' "$proc_interrupts"
+}
+
+declare -A previous_events=() previous_wakeups=() previous_irqs=()
+while IFS=$'\t' read -r name events wakeups; do
+  [[ -n $name ]] || continue
+  previous_events["$name"]=$events
+  previous_wakeups["$name"]=$wakeups
+done < <(snapshot_wakeup_sources)
+while IFS=$'\t' read -r irq count; do
+  [[ -n $irq ]] || continue
+  previous_irqs["$irq"]=$count
+done < <(snapshot_interrupts)
+
+csv_row() {
+  local stamp=$1 elapsed=$2 record=$3 name=$4 metric=$5 value=$6
+  # Kernel labels are reduced to simple tokens; redact address-like IDs too.
+  name=$(printf '%s' "$name" | sed -E \
+    -e 's/[[:xdigit:]]{2}(:[[:xdigit:]]{2}){5}/redacted-mac/Ig' \
+    -e 's/[0-9]{15,}/redacted-number/g')
+  name=${name//[^[:alnum:]_.:-]/_}
+  printf '%s,%s,%s,%s,%s,%s\n' "$stamp" "$elapsed" "$record" "$name" "$metric" "$value" >>"$work_output"
+}
+
+printf '%s\n' 'timestamp,elapsed_seconds,record,name,metric,value' >"$work_output"
+start=$(date +%s)
+while :; do
+  sleep "$interval"
+  now=$(date +%s)
+  elapsed=$((now - start))
+  ((elapsed > duration)) && elapsed=$duration
+  stamp=$(date -Is)
+
+  csv_row "$stamp" "$elapsed" battery current_now current_now_ua "$(<"$power_supply/current_now")"
+  csv_row "$stamp" "$elapsed" battery voltage_now voltage_now_uv "$(<"$power_supply/voltage_now")"
+  csv_row "$stamp" "$elapsed" battery temp temp_deci_c "$(<"$power_supply/temp")"
+
+  declare -A current_events=() current_wakeups=() current_irqs=()
+  while IFS=$'\t' read -r name events wakeups; do
+    [[ -n $name && $events =~ ^[0-9]+$ && $wakeups =~ ^[0-9]+$ ]] || continue
+    current_events["$name"]=$events
+    current_wakeups["$name"]=$wakeups
+    old_events=${previous_events[$name]:-0}
+    old_wakeups=${previous_wakeups[$name]:-0}
+    csv_row "$stamp" "$interval" wakeup_source "$name" event_count_delta "$((events - old_events))"
+    csv_row "$stamp" "$interval" wakeup_source "$name" wakeup_count_delta "$((wakeups - old_wakeups))"
+  done < <(snapshot_wakeup_sources)
+
+  while IFS=$'\t' read -r irq count; do
+    [[ -n $irq && $count =~ ^[0-9]+$ ]] || continue
+    current_irqs["$irq"]=$count
+    old_count=${previous_irqs[$irq]:-0}
+    csv_row "$stamp" "$interval" interrupt "irq_$irq" count_delta "$((count - old_count))"
+  done < <(snapshot_interrupts)
+
+  previous_events=()
+  previous_wakeups=()
+  previous_irqs=()
+  for name in "${!current_events[@]}"; do previous_events["$name"]=${current_events[$name]}; done
+  for name in "${!current_wakeups[@]}"; do previous_wakeups["$name"]=${current_wakeups[$name]}; done
+  for irq in "${!current_irqs[@]}"; do previous_irqs["$irq"]=${current_irqs[$irq]}; done
+
+  ((elapsed >= duration)) && break
+done
+
+if [[ $work_output != "$output" ]]; then
+  ln -- "$work_output" "$output" || { echo "Unable to create the requested CSV output." >&2; exit 1; }
+fi
+echo "CSV: $output"
