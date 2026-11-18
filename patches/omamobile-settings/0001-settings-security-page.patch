@@ -1,0 +1,893 @@
+# SPDX-License-Identifier: MIT
+# Proposal against upstream c4623572be1c141d602cf99a83ae0bf9e3eea09c.
+
+diff --git a/PKGBUILD b/PKGBUILD
+index 28ab9ed..dc4df45 100644
+--- a/PKGBUILD
++++ b/PKGBUILD
+@@ -2,13 +2,14 @@
+ pkgname=omamobile-settings
+ pkgver=$(cat "${startdir:-.}/version")
+ pkgrel=1
+-pkgdesc="Native mobile Settings framework and device information"
++pkgdesc="Native mobile Settings with opt-in credential management"
+ arch=(aarch64 x86_64)
+ url="https://github.com/derekross/omarchy-mobile"
+ license=(MIT)
+-depends=(omarchy bash brightnessctl python qt6-base qt6-declarative qt6-svg)
++depends=(omarchy bash brightnessctl openssl pam polkit python qt6-base qt6-declarative qt6-svg)
+ makedepends=(gcc make)
+-checkdepends=(dbus python)
++checkdepends=(dbus python shellcheck qt6-declarative)
++install=omamobile-settings.install
+ 
+ build() { "$startdir/bin/build"; }
+ check() { "$startdir/test/all"; }
+diff --git a/README.md b/README.md
+index 4b4b889..b84e475 100644
+--- a/README.md
++++ b/README.md
+@@ -2,47 +2,18 @@
+ # Native Settings foundation
+ 
+ A native Qt Quick application with mobile navigation, search, a live Omarchy
+-palette and a read-only About page. It shows the model, operating system, kernel,
+-architecture, memory, root-filesystem capacity and installed package versions.
+-Unknown values remain unavailable. It opens from the desktop launcher.
++palette, and About, Display, and Security pages. Security lets the user change
++the lock-screen PIN, change the account password, choose the numeric keypad,
++and opt in to a separate lock-screen PIN.
+ 
+-This package contains the read-only foundation and one settings page, Display
+-(brightness and, where the monitor lists more than one, the refresh rate; the
+-refresh rate changes the running session only: turning the phone makes
+-auto-rotate apply the monitor's preferred mode again, and a session restart or a
+-reload of Hyprland's config does too). The page runs
+-`backends/display.sh` through a fixed-argument runner, with no shell string.
+-Omarchy's existing tools continue to provide the other settings changes. Network, wallpaper, app management and
+-recording controls are separate future contributions with their own runtime
+-contracts and tests; this catalog does not offer those routes.
++The default PIN flow retains the existing single-secret behavior: the PIN is
++the account password used by the lock screen, sudo, polkit, and disk unlock.
++Separate PIN mode is off by default. When enabled, it uses a dedicated hash
++and lock-screen PAM branch, applies a ten-attempt faillock, and keeps sudo,
++polkit, and disk unlock on the account password. Switching the option off
++restores the previous lock PAM service.
+ 
+-Back (Escape, which the phone shell's edge swipe sends, and the Back button)
+-leaves a search, then goes up one page. At the top level Escape shows the home
+-screen through the shell's `omamobile-home` and Settings stays open; it used to
+-close the app. Without that command nothing happens.
+-
+-Build with `bin/build`, test with `test/all`, and stage with `install DESTDIR`.
+-Checked-in application sources live in `app/`; `src/` remains makepkg’s
+-extracted-source directory.
+-The build and test directories can be selected using
+-`OMAMOBILE_SETTINGS_BUILD_DIR` and `OMAMOBILE_SETTINGS_TEST_BUILD_DIR`.
+-`omamobile-settings --check` validates the catalog without opening a window.
+-`--version` prints the version from the package build.
+-`--preview` displays neutral fictional device information; `--page about` opens
+-the implemented detail page directly.
+-
+-The application reads the current theme's colors.toml and observes atomic theme
+-replacements. Rounded corners follow Hyprland's read-only decoration:rounding
+-option. Apart from the Display page's live refresh rate it does not change compositor settings. A session D-Bus service handles
+-repeat launches.
+-
+-Copyright 2026 Marsel Nenaj, MIT; see LICENSE. Extracted from my own native
+-Settings worktree, with Codex assistance; the application code is my MIT-licensed
+-work. Omarchy's theme and desktop APIs
+-remain the work of their upstream authors, including David Heinemeier Hansson;
+-this package does not claim authorship of those interfaces.
+-
+-Tests run the D-Bus entrypoint in a separately compiled fixture which supplies
+-neutral data through DeviceInfoController's preview constructor. The D-Bus
+-registration and repeat-launch paths stay unchanged. Tests do not read real
+-hardware/model paths or run the host's package query.
++The Security page passes secrets to the fixed `credentials-helper` through
++`pkexec` stdin. The privileged helper performs password and hash operations;
++QML never receives or stores password hashes. See the package's test and
++security documents for the host checks and isolated PAM fixture.
+diff --git a/app/Main.qml b/app/Main.qml
+index 25a2641..8bdb830 100644
+--- a/app/Main.qml
++++ b/app/Main.qml
+@@ -24,7 +24,7 @@ ApplicationWindow {
+         if (backend.searching) search.clear()
+         backend.back()
+     }
+-    readonly property var customPages: ({ display: "DisplayPage.qml" })
++    readonly property var customPages: ({ display: "DisplayPage.qml", security: "SecurityPage.qml" })
+     readonly property string customSource: backend.searching ? "" : (customPages[backend.page] || "")
+     readonly property bool showingAbout: backend.page === "about" && !backend.searching
+     Connections {
+diff --git a/app/SecurityPage.qml b/app/SecurityPage.qml
+new file mode 100644
+index 0000000..1fcbbf2
+--- /dev/null
++++ b/app/SecurityPage.qml
+@@ -0,0 +1,85 @@
++// SPDX-License-Identifier: MIT
++// Copyright (c) 2026 Marsel Nenaj
++import QtQuick
++import QtQuick.Controls
++import QtQuick.Layouts
++import "."
++
++ColumnLayout {
++    id: page
++    spacing: 12
++
++    property string errorText: ""
++    property string statusText: ""
++
++    function clearSecrets() {
++        pin.text = ""; pinAgain.text = ""
++        password.text = ""; passwordAgain.text = ""
++        Qt.inputMethod.hide()
++    }
++    Connections {
++        target: credentialsController
++        function onFinished(action, ok, message) {
++            page.errorText = ok ? "" : message
++            page.statusText = ok ? "Updated" : ""
++            page.clearSecrets()
++            if (action === "set-separate-pin" || action === "use-account-password") separatePin.checked = credentialsController.separatePinEnabled
++            if (action === "set-keypad") keypad.checked = credentialsController.keypadEnabled
++        }
++    }
++
++    Flickable {
++        Layout.fillWidth: true; Layout.fillHeight: true
++        contentWidth: width; contentHeight: content.implicitHeight
++        clip: true
++        ColumnLayout {
++            id: content
++            width: parent.width; spacing: 14
++            SettingsLabel { text: qsTr("Security"); color: backend.foreground; font.pixelSize: SettingsStyle.fontPx(20) }
++            SettingsLabel { text: qsTr("Lock-screen PIN"); color: backend.foreground; font.pixelSize: SettingsStyle.fontPx(16) }
++            SettingsLabel { Layout.fillWidth: true; wrapMode: Text.Wrap; text: qsTr("By default this PIN is also your account password. Turn on separate PIN mode below to keep sudo, polkit and disk unlock on a different password."); color: backend.muted; font.pixelSize: SettingsStyle.fontPx(13) }
++            SettingsTextField { id: pin; objectName: "securityPin"; Layout.fillWidth: true; placeholderText: qsTr("New PIN (4–12 digits)"); echoMode: TextInput.Password; inputMethodHints: Qt.ImhDigitsOnly; maximumLength: 12 }
++            SettingsTextField { id: pinAgain; objectName: "securityPinConfirm"; Layout.fillWidth: true; placeholderText: qsTr("Confirm PIN"); echoMode: TextInput.Password; inputMethodHints: Qt.ImhDigitsOnly; maximumLength: 12 }
++            SettingsButton {
++                Layout.fillWidth: true; Layout.preferredHeight: 52
++                text: qsTr("Change lock-screen PIN")
++                onClicked: {
++                    page.errorText = ""; page.statusText = ""
++                    if (!/^\d{4,12}$/.test(pin.text)) { page.errorText = qsTr("Use 4 to 12 digits."); return }
++                    if (pin.text !== pinAgain.text) { page.errorText = qsTr("PINs do not match."); return }
++                    credentialsController.setPin(pin.text, pinAgain.text)
++                }
++            }
++            SettingsLabel { text: qsTr("Account password"); color: backend.foreground; font.pixelSize: SettingsStyle.fontPx(16) }
++            SettingsTextField { id: password; objectName: "securityPassword"; Layout.fillWidth: true; placeholderText: qsTr("New account password"); echoMode: TextInput.Password; inputMethodHints: Qt.ImhNone; maximumLength: 256 }
++            SettingsTextField { id: passwordAgain; objectName: "securityPasswordConfirm"; Layout.fillWidth: true; placeholderText: qsTr("Confirm account password"); echoMode: TextInput.Password; inputMethodHints: Qt.ImhNone; maximumLength: 256 }
++            SettingsButton {
++                Layout.fillWidth: true; Layout.preferredHeight: 52
++                text: qsTr("Change account password")
++                onClicked: {
++                    page.errorText = ""; page.statusText = ""
++                    if (password.text.length < 1 || password.text.length > 256 || password.text.indexOf(":") >= 0) { page.errorText = qsTr("Enter a valid password."); return }
++                    if (password.text !== passwordAgain.text) { page.errorText = qsTr("Passwords do not match."); return }
++                    credentialsController.setAccountPassword(password.text, passwordAgain.text)
++                }
++            }
++            Switch { id: keypad; objectName: "securityKeypadToggle"; text: qsTr("Use numeric keypad on lock screen"); checked: credentialsController.keypadEnabled; onToggled: credentialsController.setKeypadEnabled(checked) }
++            Switch { id: separatePin; objectName: "securitySeparatePinToggle"; text: qsTr("Use a separate lock-screen PIN"); checked: credentialsController.separatePinEnabled; onToggled: {
++                if (checked) {
++                    if (!/^\d{4,12}$/.test(pin.text) || pin.text !== pinAgain.text) {
++                        page.errorText = pin.text === pinAgain.text ? qsTr("Use 4 to 12 digits before enabling separate PIN mode.") : qsTr("PINs do not match.")
++                        separatePin.checked = false; return
++                    }
++                    credentialsController.enableSeparatePin(pin.text, pinAgain.text)
++                } else credentialsController.useAccountPasswordForLock()
++            } }
++            SettingsLabel {
++                Layout.fillWidth: true; wrapMode: Text.Wrap
++                text: qsTr("Set a PIN before enabling this option. The lock screen then accepts only that PIN; sudo, polkit and disk unlock continue to require the account password.")
++                color: backend.muted; font.pixelSize: SettingsStyle.fontPx(13)
++            }
++            SettingsLabel { objectName: "securityError"; visible: page.errorText.length > 0; text: page.errorText; color: "#ff6b6b"; wrapMode: Text.Wrap; Layout.fillWidth: true; Accessible.role: Accessible.AlertMessage }
++            SettingsLabel { visible: page.statusText.length > 0; text: page.statusText; color: backend.accent; Layout.fillWidth: true }
++        }
++    }
++}
+diff --git a/app/catalog.json b/app/catalog.json
+index 23efec2..f268672 100644
+--- a/app/catalog.json
++++ b/app/catalog.json
+@@ -9,6 +9,13 @@
+         "icon": "display",
+         "page": "display"
+       },
++      {
++        "id": "security",
++        "title": "Security",
++        "detail": "Lock-screen PIN, account password and keypad",
++        "icon": "security",
++        "page": "security"
++      },
+       {
+         "id": "about",
+         "title": "About this device",
+@@ -25,5 +32,9 @@
+   "display": {
+     "title": "Display",
+     "rows": []
++  },
++  "security": {
++    "title": "Security",
++    "rows": []
+   }
+ }
+diff --git a/app/credentialscontroller.cpp b/app/credentialscontroller.cpp
+new file mode 100644
+index 0000000..90c074d
+--- /dev/null
++++ b/app/credentialscontroller.cpp
+@@ -0,0 +1,70 @@
++// SPDX-License-Identifier: MIT
++// Copyright (c) 2026 Marsel Nenaj
++#include "credentialscontroller.h"
++#include <QDir>
++#include <QFile>
++#include <QFileInfo>
++#include <QJsonDocument>
++#include <QJsonObject>
++#include <QProcessEnvironment>
++
++CredentialsController::CredentialsController(QObject *parent) : QObject(parent) { refresh(); }
++void CredentialsController::refresh() {
++    QFile mode(QDir::homePath() + "/.config/omamobile/credential-mode");
++    const bool separate = mode.open(QIODevice::ReadOnly) && mode.read(64).trimmed() == "separate-pin";
++    const bool keypad = QFileInfo::exists(QDir::homePath() + "/.local/state/omarchy/toggles/lock-keypad");
++    if (separate != m_separatePin || keypad != m_keypad) {
++        m_separatePin = separate;
++        m_keypad = keypad;
++        emit stateChanged();
++    }
++}
++void CredentialsController::run(const QString &action, const QByteArray &request) {
++    if (m_process && m_process->state() != QProcess::NotRunning) {
++        emit finished(action, false, tr("Another security change is still running."));
++        return;
++    }
++    auto *process = new QProcess(this);
++    m_process = process;
++    auto env = QProcessEnvironment::systemEnvironment();
++    env.remove("BASH_ENV"); env.remove("ENV");
++    process->setProcessEnvironment(env);
++    process->setProgram("/usr/bin/pkexec");
++    process->setArguments({"/usr/lib/omamobile-settings/credentials-helper", action});
++    connect(process, &QProcess::started, this, [process, request] {
++        process->write(request);
++        process->closeWriteChannel();
++    });
++    connect(process, &QProcess::finished, this, [this, process, action](int code, QProcess::ExitStatus status) {
++        const auto raw = process->readAllStandardOutput().left(4096);
++        process->readAllStandardError();
++        const auto obj = QJsonDocument::fromJson(raw).object();
++        const bool ok = status == QProcess::NormalExit && code == 0 && obj.value("ok").toBool();
++        QString message = obj.value("error").toString();
++        if (!ok && message.isEmpty()) message = tr("The security change was cancelled or failed.");
++        if (ok) refresh();
++        emit finished(action, ok, message);
++        process->deleteLater();
++        if (m_process == process) m_process = nullptr;
++    });
++    connect(process, &QProcess::errorOccurred, this, [this, process, action](QProcess::ProcessError error) {
++        if (error != QProcess::FailedToStart) return;
++        emit finished(action, false, tr("Could not start the privileged security helper."));
++        process->deleteLater();
++        if (m_process == process) m_process = nullptr;
++    });
++    process->start();
++}
++void CredentialsController::setPin(const QString &secret, const QString &confirm) {
++    run("set-pin", QJsonDocument(QJsonObject{{"secret", secret}, {"confirm", confirm}}).toJson(QJsonDocument::Compact));
++}
++void CredentialsController::setAccountPassword(const QString &secret, const QString &confirm) {
++    run("set-account-password", QJsonDocument(QJsonObject{{"secret", secret}, {"confirm", confirm}}).toJson(QJsonDocument::Compact));
++}
++void CredentialsController::enableSeparatePin(const QString &secret, const QString &confirm) {
++    run("set-separate-pin", QJsonDocument(QJsonObject{{"secret", secret}, {"confirm", confirm}}).toJson(QJsonDocument::Compact));
++}
++void CredentialsController::useAccountPasswordForLock() { run("use-account-password", "{\"enabled\":true}"); }
++void CredentialsController::setKeypadEnabled(bool enabled) {
++    run("set-keypad", enabled ? "{\"enabled\":true}" : "{\"enabled\":false}");
++}
+diff --git a/app/credentialscontroller.h b/app/credentialscontroller.h
+new file mode 100644
+index 0000000..85de29f
+--- /dev/null
++++ b/app/credentialscontroller.h
+@@ -0,0 +1,29 @@
++// SPDX-License-Identifier: MIT
++// Copyright (c) 2026 Marsel Nenaj
++#pragma once
++#include <QObject>
++#include <QProcess>
++
++class CredentialsController : public QObject {
++    Q_OBJECT
++    Q_PROPERTY(bool separatePinEnabled READ separatePinEnabled NOTIFY stateChanged)
++    Q_PROPERTY(bool keypadEnabled READ keypadEnabled NOTIFY stateChanged)
++public:
++    explicit CredentialsController(QObject *parent = nullptr);
++    bool separatePinEnabled() const { return m_separatePin; }
++    bool keypadEnabled() const { return m_keypad; }
++    Q_INVOKABLE void refresh();
++    Q_INVOKABLE void setPin(const QString &secret, const QString &confirm);
++    Q_INVOKABLE void setAccountPassword(const QString &secret, const QString &confirm);
++    Q_INVOKABLE void enableSeparatePin(const QString &secret, const QString &confirm);
++    Q_INVOKABLE void useAccountPasswordForLock();
++    Q_INVOKABLE void setKeypadEnabled(bool enabled);
++signals:
++    void stateChanged();
++    void finished(const QString &action, bool ok, const QString &message);
++private:
++    void run(const QString &action, const QByteArray &request);
++    bool m_separatePin = false;
++    bool m_keypad = false;
++    QProcess *m_process = nullptr;
++};
+diff --git a/app/icons/security.svg b/app/icons/security.svg
+new file mode 100644
+index 0000000..f81cb2b
+--- /dev/null
++++ b/app/icons/security.svg
+@@ -0,0 +1,2 @@
++<!-- SPDX-License-Identifier: MIT -->
++<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#9ece6a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 20 6v5c0 5-3.4 8.2-8 10-4.6-1.8-8-5-8-10V6z"/><path d="m9 12 2 2 4-4"/></svg>
+diff --git a/app/main.cpp b/app/main.cpp
+index ab0826a..57a6900 100644
+--- a/app/main.cpp
++++ b/app/main.cpp
+@@ -3,6 +3,7 @@
+ #include "backend.h"
+ #include "deviceinfocontroller.h"
+ #include "actionrunner.h"
++#include "credentialscontroller.h"
+ #include <QGuiApplication>
+ #include <QDBusConnection>
+ #include <QDBusInterface>
+@@ -64,10 +65,12 @@ int main(int argc, char **argv) {
+                                 | QDBusConnection::ExportScriptableInvokables)) return 1;
+     }
+     ActionRunner actions;
++    CredentialsController credentials;
+     QQmlApplicationEngine engine;
+     engine.rootContext()->setContextProperty("backend", &backend);
+     engine.rootContext()->setContextProperty("deviceInfo", &deviceInfo);
+     engine.rootContext()->setContextProperty("actions", &actions);
++    engine.rootContext()->setContextProperty("credentialsController", &credentials);
+     engine.load(QUrl("qrc:/Main.qml"));
+     if (engine.rootObjects().isEmpty()) return 1;
+     return app.exec();
+diff --git a/app/resources.qrc b/app/resources.qrc
+index 0f18d70..4a7ea21 100644
+--- a/app/resources.qrc
++++ b/app/resources.qrc
+@@ -3,6 +3,8 @@
+   <qresource prefix="/">
+     <file>Main.qml</file>
+     <file>AboutPage.qml</file>
++    <file>SecurityPage.qml</file>
++    <file>icons/security.svg</file>
+     <file>DisplayPage.qml</file>
+     <file>icons/display.svg</file>
+     <file>catalog.json</file>
+diff --git a/bin/credentials-helper b/bin/credentials-helper
+new file mode 100755
+index 0000000..a2cc083
+--- /dev/null
++++ b/bin/credentials-helper
+@@ -0,0 +1,290 @@
++#!/usr/bin/python3
++# SPDX-License-Identifier: MIT
++import json
++import grp
++import os
++import pathlib
++import pwd
++import stat
++import shutil
++import subprocess
++import sys
++import tempfile
++
++PAM_PATH = pathlib.Path('/etc/pam.d/omarchy-lock-password')
++PAM_BACKUP = pathlib.Path('/etc/pam.d/.omarchy-lock-password.omamobile-backup')
++
++
++
++def atomic_write(path, data, mode, uid=0, gid=0):
++    if uid != 0:
++        home = pathlib.Path(pwd.getpwuid(uid).pw_dir).resolve()
++        parent = path.parent.resolve()
++        if not parent.is_relative_to(home) or path.is_symlink():
++            raise ValueError('Refusing an unsafe user config path')
++    path.parent.mkdir(parents=True, exist_ok=True)
++    fd, tmp = tempfile.mkstemp(prefix='.' + path.name, dir=path.parent)
++    try:
++        with os.fdopen(fd, 'wb') as stream:
++            stream.write(data)
++            stream.flush()
++            os.fsync(stream.fileno())
++        os.chown(tmp, uid, gid)
++        os.chmod(tmp, mode)
++        os.replace(tmp, path)
++    finally:
++        try:
++            os.unlink(tmp)
++        except FileNotFoundError:
++            pass
++
++
++def read_request():
++    raw = sys.stdin.buffer.read(8193)
++    if len(raw) > 8192:
++        raise ValueError('Request is too large')
++    request = json.loads(raw)
++    if not isinstance(request, dict):
++        raise ValueError('Invalid request')
++    return request
++
++
++def require_secret(request, field):
++    value = request.get(field)
++    if not isinstance(value, str) or not 1 <= len(value) <= 256:
++        raise ValueError('Enter a value from 1 to 256 characters')
++    if any(c in value for c in '\x00\r\n:'):
++        raise ValueError('The value contains an unsupported character')
++    return value
++
++
++def user_context():
++    if os.geteuid() != 0:
++        raise ValueError('This operation requires pkexec')
++    raw_uid = os.environ.get('PKEXEC_UID', '')
++    if not raw_uid.isdigit():
++        raise ValueError('Cannot identify the requesting user')
++    user = pwd.getpwuid(int(raw_uid))
++    if user.pw_uid == 0 or not user.pw_dir.startswith('/home/'):
++        raise ValueError('Unsupported account')
++    return user
++
++
++def set_password(user, value):
++    proc = subprocess.run(['/usr/bin/chpasswd'], input=f'{user.pw_name}:{value}\n',
++                         text=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
++    if proc.returncode:
++        raise ValueError('Account password could not be changed')
++
++
++def ensure_user_directory(user, parts):
++    current = pathlib.Path(user.pw_dir)
++    for part in parts:
++        current = current / part
++        try:
++            st = current.lstat()
++        except FileNotFoundError:
++            current.mkdir(mode=0o700)
++            os.chown(current, user.pw_uid, user.pw_gid)
++            st = current.lstat()
++        if not stat.S_ISDIR(st.st_mode) or st.st_uid != user.pw_uid:
++            raise ValueError('Unsafe user settings directory')
++    return current
++
++def set_user_record(user, path, data, mode=0o600):
++    relative_parent = path.parent.relative_to(user.pw_dir)
++    ensure_user_directory(user, relative_parent.parts)
++    atomic_write(path, data.encode(), mode, user.pw_uid, user.pw_gid)
++
++
++def private_primary_group(user):
++    try:
++        group = grp.getgrgid(user.pw_gid)
++    except KeyError:
++        return False
++    member_names = set(group.gr_mem)
++    member_names.add(user.pw_name)
++    members = {entry.pw_name for entry in pwd.getpwall() if entry.pw_gid == user.pw_gid}
++    return members <= {user.pw_name} and member_names <= {user.pw_name}
++
++def hash_pin(user, value, separate):
++    if not value.isascii() or not value.isdigit() or not 4 <= len(value) <= 12:
++        raise ValueError('PIN must contain 4 to 12 digits')
++    if separate and not private_primary_group(user):
++        raise ValueError('Separate PIN requires a private primary user group')
++    salt = 'rounds=100000$' + subprocess.run(['/usr/bin/openssl', 'rand', '-hex', '16'], check=True,
++                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True).stdout.strip()
++    hashed = subprocess.run(['/usr/bin/openssl', 'passwd', '-6', '-salt', salt, '-stdin'],
++                            input=value + '\n', text=True, check=True, capture_output=True).stdout.strip()
++    pin_path = pathlib.Path('/var/lib/omamobile/lock-pin') / str(user.pw_uid)
++    pin_path.parent.mkdir(parents=True, mode=0o711, exist_ok=True)
++    os.chown(pin_path.parent, 0, 0)
++    os.chmod(pin_path.parent, 0o711)
++    atomic_write(pin_path, (hashed + '\n').encode(), 0o640 if separate else 0o600,
++                 0, user.pw_gid if separate else 0)
++
++
++def set_pin(user, value):
++    if not value.isascii() or not value.isdigit() or not 4 <= len(value) <= 12:
++        raise ValueError('PIN must contain 4 to 12 digits')
++    home = pathlib.Path(user.pw_dir)
++    separate = (home / '.config/omamobile/credential-mode').exists() and \
++        (home / '.config/omamobile/credential-mode').read_text().strip() == 'separate-pin'
++    if separate:
++        hash_pin(user, value, True)
++    else:
++        set_password(user, value)
++    set_credential_type(user, 'pin')
++
++
++def render_pin_pam(uids):
++    lines = ['#%PAM-1.0',
++             'auth requisite pam_faillock.so preauth silent deny=10 unlock_time=120']
++    for uid in sorted(uids, key=int):
++        lines.extend([
++            f'auth [success=3 default=ignore] pam_succeed_if.so uid != {uid} quiet',
++            'auth [success=1 default=ignore] pam_exec.so expose_authtok /usr/lib/omamobile-settings/verify-lock-pin',
++            'auth [default=die] pam_faillock.so authfail deny=10 unlock_time=120',
++            'auth sufficient pam_faillock.so authsucc',
++        ])
++    lines.extend(['auth substack system-local-login', 'account include system-local-login', ''])
++    return '\n'.join(lines)
++
++
++def switch_separate(user, enabled):
++    home = pathlib.Path(user.pw_dir)
++    pin_path = pathlib.Path('/var/lib/omamobile/lock-pin') / str(user.pw_uid)
++    roster = pathlib.Path('/etc/omamobile/lock-pin-users')
++    current = roster.read_text().splitlines() if roster.exists() else []
++    users = {line for line in current if line.isdigit()}
++    if enabled:
++        if not pin_path.is_file():
++            raise ValueError('Set a lock-screen PIN before enabling a separate PIN')
++        if not private_primary_group(user):
++            raise ValueError('Separate PIN requires a private primary user group')
++        os.chown(pin_path, 0, user.pw_gid)
++        os.chmod(pin_path, 0o640)
++        if not PAM_PATH.exists():
++            raise ValueError('Omarchy lock PAM service is missing')
++        if users and not PAM_BACKUP.exists():
++            raise ValueError('Saved lock PAM service is missing')
++        if not users and not PAM_BACKUP.exists():
++            shutil.copyfile(PAM_PATH, PAM_BACKUP)
++            os.chown(PAM_BACKUP, 0, 0)
++            os.chmod(PAM_BACKUP, 0o600)
++        credential = home / '.config/omamobile/credential'
++        previous = credential.read_text().strip() if credential.exists() else 'password'
++        if previous not in ('pin', 'password'):
++            previous = 'password'
++        set_user_record(user, home / '.config/omamobile/credential-mode-backup', previous + '\n')
++        set_user_record(user, home / '.config/omamobile/credential-mode', 'separate-pin\n')
++        set_credential_type(user, 'pin')
++        users.add(str(user.pw_uid))
++        atomic_write(roster, ('\n'.join(sorted(users, key=int)) + '\n').encode(), 0o600)
++        atomic_write(PAM_PATH, render_pin_pam(users).encode(), 0o644)
++    else:
++        users.discard(str(user.pw_uid))
++        if users:
++            atomic_write(roster, ('\n'.join(sorted(users, key=int)) + '\n').encode(), 0o600)
++            atomic_write(PAM_PATH, render_pin_pam(users).encode(), 0o644)
++        else:
++            if not PAM_BACKUP.is_file():
++                raise ValueError('No saved lock PAM service is available to restore')
++            atomic_write(PAM_PATH, PAM_BACKUP.read_bytes(), 0o644)
++            PAM_BACKUP.unlink()
++            try:
++                roster.unlink()
++            except FileNotFoundError:
++                pass
++        set_user_record(user, home / '.config/omamobile/credential-mode', 'single-secret\n')
++        previous_path = home / '.config/omamobile/credential-mode-backup'
++        previous = previous_path.read_text().strip() if previous_path.exists() else 'password'
++        set_credential_type(user, previous if previous in ('pin', 'password') else 'password')
++        try:
++            previous_path.unlink()
++        except FileNotFoundError:
++            pass
++        try:
++            pin_path.unlink()
++        except FileNotFoundError:
++            pass
++
++
++def set_credential_type(user, kind):
++    home = pathlib.Path(user.pw_dir)
++    set_user_record(user, home / '.config/omamobile/credential', kind + '\n')
++    keypad = home / '.local/state/omarchy/toggles/credential-password'
++    ensure_user_directory(user, ('.local', 'state', 'omarchy', 'toggles'))
++    if kind == 'password':
++        fd = os.open(keypad, os.O_WRONLY | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
++        os.close(fd)
++        os.chown(keypad, user.pw_uid, user.pw_gid)
++    else:
++        try:
++            keypad.unlink()
++        except FileNotFoundError:
++            pass
++
++
++def set_keypad(user, enabled):
++    path = pathlib.Path(user.pw_dir) / '.local/state/omarchy/toggles/lock-keypad'
++    ensure_user_directory(user, ('.local', 'state', 'omarchy', 'toggles'))
++    if enabled:
++        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
++        os.close(fd)
++    else:
++        try:
++            path.unlink()
++        except FileNotFoundError:
++            pass
++    if enabled:
++        os.chown(path, user.pw_uid, user.pw_gid)
++
++
++def main():
++    action = sys.argv[1] if len(sys.argv) == 2 else ''
++    user = user_context()
++    req = read_request()
++    if action == 'set-account-password':
++        first = require_secret(req, 'secret')
++        if first != require_secret(req, 'confirm'):
++            raise ValueError('Passwords do not match')
++        set_password(user, first)
++        home = pathlib.Path(user.pw_dir)
++        mode_path = home / '.config/omamobile/credential-mode'
++        separate = mode_path.exists() and mode_path.read_text().strip() == 'separate-pin'
++        if separate:
++            set_user_record(user, home / '.config/omamobile/credential-mode-backup', 'password\n')
++        else:
++            set_credential_type(user, 'password')
++    elif action == 'set-pin':
++        first = require_secret(req, 'secret')
++        if first != require_secret(req, 'confirm'):
++            raise ValueError('PINs do not match')
++        set_pin(user, first)
++    elif action == 'set-separate-pin':
++        first = require_secret(req, 'secret')
++        if first != require_secret(req, 'confirm'):
++            raise ValueError('PINs do not match')
++        hash_pin(user, first, False)
++        switch_separate(user, True)
++    elif action == 'use-account-password':
++        if req.get('enabled') is not True:
++            raise ValueError('Invalid setting')
++        switch_separate(user, False)
++    elif action == 'set-keypad':
++        if not isinstance(req.get('enabled'), bool):
++            raise ValueError('Invalid setting')
++        set_keypad(user, req['enabled'])
++    else:
++        raise ValueError('Unknown operation')
++    print('{"ok":true}')
++
++
++if __name__ == '__main__':
++    try:
++        main()
++    except Exception as error:
++        message = str(error)
++        print(json.dumps({'ok': False, 'error': message[:180]}))
++        sys.exit(1)
+diff --git a/bin/verify-lock-pin b/bin/verify-lock-pin
+new file mode 100755
+index 0000000..8b149f2
+--- /dev/null
++++ b/bin/verify-lock-pin
+@@ -0,0 +1,28 @@
++#!/usr/bin/python3
++# SPDX-License-Identifier: MIT
++import hmac
++import os
++import pathlib
++import pwd
++import subprocess
++import sys
++
++try:
++    account = pwd.getpwnam(os.environ['PAM_USER'])
++    path = pathlib.Path('/var/lib/omamobile/lock-pin') / str(account.pw_uid)
++    st = path.stat()
++    if st.st_uid != 0 or st.st_gid != account.pw_gid or st.st_mode & 0o777 != 0o640:
++        raise ValueError('unsafe PIN hash permissions')
++    stored = path.read_text().strip()
++    if not stored.startswith('$6$rounds=100000$'):
++        raise ValueError('unsupported PIN hash')
++    salt = stored.split('$')[2] + '$' + stored.split('$')[3]
++    candidate = sys.stdin.readline(257).rstrip('\n')
++    if len(candidate) > 256:
++        raise ValueError('oversized PIN')
++    result = subprocess.run(['/usr/bin/openssl', 'passwd', '-6', '-salt', salt, '-stdin'],
++                            input=candidate + '\n', text=True, check=True,
++                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).stdout.strip()
++    sys.exit(0 if hmac.compare_digest(result, stored) else 1)
++except Exception:
++    sys.exit(1)
+diff --git a/install b/install
+index 2963f0a..b674832 100755
+--- a/install
++++ b/install
+@@ -11,3 +11,7 @@ install -Dm644 "$source_dir/org.omamobile.Settings.desktop" "$dest/usr/share/app
+ install -Dm644 "$source_dir/org.omamobile.Settings.svg" "$dest/usr/share/icons/hicolor/scalable/apps/org.omamobile.Settings.svg"
+ install -Dm644 "$source_dir/LICENSE" "$dest/usr/share/licenses/omamobile-settings/LICENSE"
+ install -Dm755 "$source_dir/backends/display.sh" "$dest/usr/lib/omamobile-settings/backends/display.sh"
++
++install -Dm755 "$source_dir/bin/credentials-helper" "$dest/usr/lib/omamobile-settings/credentials-helper"
++install -Dm755 "$source_dir/bin/verify-lock-pin" "$dest/usr/lib/omamobile-settings/verify-lock-pin"
++install -Dm644 "$source_dir/polkit/org.omamobile.settings.credentials.policy" "$dest/usr/share/polkit-1/actions/org.omamobile.settings.credentials.policy"
+diff --git a/omamobile-settings.install b/omamobile-settings.install
+new file mode 100644
+index 0000000..9592581
+--- /dev/null
++++ b/omamobile-settings.install
+@@ -0,0 +1,8 @@
++#!/bin/bash
++# SPDX-License-Identifier: MIT
++pre_remove() {
++  if [[ -f /etc/omamobile/lock-pin-users ]]; then
++    echo 'Disable separate lock-screen PIN mode in Settings before removing omamobile-settings.' >&2
++    return 1
++  fi
++}
+diff --git a/omamobile-settings.pro b/omamobile-settings.pro
+index a06eeff..3b48bbc 100644
+--- a/omamobile-settings.pro
++++ b/omamobile-settings.pro
+@@ -4,8 +4,8 @@ CONFIG += c++17 release no_include_pwd
+ TEMPLATE = app
+ TARGET = omamobile-settings
+ INCLUDEPATH += $$PWD/app
+-HEADERS += app/backend.h app/deviceinfocontroller.h app/actionrunner.h
+-SOURCES += app/main.cpp app/backend.cpp app/deviceinfocontroller.cpp app/actionrunner.cpp
++HEADERS += app/backend.h app/deviceinfocontroller.h app/actionrunner.h app/credentialscontroller.h
++SOURCES += app/main.cpp app/backend.cpp app/deviceinfocontroller.cpp app/actionrunner.cpp app/credentialscontroller.cpp
+ RESOURCES += app/resources.qrc
+ include(version.pri)
+ 
+diff --git a/polkit/org.omamobile.settings.credentials.policy b/polkit/org.omamobile.settings.credentials.policy
+new file mode 100644
+index 0000000..6d95adc
+--- /dev/null
++++ b/polkit/org.omamobile.settings.credentials.policy
+@@ -0,0 +1,13 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!-- SPDX-License-Identifier: MIT -->
++<!DOCTYPE policyconfig PUBLIC
++ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
++ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
++<policyconfig>
++  <action id="org.freedesktop.policykit.exec">
++    <description>Change this user's Omarchy credentials</description>
++    <message>Authenticate to change this user's lock-screen PIN or account password</message>
++    <defaults><allow_any>no</allow_any><allow_inactive>no</allow_inactive><allow_active>auth_self</allow_active></defaults>
++    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/omamobile-settings/credentials-helper</annotate>
++  </action>
++</policyconfig>
+diff --git a/test/all b/test/all
+index d0c6618..513b1b0 100755
+--- a/test/all
++++ b/test/all
+@@ -5,6 +5,7 @@ source_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+ build_dir=${OMAMOBILE_SETTINGS_TEST_BUILD_DIR:-"$source_dir/build/tests"}
+ "$source_dir/bin/build"
+ "$source_dir/test/display-backend.sh"
++"$source_dir/test/security-static.sh"
+ mkdir -p "$build_dir"
+ fixture=$(mktemp -d)
+ trap 'rm -rf -- "$fixture"' EXIT HUP INT TERM
+diff --git a/test/security-auth-container.sh b/test/security-auth-container.sh
+new file mode 100755
+index 0000000..4d8bb27
+--- /dev/null
++++ b/test/security-auth-container.sh
+@@ -0,0 +1,67 @@
++#!/bin/bash
++# SPDX-License-Identifier: MIT
++set -euo pipefail
++fail() { echo "not ok - $*" >&2; exit 1; }
++pass() { echo "ok - $*"; }
++cat >/etc/pam.d/omarchy-lock-password <<'PAM'
++#%PAM-1.0
++auth required pam_unix.so try_first_pass
++account required pam_unix.so
++PAM
++cat >/etc/pam.d/system-local-login <<'PAM'
++#%PAM-1.0
++auth include system-auth
++account include system-auth
++PAM
++cat >/etc/pam.d/system-auth <<'PAM'
++#%PAM-1.0
++auth required pam_unix.so
++account required pam_unix.so
++PAM
++# Throwaway fixture only: Debian runs pam_pwquality on the chpasswd path and
++# would refuse the 4-digit test PIN as account password. The target system
++# (Arch) has no quality gate there, so pin a plain pam_unix password stack.
++cat >/etc/pam.d/chpasswd <<'PAM'
++#%PAM-1.0
++auth required pam_permit.so
++account required pam_permit.so
++password required pam_unix.so yescrypt
++PAM
++# Debian keeps chpasswd in /usr/sbin; the helper targets Arch's /usr/bin path.
++ln -sf /usr/sbin/chpasswd /usr/bin/chpasswd
++useradd -m settings-test
++useradd -m lockout-test
++useradd -m ordinary-test
++printf 'settings-test:initial-account-password\nlockout-test:initial-account-password\nordinary-test:ordinary-account-password\n' | chpasswd
++uid=$(id -u settings-test)
++run_helper() { PKEXEC_UID="$1" /usr/lib/omamobile-settings/credentials-helper "$2"; }
++try_auth() { printf '%s\n' "$3" | pamtester "$1" "$2" authenticate >/dev/null 2>&1; }
++expect_auth() { if try_auth "$1" "$2" "$3"; then pass "$4"; else fail "$4"; fi; }
++expect_reject() { if try_auth "$1" "$2" "$3"; then fail "$4"; else pass "$4"; fi; }
++printf '{"enabled":true}' | run_helper "$uid" set-keypad >/dev/null
++test -f /home/settings-test/.local/state/omarchy/toggles/lock-keypad || fail 'numeric keypad toggle enables the shell option'
++printf '{"enabled":false}' | run_helper "$uid" set-keypad >/dev/null
++test ! -e /home/settings-test/.local/state/omarchy/toggles/lock-keypad || fail 'numeric keypad toggle disables the shell option'
++printf '{"secret":"1234","confirm":"1234"}' | run_helper "$uid" set-pin >/dev/null
++expect_auth omarchy-lock-password settings-test 1234 'default mode keeps one account PIN/password'
++expect_reject system-auth settings-test initial-account-password 'PIN changes the single account secret'
++printf '{"secret":"Account-long-Password-1","confirm":"Account-long-Password-1"}' | run_helper "$uid" set-account-password >/dev/null
++expect_auth system-auth settings-test Account-long-Password-1 'account password changes through helper'
++printf '{"secret":"2468","confirm":"2468"}' | run_helper "$uid" set-pin >/dev/null
++printf '{"secret":"1357","confirm":"1357"}' | run_helper "$uid" set-separate-pin >/dev/null
++test "$(stat -c '%u:%g:%a' /var/lib/omamobile/lock-pin/"$uid")" = "0:$(id -g settings-test):640" || fail 'separate hash is root-owned, group-readable to private primary group, mode 0640'
++expect_auth omarchy-lock-password settings-test 1357 'separate PIN authenticates lock service'
++expect_reject omarchy-lock-password settings-test 2468 'account password does not fall through to lock PIN'
++expect_auth system-auth settings-test 2468 'account password remains valid for sudo PAM service'
++printf '{"secret":"Updated-account-password-2","confirm":"Updated-account-password-2"}' | run_helper "$uid" set-account-password >/dev/null
++expect_auth omarchy-lock-password settings-test 1357 'account password change leaves separate lock PIN unchanged'
++expect_auth system-auth settings-test Updated-account-password-2 'sudo PAM checks the updated account password'
++expect_auth omarchy-lock-password ordinary-test ordinary-account-password 'non-opted-in users retain account-password authentication'
++printf '{"enabled":true}' | run_helper "$uid" use-account-password >/dev/null
++expect_auth omarchy-lock-password settings-test Updated-account-password-2 'disabling separate PIN restores account-password lock authentication'
++expect_reject omarchy-lock-password settings-test 1357 'restored single-secret lock no longer accepts the separate PIN'
++uid2=$(id -u lockout-test)
++printf '{"secret":"1357","confirm":"1357"}' | run_helper "$uid2" set-separate-pin >/dev/null
++for _ in $(seq 1 10); do try_auth omarchy-lock-password lockout-test 0000 || true; done
++expect_reject omarchy-lock-password lockout-test 1357 'ten failed lock PIN attempts enforce lockout'
++pass 'pamtester used test accounts in isolated container'
+diff --git a/test/security-static.sh b/test/security-static.sh
+new file mode 100755
+index 0000000..3216c7c
+--- /dev/null
++++ b/test/security-static.sh
+@@ -0,0 +1,9 @@
++#!/bin/sh
++# SPDX-License-Identifier: MIT
++set -eu
++source_dir=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
++qmllint "$source_dir/app/SecurityPage.qml"
++shellcheck "$source_dir/omamobile-settings.install" \
++  "$source_dir/test/security-static.sh" \
++  "$source_dir/test/security-auth-container.sh"
++python3 -m py_compile "$source_dir/bin/credentials-helper" "$source_dir/bin/verify-lock-pin"
+diff --git a/tests/security-auth.Dockerfile b/tests/security-auth.Dockerfile
+new file mode 100644
+index 0000000..fffd1c2
+--- /dev/null
++++ b/tests/security-auth.Dockerfile
+@@ -0,0 +1,11 @@
++# SPDX-License-Identifier: MIT
++FROM debian:stable-slim
++RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
++    openssl pamtester libpam-modules python3 passwd ca-certificates \
++    && rm -rf /var/lib/apt/lists/*
++WORKDIR /work
++COPY bin/credentials-helper /usr/lib/omamobile-settings/credentials-helper
++COPY bin/verify-lock-pin /usr/lib/omamobile-settings/verify-lock-pin
++COPY test/security-auth-container.sh /work/security-auth-container.sh
++RUN chmod 0755 /usr/lib/omamobile-settings/credentials-helper /usr/lib/omamobile-settings/verify-lock-pin
++CMD ["/bin/bash", "/work/security-auth-container.sh"]
+diff --git a/version b/version
+index d917d3e..b1e80bb 100644
+--- a/version
++++ b/version
+@@ -1 +1 @@
+-0.1.2
++0.1.3
