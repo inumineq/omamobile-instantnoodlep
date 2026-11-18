@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Read-only touchscreen/DRM survey; the owner performs the taps.
+set -euo pipefail
+
+if (( EUID != 0 )); then
+  echo "Run as root on the phone; this script only reads device nodes." >&2
+  exit 2
+fi
+command -v evtest >/dev/null || { echo "Install evtest first." >&2; exit 2; }
+command -v python3 >/dev/null || { echo "python3 is required." >&2; exit 2; }
+command -v stdbuf >/dev/null || { echo "stdbuf (coreutils) is required." >&2; exit 2; }
+
+echo "DRM connectors and modes (sysfs):"
+found_drm=0
+for connector in /sys/class/drm/card*-*; do
+  [[ -d $connector && -r $connector/status ]] || continue
+  [[ $(<"$connector/status") == connected ]] || continue
+  found_drm=1
+  printf '%s: ' "${connector##*/}"
+  if [[ -r $connector/mode ]]; then
+    cat "$connector/mode"
+  elif [[ -r $connector/modes ]]; then
+    tr '\n' ' ' <"$connector/modes"; echo
+  else
+    echo "connected (mode unavailable)"
+  fi
+done
+(( found_drm )) || echo "No connected DRM connector mode found."
+
+declare -a candidates=()
+declare -A details=()
+for event in /dev/input/event*; do
+  [[ -c $event ]] || continue
+  info=$(timeout 2 evtest --info "$event" 2>&1 || true)
+  if [[ $info == *ABS_MT_POSITION_X* && $info == *ABS_MT_POSITION_Y* ]]; then
+    candidates+=("$event")
+    details[$event]=$info
+  fi
+done
+if ((${#candidates[@]} == 0)); then
+  echo "No evtest device advertises ABS_MT_POSITION_X and ABS_MT_POSITION_Y." >&2
+  exit 1
+fi
+
+echo
+echo "Touchscreen ABS_MT_POSITION_X/Y range information:"
+for event in "${candidates[@]}"; do
+  echo "--- $event ---"
+  # evtest --info reports each axis with its value, minimum and maximum.
+  awk '/ABS_MT_POSITION_[XY]/ { show=1; n=0 } show { print; n++ } n >= 6 { show=0 }' <<<"${details[$event]}"
+done
+
+if ((${#candidates[@]} == 1)); then
+  selected=${candidates[0]}
+else
+  echo "Select the panel touchscreen (not a stylus or auxiliary input):"
+  select selected in "${candidates[@]}"; do [[ -n ${selected:-} ]] && break; done
+fi
+
+echo
+echo "The selected event device will be read without --grab; normal touch delivery continues."
+echo "Tap only the LEFT physical edge repeatedly while each prompt is active."
+echo "No touch coordinates are saved; only min/max values are summarized."
+python3 - "$selected" <<'PY'
+import re
+import subprocess
+import sys
+import threading
+
+device = sys.argv[1]
+proc = subprocess.Popen(["stdbuf", "-oL", "evtest", device], stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT, text=True, bufsize=1)
+lock = threading.Lock()
+recording = False
+values = {"left": [], "right": []}
+side = "left"
+patterns = {
+    "x": re.compile(r"ABS_MT_POSITION_X\), value (-?\d+)"),
+    "y": re.compile(r"ABS_MT_POSITION_Y\), value (-?\d+)"),
+}
+
+def reader():
+    global recording
+    for line in proc.stdout:
+        with lock:
+            if not recording:
+                continue
+            match = patterns["x"].search(line)
+            if match:
+                values[side].append(int(match.group(1)))
+
+thread = threading.Thread(target=reader, daemon=True)
+thread.start()
+try:
+    for side in ("left", "right"):
+        with lock:
+            recording = True
+        input(f"Tap the {side.upper()} physical edge repeatedly now, then press Enter: ")
+        with lock:
+            recording = False
+        if not values[side]:
+            print(f"No X samples captured for {side}; check device selection and retry.")
+    proc.terminate()
+except (EOFError, KeyboardInterrupt):
+    proc.terminate()
+    print("Capture cancelled.")
+    sys.exit(1)
+
+left = values["left"]
+right = values["right"]
+if left and right:
+    observed_min, observed_max = min(left), max(right)
+    print(f"Observed edge X values: left min={min(left)} max={max(left)}; "
+          f"right min={min(right)} max={max(right)}")
+    print(f"Suggested touch-range bounds: x_min={observed_min}, x_max={observed_max}")
+    print("Compare against the ABS_MT_POSITION_X maximum and DRM mode; these are touch coordinates, not yet validated panel-pixel insets.")
+else:
+    print("Insufficient left/right samples; no inset suggestion.")
+PY
