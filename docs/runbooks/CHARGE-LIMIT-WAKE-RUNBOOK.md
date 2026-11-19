@@ -11,7 +11,8 @@ passed, because K3 is built on K1 and its sleep steps use the s2idle step
 tool.
 
 - Kernel: `inumineq/linux-omarchy-mobile`, branch
-  `instantnoodlep-k3-power-chg2` @ `8ef0c4799`, two topics on K1
+  `instantnoodlep-k3-power-chg2` @ `8b6d86a4a`, two topics and the input
+  current ceiling on K1
   (`instantnoodlep-k3-power-chg1` @ `8907ff5b8`), both in
   `drivers/power/supply/qcom_pm8150b_charger.c`:
   - A: `charge_control_end_threshold` on the charger supply. Accepted values
@@ -26,7 +27,8 @@ tool.
   the safety policy or `charging_enabled=0`. If the gauge capacity cannot be
   read, charging stays off while a limit below 100 is set.
 - [V] Three independent reviews; the third verdict at `8ef0c4799` is "safe
-  for an owner-attended test" under this gate. KUnit 57 of 57.
+  for an owner-attended test" under this gate. KUnit 57 of 57 then, 60 of 60
+  with the ceiling commit, which has its own review.
 - [I] Everything the steps below expect. Not run on the phone. Nothing is
   flashed; the candidate is RAM-booted. Every step needs the owner's go
   (AGENTS.md rule 1).
@@ -37,7 +39,7 @@ installed as `/var/lib/s2idle/step`, with `S2IDLE_KEEP_CHARGING=1` so the
 tool does not switch charging off and the driver's own decision is what is
 tested. Its log is `/var/lib/s2idle/<step>.log`.
 
-The owner is present, with the inline meter, for every step that has a cable
+The owner is present, with the inline meter if there is one, for every step that has a cable
 in (H1-H8, W1, W2, W4, W5) and for the plug in W3.
 
 ## Prerequisites
@@ -50,7 +52,8 @@ in (H1-H8, W1, W2, W4, W5) and for the plug in W3.
   `/usr/lib/modules/7.3.0-rc6-instantnoodlep-k3-power-chg2/`; WATCH
   (`/root/instantnoodlep-charge-watch`) on the phone.
 - P3: battery between 40 % and 80 %, gauge `voltage_now` >= 3.75 V.
-- P4: meter resolution 0.01 A and 0.01 V, inline between source and phone, visible to the owner.
+- P4, metered session only: meter resolution 0.01 A and 0.01 V, inline between source and phone,
+  visible to the owner.
 - P5: only the laptop USB-A port is used (SDP, 0.5 A, or 0.9 A if USB 3); rating written down.
 - P6: the R0 pre-checks of S2IDLE-FIRST-RUNBOOK and its RTC self-test
   (`rtcwake -d rtc0 -m no -s 10`) passed on this boot. The step tool is installed at
@@ -113,15 +116,15 @@ in [`CHARGER-RP-RUNBOOK.md`](CHARGER-RP-RUNBOOK.md) apply: M-P4, M-P5, S5m,
 S6m, S7m and the watch started with a ceiling of 500000 before every plug.
 In this section they replace every meter rule of this runbook.
 
-- [V] This kernel contains the Type-C Rp change (C1). On a C-to-C source it
-  raises the input limit, and the owner's laptop USB-C port advertises 3.0 A.
-  So the whole session uses a laptop USB-A port with an A-to-C cable whose
-  G0 read was 0x1506 = 08. No C-to-C source is plugged while this kernel's
-  charger module is loaded. If one is, the watch prints STOP: pull the cable.
-- The source must have passed gate M0 of CHARGER-RP-RUNBOOK on the daily
-  kernel. In every watch line with `online` 1, `usb_type` is `SDP` (or
-  `Unknown` for about the first second after a plug). Any other type:
-  Emergency.
+- [V] This kernel contains the Type-C Rp change (C1), which raises the input
+  limit on a C-to-C source. So the charger module is loaded with
+  `max_input_ua=500000` (from `8b6d86a4a` on), and gate MG of
+  CHARGER-RP-RUNBOOK must pass before any cable goes in. H0 and every other
+  `modprobe` of this session carry the parameter.
+- Sources: only those that passed gate M0 of CHARGER-RP-RUNBOOK on the daily
+  kernel. Where a step says USB-A and expects `SDP`, the laptop USB-C port is
+  allowed as well and reads `C`. In every read 0x1370 = 0a. `CDP`, `DCP` or
+  another 0x1370 value: Emergency.
 - E1, R1 and R2 below carry their own "without a meter" wording.
 - H1: instead of the meter, every watch line has `icl_uA` 500000 and
   `iusb_uA` <= 650000.
