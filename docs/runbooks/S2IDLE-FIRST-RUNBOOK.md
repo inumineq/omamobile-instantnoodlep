@@ -91,7 +91,7 @@ rtcwake -d rtc0 -m no -s 10; sleep 15; grep -i alarm /proc/interrupts; grep alar
 | Expect | Stop condition |
 | --- | --- |
 | release `7.3.0-rc6-instantnoodlep-k3-daily2-qce-gmu` | another kernel |
-| `androidboot.slot_suffix=_b` | any other slot: a forced reboot into slot A erases the Arch root |
+| `androidboot.slot_suffix=_b` | any other slot: slot A holds another system, and this runbook is not valid there |
 | `[s2idle]`, `freeze` in `state`, `[none]` in `pm_test` | `freeze` missing |
 | a line with `OSI mode` [I] | `PC mode`: record it and continue, the cluster counters will read differently |
 | RTC named `pm8xxx`, advances 5 (±1) in 5 s | no RTC or not advancing |
