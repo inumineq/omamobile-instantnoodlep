@@ -77,19 +77,25 @@ fastboot boot "$IMG"
 ```sh
 V=nopd        # the variant's name: boot_b, nopd, noclk, noboth or k2dtb
 D=/var/lib/s2idle
-case $V in boot_b|nopd|noclk|noboth|k2dtb) ;; *) echo "STOP: unknown variant $V";; esac
+ok=1
+case $V in boot_b|nopd|noclk|noboth|k2dtb) ;; *) ok=0; echo "STOP: unknown variant $V";; esac
+findmnt -no SOURCE,FSTYPE / || { ok=0; echo "STOP: no root mount shown"; }
+{ test -d "$D" && test -w "$D"; } || { ok=0; echo "STOP: no writable $D"; }
 uname -r
 tr ' ' '\n' </proc/cmdline | grep -E 'slot_suffix|ignore_unused'
-findmnt -no SOURCE,FSTYPE / || echo "STOP: no root mount shown"
-test -d $D && test -w $D && echo "log directory ok" || echo "STOP: no writable $D"
-sha256sum $D/step
-modprobe rtc-pm8xxx; modprobe qcom_stats
-dmesg | grep -iE 'genpd|gdsc|rpmhpd|unused|PC mode|OSI|failed|error' > $D/$V-dmesg.txt
-cat /sys/kernel/debug/pm_genpd/pm_genpd_summary > $D/$V-genpd.txt
-cat /sys/kernel/debug/clk/clk_summary > $D/$V-clk-before.txt
-grep -H . /sys/class/remoteproc/*/state > $D/$V-rproc.txt
-grep -H . /sys/power/suspend_stats/success /sys/power/suspend_stats/fail
-find /proc/device-tree -name 'qcom,select-utmi-as-pipe-clk' | wc -l
+if [ "$ok" = 1 ]; then
+  sha256sum "$D/step"
+  modprobe rtc-pm8xxx; modprobe qcom_stats
+  dmesg | grep -iE 'genpd|gdsc|rpmhpd|unused|PC mode|OSI|failed|error' > "$D/$V-dmesg.txt"
+  cat /sys/kernel/debug/pm_genpd/pm_genpd_summary > "$D/$V-genpd.txt"
+  cat /sys/kernel/debug/clk/clk_summary > "$D/$V-clk-before.txt"
+  grep -H . /sys/class/remoteproc/*/state > "$D/$V-rproc.txt"
+  grep -H . /sys/power/suspend_stats/success /sys/power/suspend_stats/fail
+  find /proc/device-tree -name 'qcom,select-utmi-as-pipe-clk' | wc -l
+  echo "check done for $V"
+else
+  echo "STOP: nothing captured"
+fi
 ```
 
 Expect: release `7.3.0-rc6-instantnoodlep-k3-daily2-qce-gmu`, slot `_b`,
@@ -97,17 +103,22 @@ exactly the options the variant should have, the root file system on
 `userdata` as on the daily boot, the log directory present, and the step
 tool with sha256
 `6c5200f48d0508fba3ceb3d66f350ee408af8898b66065dedc24bd4894309f1e`. The last
-line prints 0 or 1; record it. Stop if the slot is not `_b`, if the root is
-not the usual one, or on any line that starts with `STOP`: this runbook is
-only valid there, and the captures below would be lost.
+line before `check done` prints 0 or 1; record it. Stop if the slot is not
+`_b`, if the root line differs from the one S0 printed on the `boot_b`
+kernel, or on any line that starts with `STOP`. On a `STOP` the block
+captures nothing and loads no module.
 
 After each sleep, once SSH is back, with the same `V` and `D`:
 
 ```sh
-cat /sys/kernel/debug/clk/clk_summary > $D/$V-clk-after.txt
-cat /sys/kernel/debug/pm_genpd/pm_genpd_summary > $D/$V-genpd-after.txt
-dmesg | grep -E 'PC mode|suspend entry|suspend exit|failed|error' > $D/$V-dmesg-after.txt
+[ "$ok" = 1 ] && cat /sys/kernel/debug/clk/clk_summary > "$D/$V-clk-after.txt"
+[ "$ok" = 1 ] && cat /sys/kernel/debug/pm_genpd/pm_genpd_summary > "$D/$V-genpd-after.txt"
+[ "$ok" = 1 ] && dmesg > "$D/$V-dmesg-after.txt"
 ```
+
+A new SSH session after the replug has lost `V`, `D` and `ok`: set `V` and
+`D` again and `ok=1` by hand, after reading back that `V` is the variant
+that is booted.
 
 **Smoke test**: the screen shows the desktop and an animation moves
 smoothly (GPU), touch reacts, Wi-Fi is connected and a `ping` to the gateway
@@ -184,7 +195,8 @@ Expect: the `boot_b` release, slot `_b`, both options present. Stop on any
 other slot: slot A holds another system, and this runbook is not valid
 there.
 
-Then run the check block with `V=boot_b`, and confirm that SSH over Wi-Fi
+Then run the check block with `V=boot_b` and note its root line (source
+and file system type); every later boot must print the same. Then and confirm that SSH over Wi-Fi
 works from the laptop. [V] The firewall on the phone blocked SSH on the
 Wi-Fi interface earlier (`docs/agents/state.md`). If it still does, S4
 cannot run as written; say so and skip it.
