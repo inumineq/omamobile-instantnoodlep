@@ -123,9 +123,26 @@ The order is fixed, and the first step uses no software.
 ## Session without a meter
 
 The owner has no inline USB-C meter. This section replaces every meter rule
-above for a session without one. Everything else stands. An independent
-review of these rules gave: the 500 mA steps are acceptable with the rules
-below; every step above 500 mA needs a meter.
+above for a session without one. Everything else stands.
+
+**Review status: not accepted.** Four independent reviews of these rules all
+ended "fix first". The last one found the driver side complete and one
+objection left, which no rule here can remove: without a meter nothing
+outside the PMIC shows that the current stays at 500 mA. Running this section
+is therefore the owner's decision, with these facts:
+
+- [V] Every step above 500 mA needs a meter. No exception.
+- [V] With `max_input_ua=500000` the candidate writes the input limit
+  register no higher than the daily kernel does on a 500 mA port, and the
+  series changes none of the registers that select how the PMIC applies that
+  limit (no such line in `git diff bd566b604 e69b080df`). On a port that the
+  daily kernel would give 1.5 A (CDP, DCP), the candidate stays at 500 mA.
+- [I] So the input-side exposure of a session under this section is the one
+  the phone has when it charges on the daily kernel today. Whether that is
+  acceptable without a meter is not something a review of the source can
+  settle.
+- The reviewer advises against the laptop USB-C port (Rp 3.0 A) as a
+  meterless source, because only the PMIC's own readings show it capped.
 
 - [V] The phone measures its own USB input: the charger's `current_now` and
   `voltage_now` come from the PMIC ADC, `current_max` is the AICL status and
