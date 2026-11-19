@@ -1,0 +1,570 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Run the runtime A/B holder rows (R1 section 7, A0-A7) unattended on the phone,
+# undo every toggle on exit, and print one summary table.
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: instantnoodlep-holder-matrix [--rows a0,a1,...] [--wait SECONDS]
+         [--settle SECONDS] [--out DIR] [--allow-cable] [--force-a4]
+         [--dry-run] [--help]
+
+Run on the phone as root, cable out, screen off. For each row: undo the
+previous row, apply this row, settle, snapshot, wait while sampling the
+gauge every 15 s, snapshot, undo. Every toggle goes back to the value it
+had before the run, also when the script is interrupted or killed with
+INT/TERM/HUP. Only volatile runtime state changes; no partition is written.
+
+  --rows LIST     default a0,a1,a2,a5,a6,a3,a4,a7
+  --wait N        seconds per row after the first snapshot (default 300)
+  --settle N      seconds between applying a row and its first snapshot (default 30)
+  --out DIR       default /tmp/holder-matrix-<UTC stamp>, mode 0700
+  --allow-cable   run although a charger or USB supply reports online=1
+                  (row a4 is then skipped unless --force-a4)
+  --force-a4      run a4 with the cable in, or when the SSH link cannot be
+                  identified as Wi-Fi
+  --dry-run       print the apply/undo commands per row; change nothing
+
+Rows: a0 baseline, a1 Wi-Fi power save on, a2 Bluetooth off, a3 CPUs 1-7
+offline, a4 USB runtime PM auto (UDC unbound if still active), a5 UFS
+pm_qos off, a6 icc_bwmon unloaded, a7 a1+a2+a4+a5+a6 combined.
+EOF
+}
+
+rows_arg=a0,a1,a2,a5,a6,a3,a4,a7
+wait_s=300
+settle_s=30
+out=
+allow_cable=0
+force_a4=0
+dry=0
+while (($#)); do
+  case $1 in
+    --rows) (($# >= 2)) || { usage >&2; exit 2; }; rows_arg=$2; shift 2 ;;
+    --wait) (($# >= 2)) || { usage >&2; exit 2; }; wait_s=$2; shift 2 ;;
+    --settle) (($# >= 2)) || { usage >&2; exit 2; }; settle_s=$2; shift 2 ;;
+    --out) (($# >= 2)) || { usage >&2; exit 2; }; out=$2; shift 2 ;;
+    --allow-cable) allow_cable=1; shift ;;
+    --force-a4) force_a4=1; shift ;;
+    --dry-run) dry=1; shift ;;
+    --help|-h) usage; exit 0 ;;
+    *) usage >&2; exit 2 ;;
+  esac
+done
+[[ $wait_s =~ ^[1-9][0-9]*$ && $settle_s =~ ^[0-9]+$ ]] || { usage >&2; exit 2; }
+
+sysfs=${HOLDER_MATRIX_SYSFS:-/sys}
+debugfs=${HOLDER_MATRIX_DEBUGFS:-/sys/kernel/debug}
+proc=${HOLDER_MATRIX_PROC:-/proc}
+configfs=${HOLDER_MATRIX_CONFIGFS:-/sys/kernel/config}
+dev=${HOLDER_MATRIX_DEV:-/dev}
+usb_dev=$sysfs/bus/platform/devices/a6f8800.usb
+ufs_dev=$sysfs/bus/platform/devices/1d84000.ufshc
+bwmon=icc_bwmon
+sample_every=15
+
+# name|description|precondition|apply|undo
+ROW_TABLE=(
+  'a0|baseline, no toggle|pre_none|apply_none|undo_none'
+  'a1|Wi-Fi power save on|pre_wifi_ps|apply_wifi_ps|undo_wifi_ps'
+  'a2|Bluetooth powered off|pre_bt|apply_bt|undo_bt'
+  'a3|CPUs 1-7 offline (cpu0 stays)|pre_cpus|apply_cpus|undo_cpus'
+  'a4|USB power/control=auto, UDC unbound if still active|pre_usb|apply_usb|undo_usb'
+  'a5|UFS pm_qos_enable=0|pre_ufs_qos|apply_ufs_qos|undo_ufs_qos'
+  'a6|icc_bwmon unloaded|pre_bwmon|apply_bwmon|undo_bwmon'
+  'a7|a1+a2+a4+a5+a6 combined, all CPUs online|pre_combined|apply_combined|undo_combined'
+)
+COMBINED=(wifi_ps bt usb ufs_qos bwmon)
+
+declare -A ROW_DESC ROW_PRE ROW_APPLY ROW_UNDO
+for entry in "${ROW_TABLE[@]}"; do
+  IFS='|' read -r name desc pre apply undo <<<"$entry"
+  ROW_DESC[$name]=$desc ROW_PRE[$name]=$pre ROW_APPLY[$name]=$apply ROW_UNDO[$name]=$undo
+done
+
+IFS=, read -ra rows <<<"${rows_arg,,}"
+for r in "${rows[@]}"; do
+  [[ -n ${ROW_DESC[$r]+x} ]] || { echo "Unknown row: $r (known: a0-a7)" >&2; exit 2; }
+done
+
+log() {
+  local line
+  line="[$(date -u +%H:%M:%S)] $*"
+  printf '%s\n' "$line"
+  if ((!dry)) && [[ -n $out && -d $out ]]; then printf '%s\n' "$line" >>"$out/run.log"; fi
+}
+
+# --- Toggle state: key = kind:target, one getter and one setter per kind. ---
+declare -A ORIG SIM
+undo_failed=()
+
+state_get() {
+  local key=$1 v
+  if ((dry)) && [[ -n ${SIM[$key]+x} ]]; then printf '%s' "${SIM[$key]}"; return; fi
+  case $key in
+    file:*) v=$(<"${key#file:}") 2>/dev/null || v=; printf '%s' "$v" ;;
+    wifi:*) { iw dev "${key#wifi:}" get power_save 2>/dev/null || true; } |
+              sed -n 's/.*[Pp]ower save: *\(on\|off\).*/\1/p' ;;
+    bt) { timeout 10 bluetoothctl show 2>/dev/null || true; } |
+          sed -n 's/.*Powered: *\(yes\|no\).*/\1/p' | head -n1 ;;
+    mod:*) if [[ -r $sysfs/module/${key#mod:}/initstate ]] &&
+              [[ $(<"$sysfs/module/${key#mod:}/initstate") == live ]]; then
+             printf loaded
+           else printf unloaded; fi ;;
+  esac
+}
+
+state_cmd() {
+  local key=$1 value=$2
+  case $key in
+    file:*) printf 'echo %q > %s' "$value" "${key#file:}" ;;
+    wifi:*) printf 'iw dev %s set power_save %s' "${key#wifi:}" "$value" ;;
+    bt) printf 'bluetoothctl power %s' "$([[ $value == yes ]] && echo on || echo off)" ;;
+    mod:*) if [[ $value == loaded ]]; then printf 'modprobe %s' "${key#mod:}"
+           else printf 'rmmod %s' "${key#mod:}"; fi ;;
+  esac
+}
+
+state_set() {
+  local key=$1 value=$2
+  if [[ $key == file:*/cpu0/online ]]; then
+    log "REFUSED: cpu0 is never written"
+    return 1
+  fi
+  if ((dry)); then
+    printf '    + %s\n' "$(state_cmd "$key" "$value")"
+    SIM[$key]=$value
+    return 0
+  fi
+  log "  $(state_cmd "$key" "$value")"
+  case $key in
+    file:*) printf '%s\n' "$value" >"${key#file:}" ;;
+    wifi:*) iw dev "${key#wifi:}" set power_save "$value" ;;
+    bt) timeout 15 bluetoothctl power "$([[ $value == yes ]] && echo on || echo off)" >/dev/null ;;
+    mod:*) if [[ $value == loaded ]]; then modprobe "${key#mod:}"; else rmmod "${key#mod:}"; fi ;;
+  esac
+}
+
+# Record the original once, before the first write, so every undo (and the
+# trap) restores what the phone had, even after a failed earlier undo.
+change() {
+  local key=$1 value=$2 cur
+  cur=$(state_get "$key")
+  [[ -n ${ORIG[$key]+x} ]] || ORIG[$key]=$cur
+  if [[ $cur != "$value" ]]; then
+    state_set "$key" "$value"
+  elif ((dry)); then
+    printf '    = already %s: %s\n' "${value:-empty}" "${key#file:}"
+  fi
+}
+
+restore() {
+  local key=$1
+  [[ -n ${ORIG[$key]+x} ]] || return 0
+  [[ $(state_get "$key") == "${ORIG[$key]}" ]] && return 0
+  if ! state_set "$key" "${ORIG[$key]}" || [[ $(state_get "$key") != "${ORIG[$key]}" ]]; then
+    log "WARNING: undo of $key did not take; retried at exit"
+  fi
+}
+
+pause() {
+  if ((dry)); then printf '    + sleep %s\n' "$1"; return; fi
+  sleep "$1" &
+  sleep_pid=$!
+  wait "$sleep_pid"
+  sleep_pid=
+}
+
+# --- Rows: precondition (sets REASON), apply, undo. ---
+REASON=
+wifi_if=
+for d in "$sysfs"/class/net/*; do
+  if [[ -d $d/wireless || -e $d/phy80211 ]]; then wifi_if=${d##*/}; break; fi
+done
+
+cpu_online_files() {
+  local f
+  for f in "$sysfs"/devices/system/cpu/cpu[0-9]*/online; do
+    if [[ -e $f && $f != */cpu0/online ]]; then printf '%s\n' "$f"; fi
+  done
+}
+
+pre_none() { :; }
+apply_none() { :; }
+undo_none() { :; }
+
+pre_wifi_ps() {
+  [[ -n $wifi_if ]] || { REASON='no wireless interface under class/net'; return 1; }
+  command -v iw >/dev/null || { REASON='iw not installed'; return 1; }
+  [[ -n $(state_get "wifi:$wifi_if") ]] || { REASON="iw cannot read power_save on $wifi_if"; return 1; }
+}
+apply_wifi_ps() { change "wifi:$wifi_if" on; }
+undo_wifi_ps() { [[ -z $wifi_if ]] || restore "wifi:$wifi_if"; }
+
+pre_bt() {
+  command -v bluetoothctl >/dev/null || { REASON='bluetoothctl not installed'; return 1; }
+  [[ -n $(state_get bt) ]] || { REASON='bluetoothctl show has no Powered line (no controller or no bluetoothd)'; return 1; }
+}
+apply_bt() { change bt no; }
+undo_bt() { restore bt; }
+
+pre_cpus() {
+  [[ -n $(cpu_online_files) ]] || { REASON='no cpuN/online files besides cpu0'; return 1; }
+}
+apply_cpus() {
+  local f
+  while IFS= read -r f; do change "file:$f" 0; done < <(cpu_online_files)
+}
+undo_cpus() {
+  local f
+  while IFS= read -r f; do restore "file:$f"; done < <(cpu_online_files)
+}
+
+ssh_iface() {
+  local local_addr
+  local_addr=$(awk '{print $3}' <<<"${SSH_CONNECTION:-}")
+  [[ -n $local_addr ]] || return 0
+  ip -o addr show 2>/dev/null | awk -v a="$local_addr" '{split($4, p, "/"); if (p[1] == a) {print $2; exit}}'
+}
+
+pre_usb() {
+  [[ -e $usb_dev/power/control ]] || { REASON="$usb_dev/power/control missing"; return 1; }
+  if ((cable_online && !force_a4)); then REASON='cable in (pass --force-a4 to run it anyway)'; return 1; fi
+  ((force_a4)) && return 0
+  local via
+  via=$(ssh_iface)
+  if [[ -z ${SSH_CONNECTION:-} ]]; then
+    REASON='cannot tell which link carries the session (no SSH_CONNECTION); pass --force-a4 once Wi-Fi is confirmed'
+    return 1
+  fi
+  if [[ -z $via || $via != "$wifi_if" ]]; then
+    REASON="SSH session runs over ${via:-an unknown interface}, not Wi-Fi ${wifi_if:-none}; unbinding USB would cut it"
+    return 1
+  fi
+}
+udc_files() {
+  local f
+  for f in "$configfs"/usb_gadget/*/UDC; do
+    if [[ -e $f ]]; then printf '%s\n' "$f"; fi
+  done
+}
+apply_usb() {
+  change "file:$usb_dev/power/control" auto
+  pause 10
+  local status f
+  status=$(<"$usb_dev/power/runtime_status")
+  if ((dry)); then
+    echo "    # the UDC is unbound only if runtime_status is still active (now: $status)"
+  else
+    log "  a6f8800.usb runtime_status after 10 s: $status"
+  fi
+  [[ $status == active ]] || return 0
+  while IFS= read -r f; do
+    if [[ -n $(state_get "file:$f") || -n ${ORIG[file:$f]+x} ]]; then change "file:$f" ''; fi
+  done < <(udc_files)
+}
+undo_usb() {
+  local f
+  while IFS= read -r f; do restore "file:$f"; done < <(udc_files)
+  restore "file:$usb_dev/power/control"
+}
+
+pre_ufs_qos() {
+  [[ -e $ufs_dev/pm_qos_enable ]] || { REASON="$ufs_dev/pm_qos_enable missing"; return 1; }
+}
+apply_ufs_qos() { change "file:$ufs_dev/pm_qos_enable" 0; }
+undo_ufs_qos() { restore "file:$ufs_dev/pm_qos_enable"; }
+
+pre_bwmon() {
+  [[ $(state_get "mod:$bwmon") == loaded ]] || { REASON="$bwmon is not a loaded module"; return 1; }
+  if ! command -v rmmod >/dev/null || ! command -v modprobe >/dev/null; then
+    REASON='rmmod/modprobe missing'
+    return 1
+  fi
+}
+apply_bwmon() { change "mod:$bwmon" unloaded; }
+undo_bwmon() { restore "mod:$bwmon"; }
+
+pre_combined() {
+  local c reasons=()
+  for c in "${COMBINED[@]}"; do
+    REASON=
+    "pre_$c" && return 0
+    reasons+=("$c: $REASON")
+  done
+  REASON="every component skipped (${reasons[*]})"
+  return 1
+}
+apply_combined() {
+  local c
+  for c in "${COMBINED[@]}"; do
+    REASON=
+    if "pre_$c"; then "apply_$c"; else ROW_NOTE[$current_row]+="$c skipped: $REASON; "; fi
+  done
+}
+undo_combined() {
+  local i
+  for ((i = ${#COMBINED[@]} - 1; i >= 0; i--)); do "undo_${COMBINED[i]}"; done
+}
+
+# --- Undo stack and the single exit path. ---
+UNDO_STACK=()
+sleep_pid=
+finished=0
+current_row=
+
+undo_top() {
+  local fn=${UNDO_STACK[-1]}
+  "$fn" || log "WARNING: $fn failed; every recorded toggle is retried at exit"
+  unset 'UNDO_STACK[-1]'
+}
+
+finish() {
+  local rc=$?
+  trap '' INT TERM HUP
+  [[ -z $sleep_pid ]] || kill "$sleep_pid" 2>/dev/null || true
+  while ((${#UNDO_STACK[@]})); do undo_top; done
+  # Sweep every toggle ever recorded, so a failed per-row undo is retried and
+  # success is judged on the final state only.
+  local key
+  for key in "${!ORIG[@]}"; do restore "$key"; done
+  for key in "${!ORIG[@]}"; do
+    [[ $(state_get "$key") == "${ORIG[$key]}" ]] || undo_failed+=("$key")
+  done
+  if ((!dry)) && [[ -n $out && -d $out ]]; then
+    ((finished)) || STATUS[$current_row]="interrupted (exit $rc)"
+    write_summary
+    log "Summary: $out/summary.md"
+  fi
+  if ((${#undo_failed[@]})); then
+    log "UNDO FAILED for: ${undo_failed[*]}. Check by hand or reboot."
+    rc=3
+  fi
+  exit "$rc"
+}
+
+# --- Snapshots and metrics. ---
+battery=
+for d in "$sysfs"/class/power_supply/*; do
+  if [[ -r $d/type && $(<"$d/type") == Battery ]]; then battery=$d; break; fi
+done
+cluster=
+for d in "$debugfs"/pm_genpd/*cluster*; do
+  if [[ -r $d/idle_states ]]; then cluster=$d; break; fi
+done
+
+copy() { if [[ -r $1 ]]; then cat "$1" >"$2" 2>&1 || true; else echo unavailable >"$2"; fi; }
+
+snap() {
+  local d=$1 f
+  mkdir -p "$d/qcom_stats"
+  for f in "$debugfs"/qcom_stats/*; do
+    if [[ -f $f ]]; then copy "$f" "$d/qcom_stats/${f##*/}"; fi
+  done
+  if [[ -n $cluster ]]; then copy "$cluster/idle_states" "$d/cluster"; fi
+  echo "${cluster##*/}" >"$d/cluster.name"
+  copy "$debugfs/pm_genpd/pm_genpd_summary" "$d/genpd"
+  copy "$debugfs/interconnect/interconnect_summary" "$d/icc"
+  copy "$debugfs/clk/clk_summary" "$d/clk"
+  copy "$debugfs/regulator/regulator_summary" "$d/reg"
+  copy "$proc/interrupts" "$d/irq"
+  grep -s . "$sysfs"/devices/system/cpu/cpu*/cpuidle/state*/{usage,time} >"$d/cpuidle" || true
+  od -An -td4 "$dev/cpu_dma_latency" >"$d/qos" 2>&1 || true
+  cat "$sysfs"/class/remoteproc/*/state >"$d/rproc" 2>&1 || true
+  for f in current_now voltage_now capacity temp; do
+    if [[ -n $battery && -r $battery/$f ]]; then echo "$f=$(<"$battery/$f")"; fi
+  done >"$d/gauge"
+  date +%s >"$d/t"
+}
+
+sample_wait() {
+  local d=$1 left=$wait_s step
+  : >"$d/ibat.samples"
+  while ((left > 0)); do
+    if [[ -n $battery ]]; then echo "$(date +%s) $(<"$battery/current_now")" >>"$d/ibat.samples"; fi
+    step=$((left < sample_every ? left : sample_every))
+    pause "$step"
+    left=$((left - step))
+  done
+}
+
+gauge_stats() {
+  awk '{print $2}' "$1" | sort -n | awk '
+    {v[NR] = $1}
+    END {
+      if (!NR) { print "n/a"; exit }
+      m = NR % 2 ? v[(NR + 1) / 2] : (v[NR / 2] + v[NR / 2 + 1]) / 2
+      printf "%.1f (%.1f..%.1f, n=%d)", m / 1000, v[1] / 1000, v[NR] / 1000, NR
+    }'
+}
+
+cluster_delta() {
+  [[ -r $1/cluster && -r $2/cluster ]] || { echo 'n/a|n/a|n/a'; return; }
+  awk '
+    FNR == 1 { for (i = 1; i <= NF; i++) col[$i] = i; next }
+    $1 ~ /^S[0-9]/ {
+      s = FILENAME == pre ? -1 : 1
+      u += s * $col["Usage"]; t += s * $col["Time(ms)"]
+      if ("Rejected" in col) r += s * $col["Rejected"]
+    }
+    END { printf "%d|%d|%s\n", u, t, ("Rejected" in col) ? r : "n/a" }
+  ' pre="$1/cluster" "$1/cluster" "$2/cluster"
+}
+
+stats_count() {
+  awk '/^Count:/ {c += $2; f = 1}
+       /DDR LPM/ { if (match($0, /count:[0-9]+/)) { c += substr($0, RSTART + 6, RLENGTH - 6); f = 1 } }
+       END { print f ? c : "" }' "$1"
+}
+
+stats_delta() {
+  local pre=$1 post=$2 f n a b parts=()
+  for f in "$post"/qcom_stats/*; do
+    [[ -f $f ]] || continue
+    n=${f##*/}
+    a=$(stats_count "$pre/qcom_stats/$n" 2>/dev/null || true)
+    b=$(stats_count "$f")
+    if [[ -n $a && -n $b ]]; then parts+=("$n +$((b - a))"); fi
+  done
+  if ((${#parts[@]})); then
+    local joined
+    joined=$(IFS=,; echo "${parts[*]}")
+    echo "${joined//,/, }"
+  else
+    echo n/a
+  fi
+}
+
+irq_delta() {
+  local pre=$1 post=$2 secs
+  secs=$(($(<"$post/t") - $(<"$pre/t")))
+  ((secs > 0)) || secs=1
+  awk -v secs="$secs" '
+    FNR == 1 { ncpu = NF; next }
+    {
+      id = $1; sub(/:$/, "", id); sum = 0; i = 2
+      while (i <= NF && i <= ncpu + 1 && $i ~ /^[0-9]+$/) { sum += $i; i++ }
+      name = ""
+      if (id ~ /^[0-9]+$/) name = id " " $NF
+      else { for (; i <= NF; i++) name = name (name == "" ? "" : " ") $i; name = id " " name }
+      if (FILENAME == pre) before[id] = sum
+      else { d = sum - before[id]; delta[id] = d; label[id] = name; total += d }
+    }
+    END {
+      printf "%.1f|", total / secs
+      n = 0
+      for (id in delta) order[++n] = id
+      for (i = 1; i <= n; i++) for (j = i + 1; j <= n; j++)
+        if (delta[order[j]] > delta[order[i]]) { t = order[i]; order[i] = order[j]; order[j] = t }
+      for (i = 1; i <= n && i <= 5; i++) printf "%s%s +%d", (i > 1 ? ", " : ""), label[order[i]], delta[order[i]]
+      print ""
+    }
+  ' pre="$pre/irq" "$pre/irq" "$post/irq"
+}
+
+redact() {
+  sed -E 's/([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}/<mac>/g; s/([0-9]{1,3}\.){3}[0-9]{1,3}/<ip>/g'
+}
+
+write_summary() {
+  local r d cl key toggles=()
+  for key in "${!ORIG[@]}"; do toggles+=("${key#file:"$sysfs"/}=${ORIG[$key]}"); done
+  if ((${#toggles[@]})); then mapfile -t toggles < <(printf '%s\n' "${toggles[@]}" | sed "s|^$configfs/||" | sort); fi
+  {
+    echo "# Holder matrix summary"
+    echo
+    echo "Currents are uncalibrated fuel-gauge readings (current_now as the driver reports it, mA; sign as reported)."
+    echo "Rows ran sequentially in the order listed, not randomized: battery level and temperature drift with row order."
+    echo "Each row: apply, ${settle_s} s settle, snapshot, ${wait_s} s wait (gauge every ${sample_every} s), snapshot, undo."
+    echo
+    echo "| Row | What | Status | I mA median (min..max, n) | Cluster dUsage | dTime ms | dRejected | qcom_stats Count delta | IRQ/s | Top 5 IRQ deltas | cpu_dma_latency |"
+    echo "|---|---|---|---|---|---|---|---|---|---|---|"
+    for r in "${rows[@]}"; do
+      d=$out/$r
+      if [[ ${STATUS[$r]:-not run} == ok && -r $d/post/t ]]; then
+        IFS='|' read -r cu ct cr <<<"$(cluster_delta "$d/pre" "$d/post")"
+        IFS='|' read -r rate top <<<"$(irq_delta "$d/pre" "$d/post")"
+        cl="${cluster:+${cluster##*/}: }"
+        printf '| %s | %s | ok%s | %s | %s%s | %s | %s | %s | %s | %s | %s |\n' \
+          "$r" "${ROW_DESC[$r]}" "${ROW_NOTE[$r]:+ (${ROW_NOTE[$r]%; })}" \
+          "$(gauge_stats "$d/ibat.samples")" "$cl" "$cu" "$ct" "$cr" \
+          "$(stats_delta "$d/pre" "$d/post")" "$rate" "$top" "$(tr -s ' \n' ' ' <"$d/post/qos" | sed 's/^ //; s/ $//')"
+      else
+        printf '| %s | %s | %s | | | | | | | | |\n' "$r" "${ROW_DESC[$r]}" "${STATUS[$r]:-not run}"
+      fi
+    done
+    echo
+    echo "Toggle originals restored: ${toggles[*]:-none touched}."
+    if ((${#undo_failed[@]})); then echo "UNDO FAILED: ${undo_failed[*]}."; fi
+    echo
+    echo "Raw snapshots stay in the private output directory on the phone; send only this file."
+  } | redact >"$out/summary.md"
+  cat "$out/summary.md"
+}
+
+# --- Preflight: refuse before any write. ---
+cable_online=0
+cable_names=()
+for d in "$sysfs"/class/power_supply/*; do
+  [[ -r $d/online && -r $d/type && $(<"$d/type") != Battery ]] || continue
+  if [[ $(<"$d/online") == 1 ]]; then cable_online=1; cable_names+=("${d##*/}"); fi
+done
+
+refuse() { echo "Refusing to start: $*" >&2; exit 2; }
+if ((!dry)); then
+  [[ $(id -u) == 0 ]] || refuse 'not root'
+  ((!cable_online || allow_cable)) ||
+    refuse "supply ${cable_names[*]} reports online=1; unplug the cable or pass --allow-cable"
+  [[ -n $battery ]] || refuse 'no power_supply of type Battery'
+fi
+
+declare -A STATUS ROW_NOTE
+
+if ((dry)); then
+  echo "Dry run: nothing is written. Rows: ${rows[*]}"
+  for r in "${rows[@]}"; do
+    REASON=
+    echo "$r: ${ROW_DESC[$r]}"
+    if ! "${ROW_PRE[$r]}"; then echo "  SKIPPED: $REASON"; continue; fi
+    current_row=$r
+    echo '  apply:'
+    "${ROW_APPLY[$r]}"
+    [[ -z ${ROW_NOTE[$r]:-} ]] || echo "  note: ${ROW_NOTE[$r]%; }"
+    echo '  undo:'
+    "${ROW_UNDO[$r]}"
+  done
+  echo "Expected duration: ${#rows[@]} x ($settle_s + $wait_s) s, plus 10 s for a4."
+  exit 0
+fi
+
+umask 077
+out=${out:-/tmp/holder-matrix-$(date -u +%Y%m%dT%H%M%SZ)}
+mkdir -p "$out"
+chmod 0700 "$out"
+trap finish EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+
+log "Rows: ${rows[*]}; settle ${settle_s} s, wait ${wait_s} s; out $out"
+for r in "${rows[@]}"; do
+  current_row=$r
+  REASON=
+  if ! "${ROW_PRE[$r]}"; then
+    STATUS[$r]="skipped: $REASON"
+    log "$r SKIPPED: $REASON"
+    continue
+  fi
+  log "$r apply: ${ROW_DESC[$r]}"
+  UNDO_STACK+=("${ROW_UNDO[$r]}")
+  "${ROW_APPLY[$r]}"
+  pause "$settle_s"
+  snap "$out/$r/pre"
+  sample_wait "$out/$r"
+  snap "$out/$r/post"
+  log "$r undo"
+  undo_top
+  STATUS[$r]=ok
+done
+finished=1

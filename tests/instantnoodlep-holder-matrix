@@ -1,0 +1,303 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Host test for tools/instantnoodlep-holder-matrix on a fake sysfs/debugfs tree
+# with fake iw, bluetoothctl, rmmod, modprobe, sleep, date, id and ip.
+# shellcheck disable=SC2016 # single-quoted code expands inside the fakes, not here
+set -eu
+TOOL=${HOLDER_MATRIX_TOOL:-$(cd "$(dirname "$0")/.." && pwd)/tools/instantnoodlep-holder-matrix}
+T=$(mktemp -d)
+trap 'rm -rf "$T"' EXIT
+fail() { echo "not ok - $*" >&2; exit 1; }
+# Built at run time so no literal MAC sits in git (trail-lite lint).
+MAC=$(printf '%s:' de ad be ef 00)42
+
+fake_bin() {
+  local b=$T/bin
+  rm -rf "$b"; mkdir -p "$b"
+  cat >"$b/iw" <<'EOF'
+#!/usr/bin/env bash
+echo "iw $*" >>"$FAKE/calls"
+case "$*" in
+  "dev wlan0 get power_save") echo "Power save: $(cat "$FAKE/state/wifi_ps")" ;;
+  "dev wlan0 set power_save "*)
+    if [ "$5" = off ] && [ -e "$FAKE/state/iw_fail_once" ]; then rm "$FAKE/state/iw_fail_once"; exit 1; fi
+    echo "$5" >"$FAKE/state/wifi_ps" ;;
+  *) exit 1 ;;
+esac
+EOF
+  cat >"$b/bluetoothctl" <<'EOF'
+#!/usr/bin/env bash
+echo "bluetoothctl $*" >>"$FAKE/calls"
+case "$*" in
+  show) printf 'Controller %s (public)\n\tPowered: %s\n' "$FAKE_MAC" "$(cat "$FAKE/state/bt")" ;;
+  "power on") echo yes >"$FAKE/state/bt" ;;
+  "power off") echo no >"$FAKE/state/bt" ;;
+esac
+EOF
+  cat >"$b/rmmod" <<'EOF'
+#!/usr/bin/env bash
+echo "rmmod $*" >>"$FAKE/calls"
+rm -rf "$FAKE/sys/sys/module/$1"
+EOF
+  cat >"$b/modprobe" <<'EOF'
+#!/usr/bin/env bash
+echo "modprobe $*" >>"$FAKE/calls"
+mkdir -p "$FAKE/sys/sys/module/$1" && echo live >"$FAKE/sys/sys/module/$1/initstate"
+EOF
+  # Each sleep advances the fake world: gauge to the next value, counters up.
+  cat >"$b/sleep" <<'EOF'
+#!/usr/bin/env bash
+echo "sleep $*" >>"$FAKE/calls"
+n=$(cat "$FAKE/state/sleeps"); echo $((n + 1)) >"$FAKE/state/sleeps"
+s=$FAKE/sys
+set -- $(cat "$FAKE/state/currents"); i=$(( n % $# + 1 ))
+echo "${!i}" >"$s/sys/class/power_supply/battery/current_now"
+awk 'NR == 1 {print; next} {for (i = 2; i <= 3; i++) if ($i ~ /^[0-9]+$/) $i += ($1 == "174:" ? 7 : 1); print}' \
+  "$s/proc/interrupts" >"$s/proc/i.new" && mv "$s/proc/i.new" "$s/proc/interrupts"
+awk 'NR == 1 {print; next} {$2 += 5; $3 += 2; $4 += 1; print}' \
+  "$s/debug/pm_genpd/power-domain-cpu-cluster0/idle_states" >"$s/i.new" &&
+  mv "$s/i.new" "$s/debug/pm_genpd/power-domain-cpu-cluster0/idle_states"
+c=$(sed -n 's/^Count: //p' "$s/debug/qcom_stats/adsp"); printf 'Count: %s\nLast Entered At: 1\n' $((c + 3)) >"$s/debug/qcom_stats/adsp"
+m=$s/sys/bus/platform/devices
+echo "TRACE wifi=$(cat "$FAKE/state/wifi_ps") bt=$(cat "$FAKE/state/bt") cpus=$(cat "$s"/sys/devices/system/cpu/cpu*/online | tr -d '\n')" \
+  "ctl=$(cat "$m/a6f8800.usb/power/control") udc=$(cat "$s/cfg/usb_gadget/g1/UDC") qos=$(cat "$m/1d84000.ufshc/pm_qos_enable")" \
+  "bwmon=$(cat "$s/sys/module/icc_bwmon/initstate" 2>/dev/null)" >>"$FAKE/stdout"
+if [ -n "${KILL_IF:-}" ] && eval "$KILL_IF"; then kill -TERM "$PPID"; fi
+exit 0
+EOF
+  cat >"$b/date" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = +%s ]; then
+  n=$(cat "$FAKE/state/clock"); echo $((n + 10)) >"$FAKE/state/clock"; echo "$n"
+else exec /usr/bin/date "$@"; fi
+EOF
+  printf '#!/usr/bin/env bash\necho "${FAKE_UID:-0}"\n' >"$b/id"
+  cat >"$b/ip" <<'EOF'
+#!/usr/bin/env bash
+printf '3: wlan0    inet %s/24 brd x scope global wlan0\n' "$WIFI_ADDR"
+printf '4: usb0    inet %s/24 scope global usb0\n' "$USB_ADDR"
+EOF
+  chmod +x "$b"/*
+}
+
+# A fresh fake phone. Originals are deliberately not the tool's apply values
+# nor the obvious defaults: Wi-Fi power save on, USB control auto, cpu5 off.
+fixture() {
+  F=$T/f; rm -rf "$F"; mkdir -p "$F/state" "$F/out"
+  local s=$F/sys c
+  echo on >"$F/state/wifi_ps"; echo yes >"$F/state/bt"; echo 0 >"$F/state/sleeps"
+  echo 1000 >"$F/state/clock"; : >"$F/calls"; : >"$F/stdout"
+  echo "-200000 -260000 -180000 -210000" >"$F/state/currents"
+  for c in 0 1 2 3 4 5 6 7; do
+    mkdir -p "$s/sys/devices/system/cpu/cpu$c/cpuidle/state0"
+    echo 1 >"$s/sys/devices/system/cpu/cpu$c/online"
+    echo 10 >"$s/sys/devices/system/cpu/cpu$c/cpuidle/state0/usage"
+    echo 100 >"$s/sys/devices/system/cpu/cpu$c/cpuidle/state0/time"
+  done
+  echo 0 >"$s/sys/devices/system/cpu/cpu5/online"
+  touch -d '2020-01-01' "$s/sys/devices/system/cpu/cpu0/online"
+  mkdir -p "$s/sys/class/power_supply/battery" "$s/sys/class/power_supply/usb"
+  echo Battery >"$s/sys/class/power_supply/battery/type"
+  echo -150000 >"$s/sys/class/power_supply/battery/current_now"
+  echo 3900000 >"$s/sys/class/power_supply/battery/voltage_now"
+  echo 80 >"$s/sys/class/power_supply/battery/capacity"
+  echo 290 >"$s/sys/class/power_supply/battery/temp"
+  echo USB >"$s/sys/class/power_supply/usb/type"; echo 0 >"$s/sys/class/power_supply/usb/online"
+  mkdir -p "$s/sys/class/net/wlan0/wireless" "$s/sys/class/net/usb0"
+  mkdir -p "$s/sys/bus/platform/devices/a6f8800.usb/power" "$s/sys/bus/platform/devices/1d84000.ufshc"
+  echo auto >"$s/sys/bus/platform/devices/a6f8800.usb/power/control"
+  echo active >"$s/sys/bus/platform/devices/a6f8800.usb/power/runtime_status"
+  echo 1 >"$s/sys/bus/platform/devices/1d84000.ufshc/pm_qos_enable"
+  mkdir -p "$s/sys/module/icc_bwmon" "$s/sys/class/remoteproc/remoteproc0"
+  echo live >"$s/sys/module/icc_bwmon/initstate"
+  echo offline >"$s/sys/class/remoteproc/remoteproc0/state"
+  mkdir -p "$s/cfg/usb_gadget/g1"; echo a600000.usb >"$s/cfg/usb_gadget/g1/UDC"
+  mkdir -p "$s/debug/qcom_stats" "$s/debug/pm_genpd/power-domain-cpu-cluster0" \
+    "$s/debug/interconnect" "$s/debug/clk" "$s/debug/regulator" "$s/proc" "$s/dev"
+  for c in ddr cxsd aosd; do printf 'Count: 0\nLast Entered At: 0\n' >"$s/debug/qcom_stats/$c"; done
+  printf 'Count: 40\nLast Entered At: 1\n' >"$s/debug/qcom_stats/adsp"
+  printf 'DDR LPM Stat Name:0xd4\tcount:2\tDuration (ticks):9\nDDR Freq 547Mhz:\tCP IDX:3\tcount:99\tDuration (ticks):9\n' \
+    >"$s/debug/qcom_stats/ddr_stats"
+  printf 'State  Time(ms)       Usage      Rejected   Above      Below      S2idle\nS0     5              8          0          0          0          0\n' \
+    >"$s/debug/pm_genpd/power-domain-cpu-cluster0/idle_states"
+  for c in pm_genpd/pm_genpd_summary interconnect/interconnect_summary clk/clk_summary regulator/regulator_summary; do
+    echo "fake $c" >"$s/debug/$c"
+  done
+  {
+    echo '           CPU0       CPU1'
+    echo ' 11:        100        200     GICv3  27 Level     arch_timer'
+    echo "174:         50          0     GICv3 206 Level     90b6400.pmu"
+    echo " 99:          5          5     GICv3 99 Edge      wlan-$MAC"
+    echo 'IPI0:        10         10       Rescheduling interrupts'
+    echo 'Err:          0'
+  } >"$s/proc/interrupts"
+  printf '\x00\x94\x35\x77' >"$s/dev/cpu_dma_latency"
+}
+
+run_tool() {
+  local rc=0
+  env PATH="$T/bin:$PATH" FAKE="$F" FAKE_MAC="$MAC" \
+    WIFI_ADDR=10.9.8.7 USB_ADDR=10.6.5.4 SSH_CONNECTION="10.9.8.1 50000 10.9.8.7 22" \
+    HOLDER_MATRIX_SYSFS="$F/sys/sys" HOLDER_MATRIX_DEBUGFS="$F/sys/debug" \
+    HOLDER_MATRIX_PROC="$F/sys/proc" HOLDER_MATRIX_CONFIGFS="$F/sys/cfg" HOLDER_MATRIX_DEV="$F/sys/dev" \
+    "$@" >>"$F/stdout" 2>&1 || rc=$?
+  echo "$rc"
+}
+
+tree_sum() { (cd "$F/sys" && find . -type f -print0 | sort -z | xargs -0 sha256sum; find . | sort) | sha256sum; }
+v() { cat "$F/sys/$1"; }
+state_changing_calls() { grep -E '^(iw .* set|bluetoothctl power|rmmod|modprobe)' "$F/calls" || true; }
+
+assert_originals() {
+  local what=$1 c
+  [ "$(cat "$F/state/wifi_ps")" = on ] || fail "$what: Wi-Fi power_save not back to original on"
+  [ "$(cat "$F/state/bt")" = yes ] || fail "$what: Bluetooth not back to powered"
+  for c in 1 2 3 4 6 7; do
+    [ "$(v "sys/devices/system/cpu/cpu$c/online")" = 1 ] || fail "$what: cpu$c not back online"
+  done
+  [ "$(v sys/devices/system/cpu/cpu5/online)" = 0 ] || fail "$what: cpu5 was originally offline and should stay 0"
+  [ "$(v sys/bus/platform/devices/a6f8800.usb/power/control)" = auto ] || fail "$what: usb control not back to original auto"
+  [ "$(v cfg/usb_gadget/g1/UDC)" = a600000.usb ] || fail "$what: UDC not rebound"
+  [ "$(v sys/bus/platform/devices/1d84000.ufshc/pm_qos_enable)" = 1 ] || fail "$what: UFS pm_qos not restored"
+  [ "$(v sys/module/icc_bwmon/initstate 2>/dev/null)" = live ] || fail "$what: icc_bwmon not reloaded"
+}
+
+cpu0_untouched() {
+  [ "$(stat -c %Y "$F/sys/sys/devices/system/cpu/cpu0/online")" = "$(date -d 2020-01-01 +%s)" ] ||
+    fail "$1: cpu0/online was written"
+}
+
+fake_bin
+
+# (1) normal run: every toggle applied, then back at its recorded original.
+fixture
+rc=$(run_tool "$TOOL" --wait 30 --settle 1 --out "$F/out/run")
+[ "$rc" = 0 ] || { cat "$F/stdout"; fail "normal run exit $rc"; }
+for r in a0 a1 a2 a5 a6 a3 a4 a7; do
+  grep -q "^| $r | .* | ok" "$F/out/run/summary.md" || { cat "$F/out/run/summary.md"; fail "row $r not ok"; }
+done
+grep -q '^bluetoothctl power off' "$F/calls" || fail "a2 never powered Bluetooth off"
+grep -q '^rmmod icc_bwmon' "$F/calls" || fail "a6 never unloaded icc_bwmon"
+grep -q 'echo 0 > .*cpu1/online' "$F/out/run/run.log" || fail "a3 never offlined cpu1"
+grep -q "echo '' > .*g1/UDC" "$F/out/run/run.log" || fail "a4 never unbound the UDC"
+assert_originals "normal run"
+cpu0_untouched "normal run"
+[ "$(stat -c %a "$F/out/run")" = 700 ] || fail "out dir not 0700"
+echo "ok - normal run restores every toggle to its recorded original (power_save on, control auto, cpu5 off)"
+
+# Each row's own undo restores the originals before the next row measures.
+fixture
+rc=$(run_tool "$TOOL" --rows a1,a0,a2,a0,a3,a0,a4,a0,a5,a0,a6,a0,a7,a0 --wait 15 --settle 0 --out "$F/out/run")
+[ "$rc" = 0 ] || { cat "$F/stdout"; fail "interleaved run exit $rc"; }
+want='TRACE wifi=on bt=yes cpus=11111011 ctl=auto udc=a600000.usb qos=1 bwmon=live'
+bad=$(awk -v want="$want" '/ apply: / {row = $2} / SKIPPED: / {row = ""} /^TRACE/ && row == "a0" && $0 != want' "$F/stdout")
+[ -z "$bad" ] || fail "a row's undo left state behind into the next a0: $bad"
+[ "$(grep -c '^TRACE' "$F/stdout")" -ge 14 ] || fail "interleaved run: too few traced sleeps"
+echo "ok - every row's own undo restores all originals before the next row (traced during each a0)"
+
+fixture
+echo off >"$F/state/wifi_ps"
+rc=$(run_tool "$TOOL" --rows a1 --wait 15 --settle 0 --out "$F/out/run")
+[ "$rc" = 0 ] || { cat "$F/stdout"; fail "a1 from off: exit $rc"; }
+grep -q '^iw dev wlan0 set power_save on' "$F/calls" || fail "a1 never set power_save on"
+[ "$(cat "$F/state/wifi_ps")" = off ] || fail "a1: power_save not back to original off"
+echo "ok - a1 from an original power_save=off sets on, then restores off"
+
+# A failed undo in a1 must not let a7 record the dirty value as the original.
+fixture
+echo off >"$F/state/wifi_ps"; touch "$F/state/iw_fail_once"
+rc=$(run_tool "$TOOL" --rows a1,a7 --wait 15 --settle 0 --out "$F/out/run")
+[ -e "$F/state/iw_fail_once" ] && fail "failed undo: the fake never failed"
+[ "$rc" = 0 ] || { cat "$F/stdout"; fail "failed undo: exit $rc after a successful retry"; }
+[ "$(cat "$F/state/wifi_ps")" = off ] || fail "failed undo: power_save left on; a7 re-recorded the original"
+grep -q 'WARNING: undo of wifi:wlan0 did not take' "$F/out/run/run.log" || fail "failed undo: not logged"
+echo "ok - a failed undo is logged, retried, and never becomes the recorded original"
+
+# (2) SIGTERM in the middle of a3 (earlier rows already undone), and in the
+# middle of a7 with five toggles pending at once.
+for row in a3 a7; do
+  fixture
+  if [ $row = a3 ]; then
+    rows=a0,a1,a2,a5,a6,a3,a4,a7; kill_if='[ "$(cat "$FAKE/sys/sys/devices/system/cpu/cpu1/online")" = 0 ]'
+  else
+    rows=a7; kill_if='[ "$(cat "$FAKE/state/bt")" = no ]'
+  fi
+  rc=$(run_tool env KILL_IF="$kill_if" "$TOOL" --rows "$rows" --wait 30 --settle 1 --out "$F/out/run")
+  [ "$rc" = 143 ] || { cat "$F/stdout"; fail "SIGTERM in $row: exit $rc, expected 143"; }
+  grep -q '^bluetoothctl power off' "$F/calls" || fail "SIGTERM in $row: the run never reached Bluetooth"
+  assert_originals "SIGTERM in $row"
+  cpu0_untouched "SIGTERM in $row"
+  grep -q "^| $row | .* | interrupted (exit 143)" "$F/out/run/summary.md" || fail "SIGTERM in $row: summary does not say interrupted"
+  echo "ok - SIGTERM in $row: all CPUs online, every earlier and pending toggle undone"
+done
+
+# (3) cpu0 is never written, even when asked for a3 alone.
+fixture
+rc=$(run_tool "$TOOL" --rows a3 --wait 15 --settle 0 --out "$F/out/run")
+[ "$rc" = 0 ] || fail "a3 alone exit $rc"
+cpu0_untouched "a3 alone"
+grep -E "(> |REFUSED).*cpu0" "$F/out/run/run.log" && fail "a3 alone: run.log shows a cpu0 write"
+echo "ok - cpu0/online is never written"
+
+# (4) a USB supply online=1 refuses with exit 2 and writes nothing.
+fixture
+echo 1 >"$F/sys/sys/class/power_supply/usb/online"
+before=$(tree_sum)
+rc=$(run_tool "$TOOL" --wait 15 --settle 0 --out "$F/out/run")
+[ "$rc" = 2 ] || fail "cable in: exit $rc, expected 2"
+grep -q 'online=1' "$F/stdout" || fail "cable in: message does not name online=1"
+[ "$before" = "$(tree_sum)" ] || fail "cable in: the fake tree changed"
+[ -z "$(state_changing_calls)" ] || fail "cable in: state-changing calls: $(state_changing_calls)"
+[ ! -e "$F/out/run" ] || fail "cable in: out dir created"
+rc=$(run_tool env FAKE_UID=1000 "$TOOL" --wait 15 --out "$F/out/run")
+if [ "$rc" != 2 ] || ! grep -q 'not root' "$F/stdout"; then fail "non-root: exit $rc, expected 2 with 'not root'"; fi
+echo "ok - cable online=1 or non-root: exit 2, nothing written, no state-changing call"
+
+# (5) --dry-run: zero writes, zero state-changing calls, every row's commands printed.
+fixture
+echo off >"$F/state/wifi_ps"
+before=$(tree_sum)
+rc=$(run_tool "$TOOL" --dry-run --out "$F/out/run")
+[ "$rc" = 0 ] || { cat "$F/stdout"; fail "dry-run exit $rc"; }
+[ "$before" = "$(tree_sum)" ] || fail "dry-run changed the fake tree"
+[ -z "$(state_changing_calls)" ] || fail "dry-run made state-changing calls: $(state_changing_calls)"
+grep -q '^sleep' "$F/calls" && fail "dry-run slept"
+[ ! -e "$F/out/run" ] || fail "dry-run created the out dir"
+for want in 'iw dev wlan0 set power_save on' 'iw dev wlan0 set power_save off' 'bluetoothctl power off' \
+  'bluetoothctl power on' 'rmmod icc_bwmon' 'modprobe icc_bwmon' "echo '' > .*g1/UDC" \
+  'echo a600000.usb > .*g1/UDC' 'echo 0 > .*cpu7/online' 'echo 1 > .*cpu7/online'; do
+  grep -q -- "+ $want" "$F/stdout" || { cat "$F/stdout"; fail "dry-run does not print: $want"; }
+done
+grep -q 'echo 0 > .*cpu5/online' "$F/stdout" && fail "dry-run would write cpu5, which is already offline"
+echo "ok - dry-run prints apply and undo per row and changes nothing"
+
+# (6) icc_bwmon missing: a6 SKIPPED, the run continues, a7 notes it.
+fixture
+rm -rf "$F/sys/sys/module/icc_bwmon"
+rc=$(run_tool "$TOOL" --rows a6,a5,a7 --wait 15 --settle 0 --out "$F/out/run")
+[ "$rc" = 0 ] || { cat "$F/stdout"; fail "bwmon missing: exit $rc"; }
+grep -q '^| a6 | .* | skipped: icc_bwmon is not a loaded module' "$F/out/run/summary.md" || fail "a6 not SKIPPED with reason"
+grep -q '^| a5 | .* | ok' "$F/out/run/summary.md" || fail "a5 did not run after the skip"
+grep -q '^| a7 | .* | ok (bwmon skipped' "$F/out/run/summary.md" || fail "a7 does not note the bwmon skip"
+grep -qE '^(rmmod|modprobe)' "$F/calls" && fail "bwmon missing: module commands were run"
+echo "ok - a missing icc_bwmon skips a6 with its reason and the run continues"
+
+# (7) arithmetic on known numbers: a0 with 4 samples.
+fixture
+rc=$(run_tool "$TOOL" --rows a0 --wait 60 --settle 1 --out "$F/out/run")
+[ "$rc" = 0 ] || fail "arithmetic run exit $rc"
+line=$(grep '^| a0 |' "$F/out/run/summary.md")
+pre_t=$(cat "$F/out/run/a0/pre/t"); post_t=$(cat "$F/out/run/a0/post/t")
+# 4 sleeps between snapshots; per sleep: irq 11 +2, 174 +14, 99 +2, IPI0 +2, Err +1 => 21
+rate=$(awk -v s=$((post_t - pre_t)) 'BEGIN {printf "%.1f", 4 * 21 / s}')
+for want in '-205.0 (-260.0..-180.0, n=4)' 'power-domain-cpu-cluster0: 8 | 20 | 4' \
+  'adsp +12' 'ddr_stats +0' 'cxsd +0' "| $rate |" '174 90b6400.pmu +56, ' '| 2000000000 |'; do
+  case $line in *"$want"*) ;; *) fail "arithmetic: '$want' not in: $line" ;; esac
+done
+echo "ok - median/min/max, cluster and qcom_stats deltas, IRQ rate and top IRQs match the fixture"
+
+# (8) a MAC planted in an IRQ name never reaches summary.md.
+grep -q 'wlan-' "$F/out/run/summary.md" || fail "privacy: the planted IRQ is not in the top 5, test proves nothing"
+grep -qi "$MAC" "$F/out/run/summary.md" && fail "privacy: MAC reached summary.md"
+grep -qE '([0-9]{1,3}\.){3}[0-9]{1,3}' "$F/out/run/summary.md" && fail "privacy: an IPv4 address reached summary.md"
+echo "ok - a planted MAC in an IRQ name is redacted from summary.md"
