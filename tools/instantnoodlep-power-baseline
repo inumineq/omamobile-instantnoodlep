@@ -1,0 +1,579 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Run the upstream derekross/omarchy-mobile#867 "ten minute recipe" (Parts A,
+# B, C) read-only on the phone and write one Markdown report that can be
+# pasted into an upstream issue titled "Power baseline: <device> (<codename>)".
+#
+# This is deliberately separate from tools/instantnoodlep-idle-report and
+# tools/instantnoodlep-pm-sample: those are deeper local diagnostics (counter
+# snapshots around an interval, CSV delta series). This tool is the
+# upstream-comparable recipe, so its output must match what every other
+# device posts in #867.
+#
+# Read-only: nothing outside --out is ever written; no sysfs/debugfs writes,
+# no suspend. Missing files are results ("<path>: missing"), never errors.
+set -euo pipefail
+shopt -s nullglob
+
+usage() {
+  cat <<'EOF'
+Usage: instantnoodlep-power-baseline [--part a|b|c|all] [--settle SECONDS]
+       [--samples N] [--interval SECONDS] [--room-temp C] [--out FILE]
+
+Run the derekross/omarchy-mobile#867 power recipe read-only on the phone and
+write one postable Markdown report ("Power baseline: OnePlus 8 Pro
+(instantnoodlep)").
+
+  --part       part to run: a (system state), b (screen-off floor),
+               c (who is awake), or all (default)
+  --settle     seconds to wait before Part B sampling (default: 600)
+  --samples    Part B samples (default: 12)
+  --interval   seconds between Part B samples (default: 15)
+  --room-temp  room temperature in degrees C, recorded in the header
+  --out        report file (default: ./power-baseline-<UTC timestamp>.md,
+               created mode 0600; an existing file is refused)
+  --help       this text
+
+Test overrides via environment: POWER_BASELINE_SYSFS, POWER_BASELINE_DEBUGFS,
+POWER_BASELINE_PROC, POWER_BASELINE_PARTC_SECONDS. dmesg, iw, top and pacman
+are looked up in PATH. The report never contains serials, IMEI, MAC or IP
+addresses, hostnames or SSIDs; /proc/cmdline is never printed in full.
+EOF
+}
+
+part=all settle=600 samples=12 interval=15 out= room_temp=
+while (($#)); do
+  case $1 in
+    --part)
+      (($# >= 2)) || { usage >&2; exit 2; }
+      case $2 in a|b|c|all) part=$2 ;; *) usage >&2; exit 2 ;; esac
+      shift 2 ;;
+    --settle)
+      (($# >= 2)) || { usage >&2; exit 2; }
+      [[ $2 =~ ^[0-9]+$ ]] || { usage >&2; exit 2; }
+      settle=$2; shift 2 ;;
+    --samples)
+      (($# >= 2)) || { usage >&2; exit 2; }
+      [[ $2 =~ ^[1-9][0-9]*$ ]] || { usage >&2; exit 2; }
+      samples=$2; shift 2 ;;
+    --interval)
+      (($# >= 2)) || { usage >&2; exit 2; }
+      [[ $2 =~ ^[0-9]+$ ]] || { usage >&2; exit 2; }
+      interval=$2; shift 2 ;;
+    --room-temp)
+      (($# >= 2)) || { usage >&2; exit 2; }
+      room_temp=$2; shift 2 ;;
+    --out)
+      (($# >= 2)) || { usage >&2; exit 2; }
+      out=$2; shift 2 ;;
+    --help|-h) usage; exit 0 ;;
+    *) usage >&2; exit 2 ;;
+  esac
+done
+
+sysfs=${POWER_BASELINE_SYSFS:-/sys}
+debugfs=${POWER_BASELINE_DEBUGFS:-/sys/kernel/debug}
+proc=${POWER_BASELINE_PROC:-/proc}
+partc=${POWER_BASELINE_PARTC_SECONDS:-60}
+[[ $partc =~ ^[0-9]+$ ]] || partc=60
+if ((partc < 1)); then partc=1; fi
+
+if [[ -z $out ]]; then
+  out="./power-baseline-$(date -u +%Y%m%dT%H%M%SZ).md"
+fi
+if [[ -e $out || -L $out ]]; then
+  echo "refusing to overwrite existing $out" >&2
+  exit 2
+fi
+umask 077
+: >"$out"
+
+log() { printf '[%s] %s\n' "$(date +%T)" "$*"; }
+
+# Privacy filter for copied kernel/userspace lines: MAC addresses, IPv4
+# addresses, IMEI-like long numbers and serial tokens never reach the report.
+redact() {
+  sed -E \
+    -e 's/[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}/<redacted-mac>/g' \
+    -e 's/(^|[^0-9.])[0-9]{1,3}(\.[0-9]{1,3}){3}([^0-9.]|$)/\1<redacted-ip>\3/g' \
+    -e 's/[0-9]{15,}/<redacted-imei>/g' \
+    -e 's/[A-Za-z0-9._-]*serialno[=:][^[:space:]]*/<redacted-serial>/gI'
+}
+
+read_attr() { # print file content, or nothing if unreadable
+  local p=$1 v
+  [[ -r $p ]] || return 0
+  v=$(cat -- "$p" 2>/dev/null) || return 0
+  printf '%s' "$v"
+}
+
+attr() { # value, or "<path>: missing" inline
+  local p=$1 v
+  if [[ -r $p ]] && v=$(cat -- "$p" 2>/dev/null); then
+    printf '%s' "$v"
+  else
+    printf '%s: missing' "$p"
+  fi
+}
+
+catm() { # whole file, or "<path>: missing"
+  local p=$1
+  if [[ -r $p ]]; then
+    cat -- "$p" 2>/dev/null || echo "$p: missing"
+  else
+    echo "$p: missing"
+  fi
+}
+
+grep_files() { # grep -H . each path; missing paths are reported, not fatal
+  local p
+  for p in "$@"; do
+    if [[ -r $p ]]; then
+      grep -H . -- "$p" 2>/dev/null || true
+    else
+      echo "$p: missing"
+    fi
+  done
+}
+
+fmt_ma() { # microamp (possibly "N.5") -> millamp with one decimal
+  awk -v u="$1" 'BEGIN { printf "%.1f", u / 1000 }'
+}
+
+battery= online_supply=
+find_battery() {
+  local d
+  for d in "$sysfs"/class/power_supply/*; do
+    [[ -r $d/type ]] || continue
+    if [[ $(read_attr "$d/type") == Battery ]]; then
+      battery=$d
+    fi
+    if [[ $(read_attr "$d/online") == 1 ]]; then
+      online_supply=$d
+    fi
+  done
+}
+
+wifi_lines() { # interface name + power-save state only, never full iw output
+  local ifaces i
+  if ! command -v iw >/dev/null 2>&1; then
+    echo 'iw: not found'
+    return 0
+  fi
+  ifaces=$(iw dev 2>/dev/null | awk '$1=="Interface"{print $2}') || ifaces=
+  if [[ -z $ifaces ]]; then
+    echo 'iw dev: no interfaces'
+    return 0
+  fi
+  for i in $ifaces; do
+    printf '%s: %s\n' "$i" "$(iw dev "$i" get power_save 2>/dev/null | redact || echo 'iw: no answer')"
+  done
+}
+
+cmdline_flags() { # only the flags #867 asks about; never the full cmdline
+  local flags
+  if [[ ! -r $proc/cmdline ]]; then
+    echo "$proc/cmdline: missing"
+    return 0
+  fi
+  flags=$(tr ' ' '\n' <"$proc/cmdline" | grep -E 'ignore_unused|mem_sleep' | redact) || flags=
+  if [[ -n $flags ]]; then
+    printf '%s\n' "$flags"
+  else
+    echo '(no ignore_unused|mem_sleep flags)'
+  fi
+}
+
+write_header() {
+  local model pkg
+  {
+    printf '# Power baseline: OnePlus 8 Pro (instantnoodlep)\n\n'
+    printf 'Conditions (per upstream derekross/omarchy-mobile#867):\n\n'
+    printf -- '- generated: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf -- '- kernel: %s\n' "$(uname -r)"
+    if [[ -r $proc/device-tree/model ]]; then
+      model=$(tr -d '\0' <"$proc/device-tree/model" | redact)
+    else
+      model="$proc/device-tree/model: missing"
+    fi
+    printf -- '- device model: %s\n' "$model"
+    printf -- '- cmdline flags (ignore_unused|mem_sleep only): %s\n' "$(cmdline_flags | tr '\n' ' ')"
+    if [[ -n $online_supply ]]; then
+      printf -- '- cable: in (%s online=1)\n' "$online_supply"
+    else
+      printf -- '- cable: out (no power_supply reports online=1)\n'
+    fi
+    printf -- '- wi-fi power save: %s\n' "$(wifi_lines | tr '\n' '; ')"
+    printf -- '- battery gauge calibrated: unknown\n'
+    if [[ -n $room_temp ]]; then
+      printf -- '- room temperature: %s C\n' "$room_temp"
+    else
+      printf -- '- room temperature: unknown\n'
+    fi
+    if command -v pacman >/dev/null 2>&1 && pkg=$(pacman -Q omamobile-device-instantnoodlep 2>/dev/null); then
+      printf -- '- device package: %s\n' "$pkg"
+    else
+      printf -- '- device package: pacman -Q omamobile-device-instantnoodlep unavailable\n'
+    fi
+    printf -- '- run: part=%s settle=%ss samples=%s interval=%ss part-c-window=%ss\n\n' \
+      "$part" "$settle" "$samples" "$interval" "$partc"
+  } >>"$out"
+}
+
+part_a() {
+  local z d found states
+  log 'Part A: system state'
+  {
+    printf '## Part A - system state (any time)\n\n'
+    printf '<details>\n<summary>Part A output</summary>\n\n'
+    printf '```text\n'
+    printf 'kernel: %s\n' "$(uname -r)"
+    if [[ -r $proc/device-tree/model ]]; then
+      printf 'device model: %s\n' "$(tr -d '\0' <"$proc/device-tree/model" | redact)"
+    else
+      printf '%s: missing\n' "$proc/device-tree/model"
+    fi
+    printf 'cmdline flags (ignore_unused|mem_sleep only):\n'
+    cmdline_flags | sed 's/^/  /'
+    printf 'mem_sleep: %s\n' "$(attr "$sysfs/power/mem_sleep")"
+    printf 'cpuidle driver: %s\n' "$(attr "$sysfs/devices/system/cpu/cpuidle/current_driver")"
+    if [[ -d $sysfs/devices/system/cpu/cpu0/cpuidle ]]; then
+      states=("$sysfs"/devices/system/cpu/cpu0/cpuidle/state*/name)
+      if ((${#states[@]})); then
+        grep_files "$sysfs"/devices/system/cpu/cpu0/cpuidle/state*/name \
+                   "$sysfs"/devices/system/cpu/cpu0/cpuidle/state*/usage
+      else
+        printf '%s: missing (cpu0 has no idle states)\n' "$sysfs/devices/system/cpu/cpu0/cpuidle"
+      fi
+    else
+      printf '%s: missing (cpu0 has no idle states)\n' "$sysfs/devices/system/cpu/cpu0/cpuidle"
+    fi
+    grep_files "$sysfs"/devices/system/cpu/cpufreq/policy*/scaling_governor \
+               "$sysfs"/devices/system/cpu/cpufreq/policy*/scaling_max_freq
+    if [[ -d $sysfs/class/devfreq ]]; then
+      printf 'devfreq devices: %s\n' "$(ls "$sysfs/class/devfreq" | tr '\n' ' ')"
+      for d in "$sysfs"/class/devfreq/*; do
+        printf '%s: governor=%s cur_freq=%s\n' "${d##*/}" "$(attr "$d/governor")" "$(attr "$d/cur_freq")"
+      done
+    else
+      printf '%s: missing\n' "$sysfs/class/devfreq"
+    fi
+    found=0
+    for z in "$sysfs"/class/thermal/thermal_zone*; do
+      found=1
+      printf 'zone %s: type=%s temp=%s policy=%s\n' \
+        "${z##*/}" "$(attr "$z/type")" "$(attr "$z/temp")" "$(attr "$z/policy")"
+      grep_files "$z"/trip_point_*_type "$z"/trip_point_*_temp
+    done
+    if ((found)); then :; else printf '%s: missing\n' "$sysfs/class/thermal/thermal_zone*"; fi
+    found=0
+    for d in "$sysfs"/class/thermal/cooling_device*; do
+      found=1
+      printf 'cooling %s: type=%s\n' "${d##*/}" "$(attr "$d/type")"
+    done
+    if ((found)); then :; else printf '%s: missing\n' "$sysfs/class/thermal/cooling_device*"; fi
+    wifi_lines | sed 's/^/wi-fi power save /'
+    printf 'pm_genpd_summary (head -40):\n'
+    head -40 "$debugfs/pm_genpd/pm_genpd_summary" 2>/dev/null | redact \
+      || printf '%s: missing\n' "$debugfs/pm_genpd/pm_genpd_summary"
+    printf 'dmesg "sync_state() pending" lines (Qualcomm addition):\n'
+    if command -v dmesg >/dev/null 2>&1; then
+      dmesg 2>/dev/null | grep 'sync_state() pending' | redact || printf '(none)\n'
+    else
+      printf 'dmesg: not found\n'
+    fi
+    printf '```\n\n'
+    printf '</details>\n\n'
+  } >>"$out"
+}
+
+part_b() {
+  local i stamp st cur tmp zones c neg pos sign vals sorted n med med_s min max
+  local -a b_status=() b_current=()
+  log "Part B: battery=${battery:-none}, settle ${settle}s, then $samples samples every ${interval}s"
+  {
+    printf '## Part B - screen-off floor (cable out, screen off)\n\n'
+  } >>"$out"
+  if [[ -z $battery ]]; then
+    {
+      printf 'WARNING: no Battery supply under %s/class/power_supply (missing); Part B skipped.\n\n' "$sysfs"
+    } >>"$out"
+    log 'Part B: no Battery supply, skipped'
+    return 0
+  fi
+  {
+    printf 'battery supply: %s\n' "$battery"
+    printf 'settle wait: %ss, then %s samples every %ss\n\n' "$settle" "$samples" "$interval"
+    printf '<details>\n<summary>Part B samples</summary>\n\n'
+    printf '```text\n'
+  } >>"$out"
+  sleep "$settle"
+  local all_discharging=yes
+  for ((i = 1; i <= samples; i++)); do
+    stamp=$(date +%T)
+    st=$(read_attr "$battery/status")
+    cur=$(read_attr "$battery/current_now")
+    tmp=$(read_attr "$battery/temp")
+    zones=
+    local tzs=("$sysfs"/class/thermal/thermal_zone*/temp)
+    if ((${#tzs[@]})); then
+      zones=$(cat "${tzs[@]}" 2>/dev/null | tr '\n' ' ')
+    else
+      zones='missing'
+    fi
+    printf '%s status=%s current_now=%s uA batt_temp=%s (deci-C) zones(milli-C): %s\n' \
+      "$stamp" "${st:-missing}" "${cur:-missing}" "${tmp:-missing}" "$zones" >>"$out"
+    b_status+=("$st")
+    b_current+=("$cur")
+    if [[ $st != Discharging ]]; then
+      all_discharging=no
+    fi
+    if ((i < samples)); then
+      sleep "$interval"
+    fi
+  done
+  # Median/min/max over the absolute current (bq27411 reports discharging as
+  # negative current_now; the raw sign is stated separately in the summary).
+  vals=()
+  neg=0 pos=0
+  for c in "${b_current[@]}"; do
+    if [[ ! $c =~ ^-?[0-9]+$ ]]; then
+      continue
+    fi
+    if ((c < 0)); then
+      neg=$((neg + 1))
+      vals+=("$(( -c ))")
+    else
+      pos=$((pos + 1))
+      vals+=("$c")
+    fi
+  done
+  if ((neg > 0 && pos == 0)); then sign=negative
+  elif ((pos > 0 && neg == 0)); then sign=positive
+  else sign=mixed; fi
+  n=${#vals[@]}
+  if ((n > 0)); then
+    mapfile -t sorted < <(printf '%s\n' "${vals[@]}" | sort -n)
+    if ((n % 2 == 1)); then
+      med=${sorted[n / 2]}
+    else
+      med_s=$((sorted[n / 2 - 1] + sorted[n / 2]))
+      if ((med_s % 2 == 0)); then
+        med=$((med_s / 2))
+      else
+        med="$((med_s / 2)).5"
+      fi
+    fi
+    min=${sorted[0]}
+    max=${sorted[n - 1]}
+  fi
+  {
+    printf '```\n\n'
+    printf '</details>\n\n'
+    printf 'battery supply: %s\n' "$battery"
+    if ((n > 0)); then
+      printf 'median current: %s mA (min %s mA, max %s mA) from %s samples\n' \
+        "$(fmt_ma "$med")" "$(fmt_ma "$min")" "$(fmt_ma "$max")" "$n"
+      printf 'raw current_now sign: %s (bq27411 convention: negative = discharging; median/min/max above are absolute mA)\n' "$sign"
+    else
+      printf 'median current: unavailable (no numeric current_now samples)\n'
+      printf 'raw current_now sign: %s\n' "$sign"
+    fi
+    printf 'all samples Discharging: %s\n' "$all_discharging"
+    local reasons= j
+    reasons=
+    for ((j = 0; j < ${#b_status[@]}; j++)); do
+      if [[ ${b_status[j]} != Discharging ]]; then
+        reasons+="sample $((j + 1)) status=${b_status[j]:-missing}; "
+      fi
+    done
+    if [[ -n $online_supply ]]; then
+      reasons+="supply $online_supply reports online=1; "
+    fi
+    if [[ $all_discharging == yes && -z $online_supply ]]; then
+      printf 'floor verdict: clean screen-off floor (battery only, cable out)\n'
+    else
+      printf 'WARNING: not a clean floor - %s\n' "${reasons:-conditions unclear}"
+      printf 'floor verdict: NOT a floor (see WARNING above; do not quote as the screen-off floor)\n'
+    fi
+    printf '\n'
+  } >>"$out"
+  log "Part B: done (all Discharging: $all_discharging)"
+}
+
+declare -A qcom_a=() qcom_b=() irq_a=() irq_b=() genpd_a=() genpd_b=()
+
+qcom_snap() { # $1: nameref of assoc array; file name -> sum of its numbers
+  local -n arr=$1
+  local d=$debugfs/qcom_stats f s
+  arr=()
+  [[ -d $d ]] || return 0
+  while IFS= read -r -d '' f; do
+    s=$(awk '{for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+$/) t += $i} END {print t + 0}' "$f" 2>/dev/null) || s=0
+    arr[${f##*/}]=$s
+  done < <(find "$d" -maxdepth 1 -type f -print0 | sort -z)
+}
+
+irq_snap() { # $1: nameref; irq -> "total<TAB>label"
+  local -n arr=$1
+  local line irq total tok rest
+  arr=()
+  [[ -r $proc/interrupts ]] || return 0
+  while IFS= read -r line; do
+    if [[ ! $line =~ ^[[:space:]]*[0-9]+: ]]; then
+      continue
+    fi
+    irq=${line%%:*}
+    irq=${irq//[[:space:]]/}
+    total=0 rest=
+    set -- $line
+    shift
+    for tok in "$@"; do
+      if [[ $tok =~ ^[0-9]+$ ]]; then
+        total=$((total + tok))
+      else
+        rest="$rest $tok"
+      fi
+    done
+    arr[$irq]="$total"$'\t'"$rest"
+  done <"$proc/interrupts"
+}
+
+genpd_snap() { # $1: nameref; "domain|S<state>" -> "usage time_ms" (cpu domains only)
+  local -n arr=$1
+  local d name line state t u
+  arr=()
+  for d in "$debugfs"/pm_genpd/*/; do
+    [[ -r ${d}name ]] || continue
+    name=$(cat "${d}name" 2>/dev/null) || continue
+    [[ ${name,,} == *cpu* ]] || continue
+    if [[ ! -r ${d}idle_states ]]; then
+      arr["${d%/}|idle_states"]='missing'
+      continue
+    fi
+    while IFS= read -r line; do
+      set -- $line
+      if [[ ${1:-} == State || ${#} -lt 3 ]]; then
+        continue
+      fi
+      if [[ ! $2 =~ ^[0-9]+$ || ! $3 =~ ^[0-9]+$ ]]; then
+        continue
+      fi
+      state=$1 t=$2 u=$3
+      arr["${d%/}|$state"]="$u $t"
+    done <"${d}idle_states"
+  done
+}
+
+part_c() {
+  local intr_a ctxt_a intr_b ctxt_b top_delay k before after ta ra tb rb ua ub
+  log "Part C: sampling over ${partc}s"
+  {
+    printf '## Part C - who is awake (%ss window, screen off)\n\n' "$partc"
+    printf '<details>\n<summary>Part C output</summary>\n\n'
+    printf '```text\n'
+  } >>"$out"
+  if [[ -r $proc/stat ]]; then
+    intr_a=$(awk '/^intr/{print $2}' "$proc/stat")
+    ctxt_a=$(awk '/^ctxt/{print $2}' "$proc/stat")
+  else
+    printf '%s: missing\n' "$proc/stat" >>"$out"
+    intr_a=0 ctxt_a=0
+  fi
+  qcom_snap qcom_a
+  irq_snap irq_a
+  genpd_snap genpd_a
+  sleep "$partc"
+  if [[ -r $proc/stat ]]; then
+    intr_b=$(awk '/^intr/{print $2}' "$proc/stat")
+    ctxt_b=$(awk '/^ctxt/{print $2}' "$proc/stat")
+  else
+    intr_b=0 ctxt_b=0
+  fi
+  qcom_snap qcom_b
+  irq_snap irq_b
+  genpd_snap genpd_b
+  {
+    printf '%s interrupts/s, %s context switches/s over %ss\n' \
+      "$(((intr_b - intr_a) / partc))" "$(((ctxt_b - ctxt_a) / partc))" "$partc"
+    printf 'top CPU consumers (second pass of top -b -n 2):\n'
+    if command -v top >/dev/null 2>&1; then
+      top_delay=$((partc / 2))
+      if ((top_delay < 1)); then top_delay=1; fi
+      top -b -w 200 -d "$top_delay" -n 2 -o %CPU 2>/dev/null \
+        | awk '/^top -/{n++} n==2' | head -15 | redact || printf '(top produced no output)\n'
+    else
+      printf 'top: not found\n'
+    fi
+    printf 'top 15 wakeup sources by event count:\n'
+    if [[ -r $debugfs/wakeup_sources ]]; then
+      awk 'NR==1{for(i=1;i<=NF;i++){if($i=="name")nc=i;if($i=="event_count")ec=i}next}
+           nc&&ec&&NF>=ec{print $ec "\t" $0}' "$debugfs/wakeup_sources" \
+        | sort -nr | head -15 | cut -f2- | redact || true
+    else
+      printf '%s: missing\n' "$debugfs/wakeup_sources"
+    fi
+    printf 'qcom_stats before/after delta over %ss (Qualcomm addition):\n' "$partc"
+    if [[ -d $debugfs/qcom_stats ]]; then
+      if ((${#qcom_a[@]} == 0 && ${#qcom_b[@]} == 0)); then
+        printf '(no regular files under %s)\n' "$debugfs/qcom_stats"
+      fi
+      for k in "${!qcom_a[@]}"; do
+        before=${qcom_a[$k]}
+        after=${qcom_b[$k]:-0}
+        printf '%s: %s -> %s (delta %s)\n' "$k" "$before" "$after" "$((after - before))"
+      done
+      for k in "${!qcom_b[@]}"; do
+        if [[ -z ${qcom_a[$k]:-} ]]; then
+          printf '%s: 0 -> %s (delta %s)\n' "$k" "${qcom_b[$k]}" "${qcom_b[$k]}"
+        fi
+      done
+    else
+      printf '%s: missing\n' "$debugfs/qcom_stats"
+    fi
+    printf 'genpd idle_states delta for cpu domains over %ss:\n' "$partc"
+    if ((${#genpd_a[@]} == 0)); then
+      if [[ -d $debugfs/pm_genpd ]]; then
+        printf '(no genpd domain whose name contains "cpu")\n'
+      else
+        printf '%s: missing\n' "$debugfs/pm_genpd"
+      fi
+    fi
+    for k in "${!genpd_a[@]}"; do
+      if [[ ${genpd_a[$k]} == missing ]]; then
+        printf '%s: idle_states missing\n' "$k"
+        continue
+      fi
+      read -r ua ta <<<"${genpd_a[$k]}"
+      read -r ub tb <<<"${genpd_b[$k]:-$ua $ta}"
+      printf '%s: usage %s -> %s (delta %s), time(ms) %s -> %s (delta %s)\n' \
+        "$k" "$ua" "$ub" "$((ub - ua))" "$ta" "$tb" "$((tb - ta))"
+    done
+    printf 'top 15 /proc/interrupts lines by delta over %ss:\n' "$partc"
+    if [[ -r $proc/interrupts ]]; then
+      for k in "${!irq_a[@]}"; do
+        read -r ta ra <<<"${irq_a[$k]}"
+        read -r tb rb <<<"${irq_b[$k]:-$ta $ra}"
+        printf '%s\t%s\t%s\n' "$((tb - ta))" "$k" "$rb"
+      done | sort -nr | head -15 | awk -F'\t' '{printf "delta %s irq %s:%s\n", $1, $2, $3}' | redact || true
+    else
+      printf '%s: missing\n' "$proc/interrupts"
+    fi
+    printf '```\n\n'
+    printf '</details>\n\n'
+  } >>"$out"
+  log 'Part C: done'
+}
+
+find_battery
+write_header
+case $part in
+  all|a) part_a ;;
+esac
+case $part in
+  all|b) part_b ;;
+esac
+case $part in
+  all|c) part_c ;;
+esac
+log "report: $out (mode $(stat -c %a "$out"))"

@@ -1,0 +1,238 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Host test for tools/instantnoodlep-power-baseline. Builds a fake
+# sysfs/debugfs/proc tree plus fake dmesg/iw/top/pacman in a throwaway PATH,
+# runs the tool against them and checks the five defect classes from the
+# brief: median (even/odd count, sign convention), Charging/online=1 warning,
+# privacy redaction, missing qcom_stats as a result with exit 0, and no writes
+# outside --out. No phone, no network. TOOL=<path> selects the tool under test
+# (used for mutation checks).
+set -eu
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+TOOL=${TOOL:-$ROOT/tools/instantnoodlep-power-baseline}
+T=$(mktemp -d)
+trap 'rm -rf "$T"' EXIT
+fail() { echo "not ok - $*" >&2; exit 1; }
+ok() { echo "ok - $*"; }
+
+# Private-looking tokens are assembled at run time so no literal MAC, IMEI or
+# serial sits in git (same trick as tests/trail-lite).
+MAC='aa:bb:cc:dd:ee:'ff
+SER='androidboot.serialno=XY'Z123
+SSID='Home'Wifi
+
+# mkfixture <dir> <battery-status> <usb-online> <qcom_stats: yes|no>
+mkfixture() {
+  local fx=$1 status=$2 online=$3 with_qcom=$4
+  mkdir -p "$fx/sys/class/power_supply/battery" "$fx/sys/class/power_supply/usb" \
+           "$fx/sys/class/thermal" "$fx/sys/devices/system/cpu/cpuidle" \
+           "$fx/sys/devices/system/cpu/cpu0/cpuidle/state0" \
+           "$fx/sys/devices/system/cpu/cpufreq/policy0" \
+           "$fx/sys/class/devfreq" "$fx/sys/power" \
+           "$fx/debug/pm_genpd/cpu0-domain" "$fx/debug/pm_genpd/gpu-domain" \
+           "$fx/proc/device-tree" "$T/bin"
+  printf 'Battery\n' >"$fx/sys/class/power_supply/battery/type"
+  printf '%s\n' "$status" >"$fx/sys/class/power_supply/battery/status"
+  mkfifo "$fx/sys/class/power_supply/battery/current_now"
+  printf '285\n' >"$fx/sys/class/power_supply/battery/temp"
+  printf '0\n' >"$fx/sys/class/power_supply/battery/online"
+  printf 'USB\n' >"$fx/sys/class/power_supply/usb/type"
+  printf '%s\n' "$online" >"$fx/sys/class/power_supply/usb/online"
+  local i
+  for i in 0 1 2 3; do
+    mkdir -p "$fx/sys/class/thermal/thermal_zone$i"
+    printf 'soc%d\n' "$i" >"$fx/sys/class/thermal/thermal_zone$i/type"
+    printf '%s\n' "$((45000 + i * 1000))" >"$fx/sys/class/thermal/thermal_zone$i/temp"
+    printf 'step_wise\n' >"$fx/sys/class/thermal/thermal_zone$i/policy"
+    printf 'passive\n' >"$fx/sys/class/thermal/thermal_zone$i/trip_point_0_type"
+    printf '80000\n' >"$fx/sys/class/thermal/thermal_zone$i/trip_point_0_temp"
+  done
+  mkdir -p "$fx/sys/class/thermal/cooling_device0"
+  printf 'cpufreq\n' >"$fx/sys/class/thermal/cooling_device0/type"
+  printf 'none\n' >"$fx/sys/devices/system/cpu/cpuidle/current_driver"
+  printf 'schedutil\n' >"$fx/sys/devices/system/cpu/cpufreq/policy0/scaling_governor"
+  printf '2841600\n' >"$fx/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq"
+  printf 'C0\n' >"$fx/sys/devices/system/cpu/cpu0/cpuidle/state0/name"
+  printf '1234\n' >"$fx/sys/devices/system/cpu/cpu0/cpuidle/state0/usage"
+  printf '[s2idle] deep\n' >"$fx/sys/power/mem_sleep"
+  printf 'cpu0\n' >"$fx/debug/pm_genpd/cpu0-domain/name"
+  printf 'State  Time(ms)       Usage      Rejected   Above      Below      S2idle\nS0     1000  42  0  0  0  0\n' \
+    >"$fx/debug/pm_genpd/cpu0-domain/idle_states"
+  printf 'gpu\n' >"$fx/debug/pm_genpd/gpu-domain/name"
+  printf 'State  Time(ms)  Usage\nS0  5  1\n' >"$fx/debug/pm_genpd/gpu-domain/idle_states"
+  if [[ $with_qcom == yes ]]; then
+    mkdir -p "$fx/debug/qcom_stats"
+    printf 'ddr 1000 2000\n' >"$fx/debug/qcom_stats/ddr"
+    printf 'cxsd 5\n' >"$fx/debug/qcom_stats/cxsd"
+    printf 'aosd 7\n' >"$fx/debug/qcom_stats/aosd"
+  fi
+  printf 'name\t\tactive_count\t\tevent_count\t\twakeup_count\nws1\t\t10\t\t500\t\t5\neth%s\t\t1\t\t900\t\t0\n' \
+    "$MAC" >"$fx/debug/wakeup_sources"
+  printf 'CPU0\n  1:  100  200   IRQ  gpio%s\n  2:  50   IRQ  tmr\nERR: 0\n' \
+    "$MAC" >"$fx/proc/interrupts"
+  printf 'cpu  1 2 3\nintr 1000 5\nctxt 2000\n' >"$fx/proc/stat"
+  printf '%s mem_sleep=s2idle clk_ignore_unused pd_ignore_unused quiet\n' "$SER" >"$fx/proc/cmdline"
+  printf 'OnePlus 8 Pro\0' >"$fx/proc/device-tree/model"
+  cat >"$T/bin/dmesg" <<EOF
+#!/usr/bin/env bash
+printf 'qcom_rpm sync_state() pending on %s\n' '$MAC'
+printf 'random boot line\n'
+EOF
+  cat >"$T/bin/iw" <<EOF
+#!/usr/bin/env bash
+if [[ \$1 == dev && \$# == 1 ]]; then
+  printf 'phy#0\n\tInterface wlan0\n\t\taddr %s\n\t\tssid %s\n' '$MAC' '$SSID'
+else
+  printf 'Power save: on\n'
+fi
+EOF
+  cat >"$T/bin/top" <<EOF
+#!/usr/bin/env bash
+printf 'top - 12:00:00 up 1:00\nTasks: 1\n'
+printf 'top - 12:00:30 up 1:00\n  PID COMMAND\n  123 root weird%s\n' '$MAC'
+EOF
+  cat >"$T/bin/pacman" <<EOF
+#!/usr/bin/env bash
+if [[ \$1 == -Q && \$2 == omamobile-device-instantnoodlep ]]; then
+  printf 'omamobile-device-instantnoodlep 0.0.6-1\n'
+else
+  exit 1
+fi
+EOF
+  chmod +x "$T/bin/dmesg" "$T/bin/iw" "$T/bin/top" "$T/bin/pacman"
+}
+
+# run_tool <fixture> <args...>: runs the tool against the fixture roots.
+run_tool() {
+  local fx=$1
+  shift
+  POWER_BASELINE_SYSFS="$fx/sys" \
+  POWER_BASELINE_DEBUGFS="$fx/debug" \
+  POWER_BASELINE_PROC="$fx/proc" \
+  POWER_BASELINE_PARTC_SECONDS=1 \
+  PATH="$T/bin:$PATH" \
+    bash "$TOOL" "$@"
+}
+
+# feed_current <fixture> <values...>: background writer for the current_now
+# FIFO. Its stdout/stderr are detached so the $(...) around this function sees
+# EOF immediately (otherwise the writer holds the substitution pipe open and
+# deadlocks against the FIFO).
+feed_current() {
+  local fx=$1
+  shift
+  (
+    local v
+    for v in "$@"; do
+      printf '%s\n' "$v" >"$fx/sys/class/power_supply/battery/current_now"
+      sleep 0.05
+    done
+  ) >/dev/null 2>&1 &
+  echo $!
+}
+
+# --- 1. median of odd/even sample counts and the sign convention -----------
+fx=$T/fx1
+mkfixture "$fx" Discharging 0 yes
+w=$(feed_current "$fx" -500000 -510000 -520000)
+run_tool "$fx" --part b --settle 0 --samples 3 --interval 0 --out "$T/out1.md" >/dev/null
+while kill -0 "$w" 2>/dev/null; do sleep 0.05; done
+grep -q 'median current: 510.0 mA (min 500.0 mA, max 520.0 mA) from 3 samples' "$T/out1.md" \
+  || fail "odd-count median wrong: $(grep 'median current' "$T/out1.md")"
+grep -q 'raw current_now sign: negative' "$T/out1.md" \
+  || fail "raw sign not stated: $(grep 'raw current_now' "$T/out1.md")"
+if grep -q -- '-510.0 mA' "$T/out1.md"; then fail 'median printed with the raw negative sign'; fi
+grep -q 'floor verdict: clean screen-off floor' "$T/out1.md" \
+  || fail 'clean floor verdict missing'
+ok 'median of 3 (odd) samples, absolute mA, raw sign stated'
+
+fx=$T/fx2
+mkfixture "$fx" Discharging 0 yes
+w=$(feed_current "$fx" -500000 -502000 -520000 -530000)
+run_tool "$fx" --part b --settle 0 --samples 4 --interval 0 --out "$T/out2.md" >/dev/null
+while kill -0 "$w" 2>/dev/null; do sleep 0.05; done
+# (502000 + 520000) / 2 = 511000 uA -> 511.0 mA; a lower-middle bug gives 502.0
+grep -q 'median current: 511.0 mA (min 500.0 mA, max 530.0 mA) from 4 samples' "$T/out2.md" \
+  || fail "even-count median wrong: $(grep 'median current' "$T/out2.md")"
+ok 'median of 4 (even) samples averages the two middle values'
+
+# --- 2. Charging sample / online=1 must warn, not call it a floor -----------
+fx=$T/fx3
+mkfixture "$fx" Charging 0 yes
+w=$(feed_current "$fx" -500000 -501000)
+run_tool "$fx" --part b --settle 0 --samples 2 --interval 0 --out "$T/out3.md" >/dev/null
+while kill -0 "$w" 2>/dev/null; do sleep 0.05; done
+grep -q 'WARNING: not a clean floor' "$T/out3.md" || fail 'Charging sample produced no warning'
+grep -q 'sample 1 status=Charging' "$T/out3.md" || fail 'warning does not name the Charging sample'
+if grep -q 'floor verdict: clean screen-off floor' "$T/out3.md"; then
+  fail 'Charging run was called a clean floor'
+fi
+ok 'a Charging sample produces the warning and no clean floor'
+
+fx=$T/fx4
+mkfixture "$fx" Discharging 1 yes
+w=$(feed_current "$fx" -500000 -501000)
+run_tool "$fx" --part b --settle 0 --samples 2 --interval 0 --out "$T/out4.md" >/dev/null
+while kill -0 "$w" 2>/dev/null; do sleep 0.05; done
+grep -q 'WARNING: not a clean floor' "$T/out4.md" || fail 'online=1 produced no warning'
+grep -q 'online=1' "$T/out4.md" || fail 'warning does not name the online supply'
+grep -q -- '- cable: in' "$T/out4.md" || fail 'header does not say cable in'
+if grep -q 'floor verdict: clean screen-off floor' "$T/out4.md"; then
+  fail 'online=1 run was called a clean floor'
+fi
+ok 'a supply with online=1 produces the warning and cable:in in the header'
+
+# --- 3. privacy: planted MAC / serial / SSID never reach the report ---------
+fx=$T/fx5
+mkfixture "$fx" Discharging 0 yes
+w=$(feed_current "$fx" -500000 -501000)
+run_tool "$fx" --part all --settle 0 --samples 2 --interval 0 --room-temp 21 --out "$T/out5.md" >/dev/null
+while kill -0 "$w" 2>/dev/null; do sleep 0.05; done
+for secret in "$MAC" 'XYZ123' 'serialno' "$SSID"; do
+  if grep -q -- "$secret" "$T/out5.md"; then
+    fail "report leaks $secret"
+  fi
+done
+grep -q '<redacted-mac>' "$T/out5.md" || fail 'MAC redaction marker missing'
+grep -q 'mem_sleep=s2idle' "$T/out5.md" || fail 'matching cmdline flag not reported'
+grep -q 'clk_ignore_unused' "$T/out5.md" || fail 'ignore_unused cmdline flag not reported'
+grep -q 'wlan0: Power save: on' "$T/out5.md" || fail 'wi-fi power save per interface missing'
+grep -q -- '- room temperature: 21 C' "$T/out5.md" || fail 'room-temp not recorded'
+grep -q 'omamobile-device-instantnoodlep 0.0.6-1' "$T/out5.md" || fail 'device package missing'
+[[ $(grep -c '<details>' "$T/out5.md") == 3 ]] || fail 'report does not have three <details> parts'
+grep -q 'Power baseline: OnePlus 8 Pro (instantnoodlep)' "$T/out5.md" || fail 'title missing'
+ok 'MAC, serial, SSID never appear; cmdline flags and conditions do; 3 <details> parts'
+
+# --- 4. missing qcom_stats is a result, exit 0 -------------------------------
+fx=$T/fx6
+mkfixture "$fx" Discharging 0 no
+if ! run_tool "$fx" --part c --out "$T/out6.md" >/dev/null; then
+  fail 'missing qcom_stats made the tool exit nonzero'
+fi
+grep -q 'qcom_stats: missing' "$T/out6.md" || fail 'missing qcom_stats not printed as a result'
+grep -q 'interrupts/s' "$T/out6.md" || fail 'part C rates missing'
+ok 'missing qcom_stats prints "<path>: missing" and exits 0'
+
+# --- 5. nothing is created or modified outside --out -------------------------
+fx=$T/fx7
+mkfixture "$fx" Discharging 0 yes
+before_list=$(find "$fx" | sort)
+before_sha=$(find "$fx" -type f -exec sha256sum {} + | sort)
+work=$T/work7
+mkdir "$work"
+w=$(feed_current "$fx" -500000 -501000)
+(
+  cd "$work"
+  run_tool "$fx" --part all --settle 0 --samples 2 --interval 0 --out "$work/report.md" >/dev/null
+)
+while kill -0 "$w" 2>/dev/null; do sleep 0.05; done
+after_list=$(find "$fx" | sort)
+after_sha=$(find "$fx" -type f -exec sha256sum {} + | sort)
+[[ "$before_list" == "$after_list" ]] || fail 'fixture listing changed during the run'
+[[ "$before_sha" == "$after_sha" ]] || fail 'fixture content changed during the run'
+files=$(find "$work" -type f | sort)
+[[ "$files" == "$work/report.md" ]] || fail "stray files written in cwd: $files"
+[[ $(stat -c %a "$work/report.md") == 600 ]] || fail 'report is not mode 0600'
+ok 'no file created or modified outside --out; report mode 0600'
+
+echo 'ok - instantnoodlep-power-baseline: all five defect checks pass'
