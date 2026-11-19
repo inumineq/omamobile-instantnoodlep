@@ -61,7 +61,7 @@ reads `SKIPPED: cable in`; that is expected at this stage.
 3. Start detached:
 
    ```sh
-   nohup /root/instantnoodlep-holder-matrix > /root/holder-matrix.log 2>&1 &
+   nohup /root/instantnoodlep-holder-matrix > /root/holder-matrix.log 2>&1 & echo $! > /root/holder-matrix.pid
    ```
 
    `nohup` keeps the run alive when the SSH session drops. `tmux` works too.
@@ -95,7 +95,7 @@ All [I] until measured; from the R1 SoC-sleep analysis section 7.
 - Wi-Fi SSH does not come back 5 minutes after the expected end: the owner
   wakes the screen and checks the phone (log, `ip link`, Wi-Fi state).
 - The phone gets hot to the touch: stop with
-  `kill -TERM $(pgrep -f instantnoodlep-holder-matrix)`. The trap undoes
+  `kill -TERM $(cat /root/holder-matrix.pid)`. The trap undoes
   everything; the log ends with `Summary:`.
 - The log shows `UNDO FAILED`: do not start another run. Read the named
   toggle and set it by hand, or reboot.
