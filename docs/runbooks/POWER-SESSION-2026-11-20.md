@@ -196,7 +196,7 @@ other slot: slot A holds another system, and this runbook is not valid
 there.
 
 Then run the check block with `V=boot_b` and note its root line (source
-and file system type); every later boot must print the same. Then and confirm that SSH over Wi-Fi
+and file system type); every later boot must print the same. Then confirm that SSH over Wi-Fi
 works from the laptop. [V] The firewall on the phone blocked SSH on the
 Wi-Fi interface earlier (`docs/agents/state.md`). If it still does, S4
 cannot run as written; say so and skip it.
