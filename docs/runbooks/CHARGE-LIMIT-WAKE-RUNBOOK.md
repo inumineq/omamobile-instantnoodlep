@@ -116,6 +116,9 @@ in [`CHARGER-RP-RUNBOOK.md`](CHARGER-RP-RUNBOOK.md) apply: M-P4, M-P5, S5m,
 S6m, S7m and the watch started with a ceiling of 500000 before every plug.
 In this section they replace every meter rule of this runbook.
 
+**Review status: not accepted without a meter.** See the review status in
+CHARGER-RP-RUNBOOK; running this section is the owner's decision.
+
 - [V] This kernel contains the Type-C Rp change (C1), which raises the input
   limit on a C-to-C source. So the charger module is loaded with
   `max_input_ua=500000` (from `8b6d86a4a` on), and gate MG of
