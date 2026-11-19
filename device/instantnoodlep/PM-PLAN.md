@@ -192,6 +192,121 @@ When running suspend, USB SSH may disappear. It is not an acceptable sole
 observer or recovery channel; use the local console/log stream arrangement
 specified by the owner before G2-G5. [I]
 
+### 4.4 Interconnect `sync_state` diagnostic (2026-11-19)
+
+- **[V: owner phone report, k3-daily2, 2026-11-19]** PSCI idle states
+  respond, but the `ddr_stats`, `cxsd`, and `aosd` files under
+  `/sys/kernel/debug/qcom_stats/` each report `Count 0`. The log reports
+  `qnoc-sm8250 163d000.interconnect: sync_state() pending due to
+  1dfa000.crypto` and the same consumer on `1700000.interconnect`; `gcc-sm8250`
+  and `sm8250-gpucc` report pending due to `3d6a000.gmu`. Screen-off current
+  was reported around 360 mA. The capture is private and no identifiers are
+  reproduced here.
+- **[V: kernel source `arch/arm64/boot/dts/qcom/sm8250.dtsi:2609-2642`]** The
+  crypto node has the SM8250/SM8150 QCE compatibles, RX/TX DMA requests on
+  channels 4/5 from `cryptobam`, six IOMMU stream mappings and an
+  `aggre2_noc` to `mc_virt` interconnect path. The BAM node is declared at
+  `:2609-2624`. **[V: `drivers/crypto/Kconfig:529-536`]** The QCE driver is
+  hidden on ARCH_QCOM unless `COMPILE_TEST` or `BROKEN` is enabled. Its source
+  requests both named channels (`drivers/crypto/qce/dma.c:19-32`) and uses the
+  RX DMA channel ID to select the paired pipe (`drivers/crypto/qce/core.c:160-180`).
+  Kconfig also says this driver does not have exclusive access to the engine
+  (secure-world races are possible) and is slower than the CPU
+  (`drivers/crypto/Kconfig:537-540`), so this is a diagnostic RAM-only enable,
+  not a production setting. The BAM DMA driver is enabled by the daily2 base
+  config; probe and bind on the handset remain **[I]** until the candidate is
+  RAM-booted.
+- **[V: `drivers/interconnect/core.c:1218-1246`, `drivers/base/core.c:1382-1400,1848-1878`]** `icc_sync_state()` waits until every provider's sync callback
+  has run before clearing initial votes. Under strict fw_devlink sync-state,
+  a supplier can remain pending while a managed consumer link is not active.
+  Enabling QCE as a module is intended to make its device bind and release the
+  crypto-consumer links; whether QCE probes successfully with this phone's BAM
+  and IOMMU configuration is **[I]**.
+- **[V: `arch/arm64/boot/dts/qcom/sm8250-oneplus-instantnoodlep.dts:561-575`,
+  `arch/arm64/boot/dts/qcom/sm8250.dtsi:3012-3047`,
+  `drivers/gpu/drm/msm/adreno/a6xx_gmu.c:2282-2310`]** The board enables both
+  the GMU and GPU. Adreno's GPU probe initializes the GMU through its
+  platform-device node, but the GMU helper is called from the GPU driver and
+  does not bind a driver to the separate GMU device
+  (`drivers/gpu/drm/msm/adreno/a6xx_gmu.c:2282-2310`). Since fw_devlink marks a
+  consumer's supplier links active from `device_links_driver_bound()` for that
+  consumer (`drivers/base/core.c:1382-1400`), the GPU driver's bind alone is
+  not expected to satisfy the GMU device's consumer link. The reported pending
+  GMU line after userspace GL works is consistent with this; actual sync-state
+  behavior stays **[I]** until measured on the device. Do not disable the GMU
+  or alter GPU DTS for this one-variable crypto candidate.
+
+#### Candidate and phone gate
+
+**[V]** Candidate `k3-daily2-qce` is daily2 plus only QCE support. This kernel
+tree hides `CRYPTO_DEV_QCE` behind `COMPILE_TEST` on ARCH_QCOM, so the minimal
+Kconfig route also enables `CONFIG_COMPILE_TEST=y`; QCE is `=m`, with the QCE
+algorithm choice enabled, and `LOCALVERSION` is pinned to
+`-instantnoodlep-k3-daily2-qce`. The resulting config, release, image size,
+modules and hashes will be recorded in the build directory below. **[I]**
+`qcrypto.ko` must load and bind against the phone's BAM/IOMMU before this can
+qualify as a sync-state fix.
+
+Owner/coordinator only; no phone access or boot has been done by this worker.
+Use the existing DAILY-K3-PLAN §8 Part R prep and rollback. First verify all
+artifact hashes and stage the matching modules archive under
+`/usr/lib/modules/<release>/` (do not replace or unpin the installed daily
+module tree). With the owner ready and a recovery path available, RAM-boot
+only `~/android/build/k3-daily2-qce/boot-daily2-qce.img`. Expect a successful
+boot, SSH and `uname -r` equal to the recorded candidate release. Confirm
+`qcrypto` loaded automatically; if it did not, run `sudo modprobe qcrypto`
+once. Confirm `/sys/bus/platform/devices/1dfa000.crypto/driver` resolves to
+the QCE driver, then capture
+`dmesg | grep -E 'sync_state\(\) pending'` and read the following files twice,
+60 seconds apart, with screen off and otherwise idle:
+
+```sh
+cat /sys/kernel/debug/qcom_stats/ddr_stats
+cat /sys/kernel/debug/qcom_stats/cxsd
+cat /sys/kernel/debug/qcom_stats/aosd
+sleep 60
+cat /sys/kernel/debug/qcom_stats/ddr_stats
+cat /sys/kernel/debug/qcom_stats/cxsd
+cat /sys/kernel/debug/qcom_stats/aosd
+```
+
+Expect the crypto device driver symlink to resolve; report any GMU pending
+line separately. A pending log line is historical, so record whether it was
+emitted before or after QCE bound. Compare counter counts and elapsed-time
+values between reads; the acceptance condition is that relevant counters
+advance, not that any specific count is promised. If QCE reports
+probe/defer/DMA/IOMMU errors, fails to bind, boot or SSH is unhealthy, or
+counters remain zero, stop and return to the installed daily kernel; do not
+try a DTS disable in this same candidate. **[I]** A second, separately built
+candidate may set
+only `&crypto { status = "disabled"; };` if QCE cannot bind; this would test
+fw_devlink's absent-consumer path and would not provide crypto acceleration.
+
+After the 60-second counter interval, collect the separate Part B floor from
+[upstream issue #867](https://github.com/derekross/omarchy-mobile/issues/867).
+Owner cable out, Wi-Fi SSH, screen off, nothing else running. Run this inside
+`tmux` or under `nohup` so an SSH drop cannot terminate it:
+
+```sh
+for d in /sys/class/power_supply/*; do
+  [ "$(cat "$d/type")" = Battery ] && B=$d
+done
+echo "gauge: $B"
+sleep 600
+for i in $(seq 12); do
+  echo "$(date +%T) $(cat "$B/status") $(cat "$B/current_now") uA batt=$(cat "$B/temp") zones: $(cat /sys/class/thermal/thermal_zone*/temp | tr '\n' ' ')"
+  sleep 15
+done | tee floor.txt
+```
+
+Median `current_now` is the reported floor; expect status `Discharging`.
+Record kernel, module/config, Wi-Fi power-save, room temp if known and gauge
+calibration state. Values are µA; battery temperature is tenths °C and zone
+temperatures are thousandths °C. Stop if SSH drops before the log is safely
+running, battery status is not `Discharging`, readings are missing or
+implausible, or temperature or current becomes anomalous. Keep the output
+private and report only redacted aggregates.
+
 ## 5. Roadmap and unresolved items
 
 1. Reproduce screen-off baseline and find dominant wake/power consumers.
