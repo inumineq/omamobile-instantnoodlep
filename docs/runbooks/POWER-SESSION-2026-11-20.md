@@ -47,14 +47,16 @@ used: repacking with no change reproduces the `boot_b` image byte for byte
 | Name | Change against the `boot_b` image | State |
 | --- | --- | --- |
 | `nopd` | the token `pd_ignore_unused` and one space removed from the command line | packed, sha256 `f4e7f325cb5e30a72a22bfb545a01e823ad5be61aef4b8027934f889ef1c023b` [V: reported by the coordinator, 76 bytes differ, all in the command line] |
-| `noclk` | the token `clk_ignore_unused` and one space removed; `pd_ignore_unused` stays | to pack |
-| `noboth` | both tokens removed | to pack |
-| `k2dtb` | the device tree replaced by the K2 one, sha256 `f64634a212b96770de9e93f5edb841d3b5d5489a2a2914836b6bd831001e9e49` (`~/android/build/k3-power-cpuicc/sm8250-oneplus-instantnoodlep.dtb` on omaserver); kernel, initramfs and command line unchanged | to pack |
+| `noclk` | the token `clk_ignore_unused` and one space removed; `pd_ignore_unused` stays | packed, sha256 `e23eb776a7b9e36c8d44e74bb7110128ad0c734096f2d6df84b87903171e5a62` [V: reported by the coordinator, only the command line field differs] |
+| `noboth` | both tokens removed | packed, sha256 `9223a5883adb21b8fdcbaa9a593feb132335132bb400105ad771ee78fe8b699b` [V: as above] |
+| `k2dtb` | the device tree field replaced by the K2 one as the packer produces it; kernel, initramfs and command line unchanged | packed, sha256 `9f8bf3eb6d4af7cd393cd8ba106cc860011c86898f572727dad37de4446f16d5` [V: reported by the coordinator: 16 bytes differ in the device tree, 20 in the header's content hash, none elsewhere] |
 
-For `noclk`, `noboth` and `k2dtb`: record the sha256, and confirm with a
-binary compare against the `boot_b` image that the difference lies only in
-the command line field (`noclk`, `noboth`) or only in the device tree
-(`k2dtb`). Stop if anything else differs.
+The device tree in a boot image is not the kernel's raw board file: the
+packer applies the stock overlay to it first. For `k2dtb` the coordinator
+therefore took the processed device tree from the K2 image packed with the
+same packer, not the raw K2 file. [V: reported by the coordinator] A
+decompiled comparison of the two processed trees shows the eight CPU
+memory-bus tags changed from 0 to 3 and nothing else.
 
 `k2dtb` keeps the kernel release of `boot_b`, so the modules on the root
 file system still match. [V] The K2 device tree differs from the base one in
