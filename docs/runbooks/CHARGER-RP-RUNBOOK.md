@@ -7,7 +7,7 @@ The gated session for kernel candidate K1 of
 **[V]** is checked in the source, **[I]** is to be checked by this runbook.
 
 - Kernel: `inumineq/linux-omarchy-mobile`, branch
-  `instantnoodlep-k3-power-chg1` @ `8907ff5b8`, three topics on
+  `instantnoodlep-k3-power-chg1` @ `e69b080df`, four topics on
   `instantnoodlep-k3-daily2-qce-gmu` @ `bd566b604`, all in
   `drivers/power/supply/qcom_pm8150b_charger.c`:
   - F1: the watchdog bark handler pets at the charger base address.
@@ -15,11 +15,14 @@ The gated session for kernel candidate K1 of
   - C1: without a bound Type-C driver, a source that advertises Rp 1.5 A or
     3.0 A in sink mode gets that input current limit. Every attach starts at
     500 mA and is classified after about 1 s.
+  - Ceiling: the module parameter `max_input_ua` caps every input limit the
+    driver writes. Default 0, no ceiling. Added after the reviews below.
 - [V] The series writes no charge-current, float-voltage, termination, HVDCP
   or Type-C mode register. The DTB is byte-identical to the `qce-gmu`
   candidate. The config differs in `LOCALVERSION` only.
 - [V] Three independent reviews; the third verdict at `8907ff5b8` is "safe
-  for an owner-attended test" under this gate. KUnit 26 of 26.
+  for an owner-attended test" under this gate. KUnit 26 of 26 then, 29 of 29
+  with the ceiling. The ceiling commit has its own review.
 - [I] Known remaining window: a limit already in force can outlive a
   re-attach until the plug interrupt is serviced. The code gives no hard
   bound for that time. Step G4 measures it from outside. Stop limit S7 and
@@ -37,8 +40,8 @@ The gated session for kernel candidate K1 of
   staged under `/usr/lib/modules/7.3.0-rc6-instantnoodlep-k3-power-chg1/`; WATCH
   (`/root/instantnoodlep-charge-watch`) on the phone.
 - P3: battery between 40 % and 80 %, gauge `voltage_now` >= 3.75 V.
-- P4: meter resolution 0.01 A and 0.01 V, inline between source and phone, visible to the owner.
-  Without a meter, see "Session without a meter" below.
+- P4, metered session only: meter resolution 0.01 A and 0.01 V, inline between source and phone,
+  visible to the owner. Without a meter, "Session without a meter" below replaces P4 and P5.
 - P5: sources with their ratings written down before the session:
   - laptop USB-A port: 0.5 A, or 0.9 A if USB 3;
   - laptop USB-C port: its Rp rating, usually 1.5 A;
@@ -139,40 +142,63 @@ below; every step above 500 mA needs a meter.
   on the daily kernel). With C1 that port gets a 3 A limit, so it is not a
   500 mA source for this kernel.
 
+The input current ceiling. From `e69b080df` on, the charger module takes
+`max_input_ua`. A meterless session loads it with `max_input_ua=500000`.
+
+- [V] With that value the driver decides and writes no input limit above
+  500 mA, whatever the port type, the cable or Rp: the decision function, the
+  one register writer and the supplier path are all clamped
+  (`qcom_pm8150b_charger.c`, `smb5_input_ceiling()`, `smb5_input_limit()`,
+  `smb5_set_current_limit()`). KUnit 29 of 29, with the clamp removed the new
+  tests fail.
+- [I] The ceiling bounds what the driver writes to 0x1370. It is not checked
+  on the phone, and it does not bound a limit the PMIC might choose by itself.
+  Gate MG below reads the register to cover the first; the watch and the
+  owner cover the second.
+
 What runs without a meter, and what waits:
 
 | Steps | Without a meter |
 | --- | --- |
 | G0 | yes, read only, every source and cable the owner has. Also `rd 0x150d` (legacy cable status: bit 1 legacy cable, bit 0 non-compliant legacy cable) |
-| G1, G2 | yes |
-| G3, G7 | yes, on a USB-A port and A-to-C cable that passed M0 below |
-| G4, G5, G6, G8 | no. They raise the limit above 500 mA: wait for a meter |
-| any C-to-C source | no. Do not plug one while the candidate's charger module is loaded |
+| G1, G2 | yes, with MG |
+| G3, G7 | yes, on a source that passed M0 |
+| G4, G5, G6, G8 | no. They need a limit above 500 mA: wait for a meter |
 
-M0, the gate for the one source, read only, on the daily kernel, before any
-RAM boot. Plug the A-to-C cable into the USB-A port, wait 10 s, then five
-times, 2 s apart: `rd 0x1506; rd 0x150d; cat $C/usb_type $C/input_current_limit`.
+M0, the gate for each source, read only, on the daily kernel, before any RAM
+boot. Sources: a laptop USB-A port with an A-to-C cable, or a laptop USB-C
+port with a C-to-C cable. Plug, wait 10 s, then five times, 2 s apart:
+`rd 0x1506; rd 0x150d; rd 0x1370; cat $C/usb_type $C/input_current_limit $C/current_now`.
 
-- Pass: every read has 0x1506 = 08, `usb_type` `SDP` and
-  `input_current_limit` 500000.
-- No-go for the whole meterless session: 0x1506 = 02 or 04 (the cable
-  advertises a current it must not: non-compliant), or `usb_type` `CDP` or
-  `DCP` or anything but `SDP`, or a limit above 500000. [V] The driver gives
-  CDP and DCP 1.5 A, in the daily kernel as well as in the candidates
-  (`qcom_pm8150b_charger.c:273-274`).
+- Pass: every read has 0x1370 = 0a, `input_current_limit` 500000 and
+  `current_now` <= 650000.
+- USB-A with an A-to-C cable must also read 0x1506 = 08 and `usb_type` `SDP`.
+  0x1506 = 02 or 04 there, or `CDP`, `DCP` or any other type: that source is
+  not used. [V] The driver gives CDP and DCP 1.5 A, in the daily kernel as
+  well as in the candidates (`qcom_pm8150b_charger.c:273-274`).
+- [V] The owner's laptop USB-C port passed on 2026-11-19: 0x1370 = 0a,
+  482 mA at 5.05 V, 0x1506 = 02.
 - [V] The candidates do not read the PMIC's legacy-cable status (0x150d).
-  The 0x150d value is reported only, for a later guard.
-- [I] M0 shows what this port and cable did under the daily kernel. It does
-  not prove the candidate classifies them the same way. The watch's ceiling
-  is the second line, and it reacts only at its next reading, up to about
-  1 s after a higher limit is written.
+  The value is reported only, for a later guard.
+
+MG, the gate on the candidate, cable out, in G2. Load with
+`modprobe qcom_pm8150b_charger max_input_ua=500000`, then:
+`dmesg | grep 'input current ceiling'; cat /sys/module/qcom_pm8150b_charger/parameters/max_input_ua; rd 0x1370`.
+
+- Pass: the line `input current ceiling 500000 uA`, the parameter reads
+  500000, and 0x1370 = 0a.
+- Anything else: `rmmod` is not used; soft rollback from R3. No cable goes in.
+- In every later read of the session 0x1370 = 0a. Any other value: Emergency.
+- Every `modprobe qcom_pm8150b_charger` of a meterless session carries
+  `max_input_ua=500000`, the one after G7 included, and MG is repeated after
+  it.
 
 Rules:
 
 - M-P4 (replaces P4): [`tools/instantnoodlep-usbin-watch`](../../tools/instantnoodlep-usbin-watch)
   is on the phone as `/root/instantnoodlep-usbin-watch`. It reads about once
   a second. A faster event can be missed.
-- M-P5 (replaces P5): one source only, a laptop USB-A port, direct, no hub.
+- M-P5 (replaces P5): only sources that passed M0, direct, no hub.
 - Before every plug:
   `nohup /root/instantnoodlep-usbin-watch 500000 > /root/usbin-<step>.log 2>&1 &`.
   After the step: `kill "$(cat /root/usbin-watch.pid)"`.
@@ -195,8 +221,9 @@ Rules:
   must print 0. Within 10 s the gauge `current_now` no longer has the G3
   "charging" sign. Otherwise E1.
 - R2 (replaces R2): the owner unplugs at the phone; `cat $C/online` prints 0.
-- G3 and G7: `usb_type` is `Unknown` for about the first second after a plug,
-  then `SDP`, in every read. Any other type: Emergency.
+- G3 and G7: `usb_type` is expected to read `Unknown` at first and then `SDP`
+  on USB-A, or `C` on the USB-C port. The driver gives no deadline for that
+  change. `CDP` or `DCP` at any time: Emergency.
 - G3 expect, instead of the meter: every watch line has `icl_uA` 500000,
   `iusb_uA` <= 650000 and `vusb_uV` between 4750000 and 5250000.
 - G7: stop the watch before `rmmod`, because the charger's sysfs directory
