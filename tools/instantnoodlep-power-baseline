@@ -41,7 +41,9 @@ addresses, hostnames or SSIDs; /proc/cmdline is never printed in full.
 EOF
 }
 
-part=all settle=600 samples=12 interval=15 out= room_temp=
+part=all settle=600 samples=12 interval=15
+out=''
+room_temp=''
 while (($#)); do
   case $1 in
     --part)
@@ -140,7 +142,8 @@ fmt_ma() { # microamp (possibly "N.5") -> millamp with one decimal
   awk -v u="$1" 'BEGIN { printf "%.1f", u / 1000 }'
 }
 
-battery= online_supply=
+battery=''
+online_supply=''
 find_battery() {
   local d
   for d in "$sysfs"/class/power_supply/*; do
@@ -221,7 +224,7 @@ write_header() {
 }
 
 part_a() {
-  local z d found states
+  local z d found states names
   log 'Part A: system state'
   {
     printf '## Part A - system state (any time)\n\n'
@@ -251,7 +254,11 @@ part_a() {
     grep_files "$sysfs"/devices/system/cpu/cpufreq/policy*/scaling_governor \
                "$sysfs"/devices/system/cpu/cpufreq/policy*/scaling_max_freq
     if [[ -d $sysfs/class/devfreq ]]; then
-      printf 'devfreq devices: %s\n' "$(ls "$sysfs/class/devfreq" | tr '\n' ' ')"
+      names=''
+      for d in "$sysfs"/class/devfreq/*; do
+        names+="${d##*/} "
+      done
+      printf 'devfreq devices: %s\n' "$names"
       for d in "$sysfs"/class/devfreq/*; do
         printf '%s: governor=%s cur_freq=%s\n' "${d##*/}" "$(attr "$d/governor")" "$(attr "$d/cur_freq")"
       done
@@ -380,7 +387,7 @@ part_b() {
       printf 'raw current_now sign: %s\n' "$sign"
     fi
     printf 'all samples Discharging: %s\n' "$all_discharging"
-    local reasons= j
+    local reasons='' j
     reasons=
     for ((j = 0; j < ${#b_status[@]}; j++)); do
       if [[ ${b_status[j]} != Discharging ]]; then
@@ -403,21 +410,22 @@ part_b() {
 
 declare -A qcom_a=() qcom_b=() irq_a=() irq_b=() genpd_a=() genpd_b=()
 
-qcom_snap() { # $1: nameref of assoc array; file name -> sum of its numbers
-  local -n arr=$1
+# Each snap function prints "key<TAB>value" lines and the caller fills its
+# associative array. Namerefs (`local -n`) are deliberately not used here:
+# the linter cannot see through them and reports SC2178/SC2034 false
+# positives on the array writes.
+qcom_snap() { # every regular file under qcom_stats: file name -> sum of its numbers
   local d=$debugfs/qcom_stats f s
-  arr=()
   [[ -d $d ]] || return 0
   while IFS= read -r -d '' f; do
     s=$(awk '{for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+$/) t += $i} END {print t + 0}' "$f" 2>/dev/null) || s=0
-    arr[${f##*/}]=$s
+    printf '%s\t%s\n' "${f##*/}" "$s"
   done < <(find "$d" -maxdepth 1 -type f -print0 | sort -z)
 }
 
-irq_snap() { # $1: nameref; irq -> "total<TAB>label"
-  local -n arr=$1
-  local line irq total tok rest
-  arr=()
+irq_snap() { # /proc/interrupts: irq -> "total label..."
+  local line irq total tok rest i
+  local -a fields=()
   [[ -r $proc/interrupts ]] || return 0
   while IFS= read -r line; do
     if [[ ! $line =~ ^[[:space:]]*[0-9]+: ]]; then
@@ -426,47 +434,46 @@ irq_snap() { # $1: nameref; irq -> "total<TAB>label"
     irq=${line%%:*}
     irq=${irq//[[:space:]]/}
     total=0 rest=
-    set -- $line
-    shift
-    for tok in "$@"; do
+    read -ra fields <<<"$line"
+    for ((i = 1; i < ${#fields[@]}; i++)); do
+      tok=${fields[i]}
       if [[ $tok =~ ^[0-9]+$ ]]; then
         total=$((total + tok))
       else
         rest="$rest $tok"
       fi
     done
-    arr[$irq]="$total"$'\t'"$rest"
+    printf '%s\t%s\n' "$irq" "$total$rest"
   done <"$proc/interrupts"
 }
 
-genpd_snap() { # $1: nameref; "domain|S<state>" -> "usage time_ms" (cpu domains only)
-  local -n arr=$1
+genpd_snap() { # cpu* genpd domains: "domain|S<state>" -> "usage time_ms"
   local d name line state t u
-  arr=()
+  local -a fields=()
   for d in "$debugfs"/pm_genpd/*/; do
     [[ -r ${d}name ]] || continue
     name=$(cat "${d}name" 2>/dev/null) || continue
     [[ ${name,,} == *cpu* ]] || continue
     if [[ ! -r ${d}idle_states ]]; then
-      arr["${d%/}|idle_states"]='missing'
+      printf '%s\t%s\n' "${d%/}|idle_states" missing
       continue
     fi
     while IFS= read -r line; do
-      set -- $line
-      if [[ ${1:-} == State || ${#} -lt 3 ]]; then
+      read -ra fields <<<"$line"
+      if [[ ${fields[0]:-} == State || ${#fields[@]} -lt 3 ]]; then
         continue
       fi
-      if [[ ! $2 =~ ^[0-9]+$ || ! $3 =~ ^[0-9]+$ ]]; then
+      if [[ ! ${fields[1]} =~ ^[0-9]+$ || ! ${fields[2]} =~ ^[0-9]+$ ]]; then
         continue
       fi
-      state=$1 t=$2 u=$3
-      arr["${d%/}|$state"]="$u $t"
+      state=${fields[0]} t=${fields[1]} u=${fields[2]}
+      printf '%s\t%s\n' "${d%/}|$state" "$u $t"
     done <"${d}idle_states"
   done
 }
 
 part_c() {
-  local intr_a ctxt_a intr_b ctxt_b top_delay k before after ta ra tb rb ua ub
+  local intr_a ctxt_a intr_b ctxt_b top_delay k v before after ta ra tb rb ua ub
   log "Part C: sampling over ${partc}s"
   {
     printf '## Part C - who is awake (%ss window, screen off)\n\n' "$partc"
@@ -480,9 +487,9 @@ part_c() {
     printf '%s: missing\n' "$proc/stat" >>"$out"
     intr_a=0 ctxt_a=0
   fi
-  qcom_snap qcom_a
-  irq_snap irq_a
-  genpd_snap genpd_a
+  while IFS=$'\t' read -r k v; do qcom_a["$k"]=$v; done < <(qcom_snap)
+  while IFS=$'\t' read -r k v; do irq_a["$k"]=$v; done < <(irq_snap)
+  while IFS=$'\t' read -r k v; do genpd_a["$k"]=$v; done < <(genpd_snap)
   sleep "$partc"
   if [[ -r $proc/stat ]]; then
     intr_b=$(awk '/^intr/{print $2}' "$proc/stat")
@@ -490,9 +497,9 @@ part_c() {
   else
     intr_b=0 ctxt_b=0
   fi
-  qcom_snap qcom_b
-  irq_snap irq_b
-  genpd_snap genpd_b
+  while IFS=$'\t' read -r k v; do qcom_b["$k"]=$v; done < <(qcom_snap)
+  while IFS=$'\t' read -r k v; do irq_b["$k"]=$v; done < <(irq_snap)
+  while IFS=$'\t' read -r k v; do genpd_b["$k"]=$v; done < <(genpd_snap)
   {
     printf '%s interrupts/s, %s context switches/s over %ss\n' \
       "$(((intr_b - intr_a) / partc))" "$(((ctxt_b - ctxt_a) / partc))" "$partc"

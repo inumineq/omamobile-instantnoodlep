@@ -15,11 +15,11 @@ trap 'rm -rf "$T"' EXIT
 fail() { echo "not ok - $*" >&2; exit 1; }
 ok() { echo "ok - $*"; }
 
-# Private-looking tokens are assembled at run time so no literal MAC, IMEI or
-# serial sits in git (same trick as tests/trail-lite).
-MAC='aa:bb:cc:dd:ee:'ff
-SER='androidboot.serialno=XY'Z123
-SSID='Home'Wifi
+# Private-looking tokens are assembled from quoted fragments at run time so no
+# literal MAC, IMEI or serial sits in git (same trick as tests/trail-lite).
+MAC='aa:bb:cc:dd:ee:'"ff"
+SER='androidboot.serialno=XY'"Z123"
+SSID='Home'"Wifi"
 
 # mkfixture <dir> <battery-status> <usb-online> <qcom_stats: yes|no>
 mkfixture() {
@@ -103,13 +103,14 @@ EOF
 }
 
 # run_tool <fixture> <args...>: runs the tool against the fixture roots.
+# PARTC_SECONDS overrides the Part C window (default 1) for the run.
 run_tool() {
   local fx=$1
   shift
   POWER_BASELINE_SYSFS="$fx/sys" \
   POWER_BASELINE_DEBUGFS="$fx/debug" \
   POWER_BASELINE_PROC="$fx/proc" \
-  POWER_BASELINE_PARTC_SECONDS=1 \
+  POWER_BASELINE_PARTC_SECONDS=${PARTC_SECONDS:-1} \
   PATH="$T/bin:$PATH" \
     bash "$TOOL" "$@"
 }
@@ -235,4 +236,55 @@ files=$(find "$work" -type f | sort)
 [[ $(stat -c %a "$work/report.md") == 600 ]] || fail 'report is not mode 0600'
 ok 'no file created or modified outside --out; report mode 0600'
 
-echo 'ok - instantnoodlep-power-baseline: all five defect checks pass'
+# --- 6. Part C deltas on known fixture numbers -------------------------------
+# qcom_stats / idle_states deltas, intr+ctxt rates, and the top-15
+# /proc/interrupts ordering. All fixture files stay regular files (the tool
+# only reads regular files under qcom_stats anyway); the harness rewrites the
+# counters once, timed inside the Part C sleep window, so the before/after
+# snapshots see exactly known values.
+fx=$T/fx8
+mkfixture "$fx" Discharging 0 yes
+{
+  echo 'CPU0'
+  for i in $(seq 1 18); do printf '  %s:  100   IRQ  name%s\n' "$i" "$i"; done
+  echo 'ERR: 0'
+} >"$fx/proc/interrupts"
+printf 'cpu  1\nintr 1000 5\nctxt 2000\n' >"$fx/proc/stat"
+printf 'State  Time(ms)  Usage  Rejected  Above  Below  S2idle\nS0  1000  42  0  0  0  0\nS1  500  7  0  0  0  0\n' \
+  >"$fx/debug/pm_genpd/cpu0-domain/idle_states"
+# 18 IRQs with delta = 10*irq, so the top-15 must be irqs 18..4; irqs 1..3 cut.
+(
+  sleep 1
+  {
+    echo 'CPU0'
+    for i in $(seq 1 18); do printf '  %s:  %s   IRQ  name%s\n' "$i" "$((100 + i * 10))" "$i"; done
+    echo 'ERR: 0'
+  } >"$fx/proc/interrupts"
+  printf 'cpu  1\nintr 1600 5\nctxt 2600\n' >"$fx/proc/stat"
+  printf 'State  Time(ms)  Usage  Rejected  Above  Below  S2idle\nS0  1600  90  0  0  0  0\nS1  500  7  0  0  0  0\n' \
+    >"$fx/debug/pm_genpd/cpu0-domain/idle_states"
+  printf 'ddr 1500 2500\n' >"$fx/debug/qcom_stats/ddr"
+  printf 'cxsd 8\n' >"$fx/debug/qcom_stats/cxsd"
+  printf 'aosd 7\n' >"$fx/debug/qcom_stats/aosd"
+) >/dev/null 2>&1 &
+rewriter=$!
+PARTC_SECONDS=3 run_tool "$fx" --part c --out "$T/out8.md" >/dev/null
+while kill -0 "$rewriter" 2>/dev/null; do sleep 0.05; done
+grep -q '200 interrupts/s, 200 context switches/s over 3s' "$T/out8.md" \
+  || fail "part C rates wrong: $(grep 'interrupts/s' "$T/out8.md")"
+grep -q 'ddr: 3000 -> 4000 (delta 1000)' "$T/out8.md" || fail 'qcom ddr delta wrong'
+grep -q 'cxsd: 5 -> 8 (delta 3)' "$T/out8.md" || fail 'qcom cxsd delta wrong'
+grep -q 'aosd: 7 -> 7 (delta 0)' "$T/out8.md" || fail 'qcom aosd delta wrong'
+grep -q 'cpu0-domain|S0: usage 42 -> 90 (delta 48), time(ms) 1000 -> 1600 (delta 600)' "$T/out8.md" \
+  || fail "idle_states S0 delta wrong: $(grep 'S0: usage' "$T/out8.md")"
+grep -q 'cpu0-domain|S1: usage 7 -> 7 (delta 0), time(ms) 500 -> 500 (delta 0)' "$T/out8.md" \
+  || fail 'idle_states S1 delta wrong'
+[[ $(grep -c '^delta ' "$T/out8.md") == 15 ]] || fail 'top-15 interrupts: not 15 lines'
+[[ $(grep '^delta ' "$T/out8.md" | head -1) == 'delta 180 irq 18:IRQ name18' ]] \
+  || fail 'top-15 interrupts: first line is not the largest delta'
+[[ $(grep '^delta ' "$T/out8.md" | tail -1) == 'delta 40 irq 4:IRQ name4' ]] \
+  || fail 'top-15 interrupts: 15th line wrong (cut or ordering off)'
+if grep -q 'irq 3:IRQ name3' "$T/out8.md"; then fail 'top-15 interrupts: 16th source leaked in'; fi
+ok 'part C deltas on known numbers: rates, qcom_stats, idle_states, top-15 interrupts ordering'
+
+echo 'ok - instantnoodlep-power-baseline: all defect checks pass (5 brief classes + part C deltas)'
