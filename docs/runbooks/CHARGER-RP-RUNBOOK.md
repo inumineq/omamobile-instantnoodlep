@@ -117,71 +117,72 @@ The order is fixed, and the first step uses no software.
 ## Session without a meter
 
 The owner has no inline USB-C meter. This section replaces every meter rule
-above for a session without one. Everything else stands.
+above for a session without one. Everything else stands. An independent
+review of these rules gave: the 500 mA steps are acceptable with the rules
+below; every step above 500 mA needs a meter.
 
 - [V] The phone measures its own USB input: the charger's `current_now` and
-  `voltage_now` come from the PMIC ADC, `current_max` is the AICL result and
+  `voltage_now` come from the PMIC ADC, `current_max` is the AICL status and
   `input_current_limit` is register 0x1370
-  (`qcom_pm8150b_charger.c:1519-1531`, `pm8150b.dtsi:157-166`).
+  (`qcom_pm8150b_charger.c:1516-1531`, `pm8150b.dtsi:157-166`).
 - [I] Nobody has compared that ADC with a meter on this phone. The readings
   are not independent of the PMIC under test. What the meter gave, an outside
-  proof of the true current, is lost. Check M1 bounds the error from one side
-  only.
-- [V] The input limit itself is held by PMIC hardware. This series changes
-  which value is written to 0x1370, and that register is read back directly.
+  proof of the true current and of VBUS, is lost, and nothing here replaces it.
+- [V] Measured on the daily kernel at 500 mA, screen off: input 5.05 V x
+  482 mA, battery 4.03 V x about 230 mA. The input reading sits just under
+  the limit, which fits a correct scale at this level. It says nothing about
+  higher currents.
+- [V] The owner's laptop USB-C port advertises Rp 3.0 A (0x1506 = 02, read
+  on the daily kernel). With C1 that port gets a 3 A limit, so it is not a
+  500 mA source for this kernel.
+
+What runs without a meter, and what waits:
+
+| Steps | Without a meter |
+| --- | --- |
+| G0 | yes, read only, every source and cable the owner has. Also `rd 0x150d` (legacy cable status: bit 1 legacy cable, bit 0 non-compliant legacy cable) |
+| G1, G2 | yes |
+| G3, G7 | yes, on a USB-A port with an A-to-C cable whose G0 read was 0x1506 = 08 |
+| G4, G5, G6, G8 | no. They raise the limit above 500 mA: wait for a meter |
+| any C-to-C source | no. Do not plug one while the candidate's charger module is loaded |
 
 Rules:
 
 - M-P4 (replaces P4): [`tools/instantnoodlep-usbin-watch`](../../tools/instantnoodlep-usbin-watch)
-  is on the phone as `/root/instantnoodlep-usbin-watch`. It reads once a
-  second and stops charging when a limit below trips.
-- M-P5 (replaces P5): sources that limit their own output, nothing else.
-  Laptop USB-A port, laptop USB-C port, and for the 3 A steps one brand-name
-  brick marked 5 V 3 A with its own C-to-C cable. No hub, power bank, car
-  charger, multi-port charger or unmarked brick.
-- Before every plug, with the step's ceiling in microamps (USB-A 500000,
-  laptop C 1500000, brick 3000000):
-  `nohup /root/instantnoodlep-usbin-watch <ceiling> > /root/usbin-<step>.log 2>&1 &`.
-  After the step: `kill "$(cat /root/usbin-watch.pid)"`. A `STOP` line in the
-  log is an Emergency.
-- The owner holds the cable at the phone for the first 30 s after every plug,
-  and touches plug and source once a minute after that (S9).
+  is on the phone as `/root/instantnoodlep-usbin-watch`. It reads about once
+  a second. A faster event can be missed.
+- M-P5 (replaces P5): one source only, a laptop USB-A port, direct, no hub.
+- Before every plug:
+  `nohup /root/instantnoodlep-usbin-watch 500000 > /root/usbin-<step>.log 2>&1 &`.
+  After the step: `kill "$(cat /root/usbin-watch.pid)"`.
+- A `STOP` line switches charging off and nothing else. The USB input stays
+  on. The owner pulls the cable at once; STOP is the signal, not the action.
+- An `INPUT LOST` line that the owner did not cause by unplugging means the
+  source switched itself off: Emergency.
+- A `NOTE AICL result` line is reported, not a stop.
+- The owner holds the cable at the phone for the first 30 s after every plug
+  and touches plug and port once a minute after that (S9).
 
-| # | Replaces | Trip, as the watch reads it | Action |
+| # | Replaces | Trip | Action |
 | --- | --- | --- | --- |
-| S5m | S5 | `voltage_now` > 5.6 V | Emergency |
-| S6m | S6 | `voltage_now` < 4.5 V twice in a row, or < 4.75 V for 30 s | Emergency |
-| S7m | S7 | `input_current_limit` above the step's ceiling; `current_now` above the limit in force + 10 % + 100 mA; `current_max` above the limit in force twice in a row; any of these unreadable with the input online; the source switches off | Emergency, at once |
+| S5m | S5 | watch: `voltage_now` > 5.6 V | Emergency |
+| S6m | S6 | watch: `voltage_now` < 4.5 V in two readings in a row, or < 4.75 V in 30 readings in a row | Emergency |
+| S7m | S7 | watch: `input_current_limit` above 500000; `current_now` above the limit + 10 % + 100 mA; a reading missing with the input online. Owner: `INPUT LOST` without an unplug | Emergency, at once |
 
-- E1 and R2: the owner pulls the cable at the phone.
-- R1: the check "the meter drops to the system load" becomes: within 10 s the
-  gauge `current_now` no longer has the G3 "charging" sign. Otherwise E1.
-- G3, G5 and G6: every "meter" expectation is read from the watch log instead.
+- E1 (replaces E1): the owner pulls the cable at the phone.
+- R1 (replaces R1): `echo 0 > $C/charging_enabled; cat $C/charging_enabled`
+  must print 0. Within 10 s the gauge `current_now` no longer has the G3
+  "charging" sign. Otherwise E1.
+- R2 (replaces R2): the owner unplugs at the phone; `cat $C/online` prints 0.
+- G3 expect, instead of the meter: every watch line has `icl_uA` 500000,
+  `iusb_uA` <= 650000 and `vusb_uV` between 4750000 and 5250000.
 - G7: stop the watch before `rmmod`, because the charger's sysfs directory
-  goes away. The meter check is dropped. The register reads and the gauge
-  reads of G7 stand.
+  goes away. The meter check is dropped; the register and gauge reads stand.
 
-Order of a session without a meter:
-
-1. G0 to G3 as written. G3 and G5 run with the screen off, so M1 has a known load.
-2. G4 on the laptop C port only, then G5.
-3. **M1**, from the logs of G3 and G5, before any brick is plugged. For every
-   reading taken while charging, with P_in = charger `voltage_now` x
-   `current_now` and P_bat = gauge `voltage_now` x \|`current_now`\|:
-   - P_in >= P_bat in every reading. A reading with P_in below P_bat means the
-     ADC reads low. Then the watch cannot see an over-current: stop here, and
-     the 3 A steps wait for a meter.
-   - P_in - P_bat <= 3.0 W with the screen off. Above that the ADC reads high
-     or the phone's load is unusual. This direction is safe: report it and
-     continue.
-   - [I] M1 catches an ADC that reads low by more than the share of the input
-     power that does not reach the battery, about a fifth at 1.5 A. A smaller
-     error stays hidden.
-4. Only after M1 passes, and only if G0 read 0x1506 = 02 from this brick: the
-   brick part of G4, then G6, then G8.
-5. G7 at any point after G3.
-
-Send back the `/root/usbin-*.log` files and the M1 numbers with the rest.
+Report with the rest: the `/root/usbin-*.log` files, and for G3 the input
+power (charger `voltage_now` x `current_now`) next to the battery power
+(gauge `voltage_now` x `current_now`). The pair is a plausibility note only.
+It does not calibrate the ADC.
 
 ## Later experiment, not in the first session: L1, a source lowers Rp while attached
 

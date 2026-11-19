@@ -9,16 +9,22 @@
 # the session when that view breaks a limit:
 #   input_current_limit above the step's ceiling (argument 1),
 #   input current above the limit in force + 10 % + 100 mA,
-#   the AICL result above the limit in force, twice in a row,
 #   input voltage above 5.6 V,
-#   input voltage below 4.5 V twice in a row, or below 4.75 V for 30 s,
+#   input voltage below 4.5 V in two readings in a row, or below 4.75 V in
+#   30 readings in a row,
 #   any of these readings missing while the input is online.
 # On a stop it writes 0 to charging_enabled, prints STOP and exits 1.
+# Two things are logged without a stop, because the owner must judge them:
+#   INPUT LOST when the input goes offline (an unplug and a source that
+#   switched itself off look the same from here),
+#   NOTE when the AICL result reads above the limit in force.
+# Readings are about one second apart, so a faster event can be missed.
 #
 # What it cannot do: the current and voltage come from the PMIC's ADC, whose
 # scale nobody has compared with a meter on this phone. It does not replace
 # an independent measurement. Switching charging off leaves the USB input on,
-# so the phone still draws its system load: the owner pulls the cable.
+# so the phone still draws its system load. STOP removes no input power:
+# the owner pulls the cable at once.
 #
 # Usage: instantnoodlep-usbin-watch <ceiling_uA> [seconds]
 # Stop it by its PID: kill "$(cat /root/usbin-watch.pid)".
@@ -38,8 +44,14 @@ usage() { echo "usage: ${0##*/} <ceiling_uA> [seconds]" >&2; exit 2; }
 [ $# -ge 1 ] || usage
 CEILING=$1
 DURATION=${2:-0}
-case "$CEILING$DURATION" in *[!0-9]*|'') usage;; esac
+# num <value>: a plain decimal of at most 9 digits, safe for sh arithmetic.
+num() { case "$1" in *[!0-9]*|''|??????????*) return 1;; esac; }
+
+num "$CEILING" || usage
+num "$DURATION" || usage
+num "$INTERVAL" || usage
 [ "$CEILING" -gt 0 ] || usage
+[ "$INTERVAL" -gt 0 ] || usage
 
 rd() { cat "$1" 2>/dev/null || echo NA; }
 
@@ -54,7 +66,7 @@ echo $$ > "$PIDFILE" 2>/dev/null || echo "cannot write $PIDFILE"
 
 echo "time online usb_type vusb_uV iusb_uA icl_uA aicl_uA | ceiling $CEILING"
 start=$(date +%s)
-sag=0; low=0; aicl_over=0
+sag=0; low=0; was_on=0
 
 while :; do
 	on=$(rd "$C/online"); ut=$(rd "$C/usb_type")
@@ -62,30 +74,34 @@ while :; do
 	icl=$(rd "$C/input_current_limit"); aicl=$(rd "$C/current_max")
 	echo "$(date +%T) $on $ut $cv $ci $icl $aicl"
 
-	case "$icl" in *[!0-9]*|'') stop "input_current_limit unreadable ($icl)";; esac
+	num "$icl" || stop "input_current_limit unreadable ($icl)"
 	[ "$icl" -gt "$CEILING" ] && stop "input limit $icl above the step ceiling $CEILING"
 
 	if [ "$on" = 1 ]; then
-		case "$cv$ci$aicl" in *[!0-9]*|'')
-			stop "input readings unreadable (v=$cv i=$ci aicl=$aicl)";;
-		esac
+		num "$cv" || stop "input voltage unreadable ($cv)"
+		num "$ci" || stop "input current unreadable ($ci)"
 		[ "$ci" -gt $((icl + icl / 10 + 100000)) ] &&
 			stop "input current $ci above the limit $icl + 10 % + 100 mA"
 		[ "$cv" -gt "$MAX_VUSB" ] && stop "input voltage $cv > $MAX_VUSB"
 
-		if [ "$aicl" -gt "$icl" ]; then aicl_over=$((aicl_over + 1)); else aicl_over=0; fi
-		[ "$aicl_over" -ge 2 ] && stop "AICL result $aicl above the limit $icl twice"
+		if num "$aicl" && [ "$aicl" -gt "$icl" ]; then
+			echo "  NOTE AICL result $aicl above the limit $icl"
+		fi
 		if [ "$cv" -lt "$MIN_VUSB" ]; then sag=$((sag + 1)); else sag=0; fi
 		[ "$sag" -ge 2 ] && stop "input voltage $cv < $MIN_VUSB twice"
 		if [ "$cv" -lt "$LOW_VUSB" ]; then low=$((low + 1)); else low=0; fi
 		[ "$low" -ge "$LOW_SAMPLES" ] && stop "input voltage < $LOW_VUSB for $LOW_SAMPLES samples"
+		was_on=1
 	else
 		[ "$on" = 0 ] || stop "online unreadable ($on)"
-		sag=0; low=0; aicl_over=0
+		if [ "$was_on" = 1 ]; then
+			echo "  INPUT LOST $(date +%T): Emergency unless the owner just unplugged"
+		fi
+		sag=0; low=0; was_on=0
 	fi
 
 	if [ "$DURATION" -gt 0 ] && [ $(( $(date +%s) - start )) -ge "$DURATION" ]; then
 		exit 0
 	fi
-	sleep "$INTERVAL"
+	sleep "$INTERVAL" || stop "sleep failed"
 done

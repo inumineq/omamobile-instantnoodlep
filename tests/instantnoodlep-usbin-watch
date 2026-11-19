@@ -74,13 +74,33 @@ ok "the sag stop waited for a second sample"
 
 fixture 1 4700000 450000 500000 500000; run 1 500000 1
 passes "4.70 V for two samples"
-fixture 1 4700000 450000 500000 500000; run 0 500000 20
+fixture 1 4700000 450000 500000 500000; run 1 500000 27
+passes "4.70 V for 28 samples"
+fixture 1 4700000 450000 500000 500000; run 1 500000 40
 stops "4.70 V for 30 samples" "for 30 samples"
-fixture 1 4750000 450000 500000 500000; run 0 500000 1
-passes "exactly 4.75 V for many samples"
+[ "$(printf '%s\n' "$out" | grep -c ' 4700000 ')" = 30 ] || fail "low-voltage stop not on sample 30: $out"
+ok "the low-voltage stop came on sample 30"
+fixture 1 4750000 450000 500000 500000; run 1 500000 1
+passes "exactly 4.75 V"
 
-fixture 1 5000000 450000 500000 550000; run 1 500000 3
-stops "AICL result above the limit" "AICL result 550000"
+fixture 1 5000000 450000 500000 550000; run 1 500000 1
+passes "AICL result above the limit is not a stop"
+case "$out" in *"NOTE AICL result 550000 above the limit 500000"*) ;; *) fail "no AICL note: $out";; esac
+ok "AICL result above the limit is logged"
+fixture 1 5000000 450000 500000 -; run 1 500000 1
+passes "no AICL result"
+
+# The source switches off, or the owner unplugs, in the middle of a session.
+fixture 1 5000000 450000 500000 500000
+( sleep 1.5; printf '0\n' >"$T/c/online" ) &
+run 1 500000 3; wait
+passes "input lost during the session"
+case "$out" in *"INPUT LOST"*) ;; *) fail "no INPUT LOST line: $out";; esac
+[ "$(printf '%s\n' "$out" | grep -c 'INPUT LOST')" = 1 ] || fail "INPUT LOST repeated: $out"
+ok "input lost is logged once"
+fixture 0 - - 500000 -; run 1 500000 1
+case "$out" in *"INPUT LOST"*) fail "INPUT LOST with the cable out from the start";; esac
+ok "no INPUT LOST before the first plug"
 
 fixture 0 - - 500000 -; run 1 500000 1
 passes "cable out, no input readings"
@@ -92,7 +112,7 @@ fixture - 5000000 450000 500000 500000; run 1 500000 1
 stops "no online" "online unreadable"
 
 fixture 1 5000000 450000 500000 500000
-for args in "" "abc" "0" "500000 x"; do
+for args in "" "abc" "0" "500000 x" "5000000000"; do
   rc=0
   # shellcheck disable=SC2086
   USBIN_WATCH_SYSFS=$T/c USBIN_WATCH_PIDFILE=$T/pid sh "$TOOL" $args >/dev/null 2>&1 || rc=$?
@@ -100,6 +120,15 @@ for args in "" "abc" "0" "500000 x"; do
 done
 [ "$(cat "$T/c/charging_enabled")" = 1 ] || fail "a usage error touched charging"
 ok "bad arguments are refused"
+for iv in 0 -1 x 0.5; do
+  rc=0
+  USBIN_WATCH_SYSFS=$T/c USBIN_WATCH_PIDFILE=$T/pid USBIN_WATCH_INTERVAL=$iv \
+    sh "$TOOL" 500000 1 >/dev/null 2>&1 || rc=$?
+  [ "$rc" = 2 ] || fail "interval '$iv': rc $rc, wanted 2"
+done
+ok "a bad interval is refused"
+fixture 1 50000000000 450000 500000 500000; run 1 500000 1
+stops "an absurdly long reading" "unreadable"
 
 fixture 1 5000000 450000 500000 500000
 rc=0; USBIN_WATCH_SYSFS=$T/none sh "$TOOL" 500000 1 >/dev/null 2>&1 || rc=$?
