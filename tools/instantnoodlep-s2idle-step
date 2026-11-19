@@ -73,8 +73,9 @@ if [ "$rtc" -gt 0 ]; then
 fi
 sync
 sleep 1
-echo freeze > /sys/power/state
-echo "state write rc=$?"
+rc=0
+echo freeze > /sys/power/state || rc=$?
+echo "state write rc=$rc"
 
 echo "== after $(date -Is) uptime=$(cut -d' ' -f1 /proc/uptime)"
 snap
