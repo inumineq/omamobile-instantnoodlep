@@ -36,6 +36,7 @@ name, never copy them in.
 | `docs/drafts/` | Drafts for upstream comments and proposals |
 | `tools/build-instantnoodlep-probe` | Builds probe/boot images (K1/K2/K3) |
 | `tools/instantnoodlep-slot-b-mark` | Builds the B5 GPT sectors that mark slot B successful |
+| `tools/instantnoodlep-holder-matrix` | Unattended runtime A/B holder rows A0-A7 on the phone ([runbook](../runbooks/HOLDER-MATRIX-RUNBOOK.md)) |
 | `scripts/` | Stage-0 capture, laptop tool fetch, initramfs root prep |
 | `tests/` | Host tests for the tools |
 | `captures/` | Private captures, gitignored, never committed |
