@@ -1,0 +1,28 @@
+Subject: [PATCH] i2c: qcom-cci: initialize completions for every hardware master
+
+A controller reset uses master 0 even when its bus is disabled in DT.
+Initialize completions before walking the enabled child nodes so the
+reset waiter and IRQ handler can use master 0 regardless of bus status.
+
+--- a/drivers/i2c/busses/i2c-qcom-cci.c
++++ b/drivers/i2c/busses/i2c-qcom-cci.c
+@@ -520,6 +520,10 @@
+ 	if (!cci->data)
+ 		return -ENOENT;
+ 
++	/* Controller reset uses master 0 even when its DT bus is disabled. */
++	for (i = 0; i < cci->data->num_masters; i++)
++		init_completion(&cci->master[i].irq_complete);
++
+ 	for_each_available_child_of_node_scoped(dev->of_node, child) {
+ 		struct cci_master *master;
+ 		u32 idx;
+@@ -558,8 +562,6 @@
+ 			else if (val == I2C_MAX_FAST_MODE_PLUS_FREQ)
+ 				master->mode = I2C_MODE_FAST_PLUS;
+ 		}
+-
+-		init_completion(&master->irq_complete);
+ 	}
+ 
+ 	/* Memory */

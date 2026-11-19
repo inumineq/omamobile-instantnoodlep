@@ -4,6 +4,16 @@
 Newest first. Findings that matter beyond one subsystem go here; subsystem
 detail lives in the *-PLAN.md files.
 
+## 2026-11-19: B2 CCI reset completion
+
+- [V] B1 booted and shut down. B2 hung before root with no journal or
+  pstore (coordinator report, 2026-11-18/19). B2's available CCI1 master
+  is master 1, while controller reset always waits on master 0's
+  completion ([CAMERA-BISECT.md](CAMERA-BISECT.md), B2 follow-up).
+- [I] Enabling empty master 0 or initializing all hardware masters
+  should clear that reset fault. The same runbook records the artifacts
+  and owner-attended RAM gates.
+
 ## 2026-11-18: two offline Type-C recovery candidates
 
 - [V] Both slim-all derivatives built with clang/LLD 23.1.6 on macbookpro
