@@ -88,7 +88,8 @@ the limit is the displayed value.
 
 The order is fixed, and the first step uses no software.
 
-- E1: the owner pulls the cable at the meter. Input and charging end at once.
+- E1: the owner pulls the cable at the meter, or at the phone when there is no meter. Input and charging
+  end at once.
 - E2: the owner holds Power+VolUp until the phone resets. It boots the slot from P1.
 - E3: after boot, the coordinator checks `uname -r` is the daily release and saves
   `/root/charge-watch.log` and any step log if reachable.
@@ -96,8 +97,10 @@ The order is fixed, and the first step uses no software.
 ## Soft rollback (end of every step, and S8)
 
 - R1: `echo 0 > $C/charging_enabled; cat $C/charging_enabled` must print 0. Within 10 s the meter
-  must drop to the system load (no charge current). Otherwise go to E1.
-- R2: the owner unplugs at the meter; the meter reads 0 A.
+  must drop to the system load (no charge current). Without a meter: within 10 s the gauge
+  `current_now` no longer has the "charging" sign. Otherwise go to E1.
+- R2: the owner unplugs at the meter; the meter reads 0 A. Without a meter: the owner unplugs at
+  the phone; `cat $C/online` prints 0.
 - R3: `sync; reboot -f` if the link is up, else Power+VolUp.
 - R4: `uname -r` is the daily release.
 - `rmmod` is never a rollback step.
@@ -142,9 +145,27 @@ What runs without a meter, and what waits:
 | --- | --- |
 | G0 | yes, read only, every source and cable the owner has. Also `rd 0x150d` (legacy cable status: bit 1 legacy cable, bit 0 non-compliant legacy cable) |
 | G1, G2 | yes |
-| G3, G7 | yes, on a USB-A port with an A-to-C cable whose G0 read was 0x1506 = 08 |
+| G3, G7 | yes, on a USB-A port and A-to-C cable that passed M0 below |
 | G4, G5, G6, G8 | no. They raise the limit above 500 mA: wait for a meter |
 | any C-to-C source | no. Do not plug one while the candidate's charger module is loaded |
+
+M0, the gate for the one source, read only, on the daily kernel, before any
+RAM boot. Plug the A-to-C cable into the USB-A port, wait 10 s, then five
+times, 2 s apart: `rd 0x1506; rd 0x150d; cat $C/usb_type $C/input_current_limit`.
+
+- Pass: every read has 0x1506 = 08, `usb_type` `SDP` and
+  `input_current_limit` 500000.
+- No-go for the whole meterless session: 0x1506 = 02 or 04 (the cable
+  advertises a current it must not: non-compliant), or `usb_type` `CDP` or
+  `DCP` or anything but `SDP`, or a limit above 500000. [V] The driver gives
+  CDP and DCP 1.5 A, in the daily kernel as well as in the candidates
+  (`qcom_pm8150b_charger.c:273-274`).
+- [V] The candidates do not read the PMIC's legacy-cable status (0x150d).
+  The 0x150d value is reported only, for a later guard.
+- [I] M0 shows what this port and cable did under the daily kernel. It does
+  not prove the candidate classifies them the same way. The watch's ceiling
+  is the second line, and it reacts only at its next reading, up to about
+  1 s after a higher limit is written.
 
 Rules:
 
@@ -174,6 +195,8 @@ Rules:
   must print 0. Within 10 s the gauge `current_now` no longer has the G3
   "charging" sign. Otherwise E1.
 - R2 (replaces R2): the owner unplugs at the phone; `cat $C/online` prints 0.
+- G3 and G7: `usb_type` is `Unknown` for about the first second after a plug,
+  then `SDP`, in every read. Any other type: Emergency.
 - G3 expect, instead of the meter: every watch line has `icl_uA` 500000,
   `iusb_uA` <= 650000 and `vusb_uV` between 4750000 and 5250000.
 - G7: stop the watch before `rmmod`, because the charger's sysfs directory
@@ -196,5 +219,6 @@ response on this board. Its stop is S7 as above, immediately, with no 10 s grace
 ## What to send back
 
 The G0 register reads per source, `/root/g4.log`, the 30 s readings of G3,
-G5 and G6 with the meter values, the G7 reads, and `/root/charge-watch.log`.
+G5 and G6 with the meter values (without a meter: the `/root/usbin-*.log`
+files), the G7 reads, and `/root/charge-watch.log`.
 Remove serial numbers and MAC addresses before pasting anything public.
