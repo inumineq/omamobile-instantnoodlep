@@ -37,7 +37,7 @@ installed as `/var/lib/s2idle/step`, with `S2IDLE_KEEP_CHARGING=1` so the
 tool does not switch charging off and the driver's own decision is what is
 tested. Its log is `/var/lib/s2idle/<step>.log`.
 
-AGENTS.md rule 1). The owner is present, with the inline meter, for every step that has a cable
+The owner is present, with the inline meter, for every step that has a cable
 in (H1-H8, W1, W2, W4, W5) and for the plug in W3.
 
 ## Prerequisites
