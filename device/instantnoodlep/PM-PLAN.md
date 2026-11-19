@@ -205,11 +205,19 @@ specified by the owner before G2-G5. [I]
 - **[V: kernel source `arch/arm64/boot/dts/qcom/sm8250.dtsi:2609-2642`]** The
   crypto node has the SM8250/SM8150 QCE compatibles, RX/TX DMA requests on
   channels 4/5 from `cryptobam`, six IOMMU stream mappings and an
-  `aggre2_noc` to `mc_virt` interconnect path. The BAM node is declared at
-  `:2609-2624`. **[V: `drivers/crypto/Kconfig:529-536`]** The QCE driver is
-  hidden on ARCH_QCOM unless `COMPILE_TEST` or `BROKEN` is enabled. Its source
-  requests both named channels (`drivers/crypto/qce/dma.c:19-32`) and uses the
-  RX DMA channel ID to select the paired pipe (`drivers/crypto/qce/core.c:160-180`).
+  `aggre2_noc` to `mc_virt` interconnect path. Those phandles map to the
+  `1700000.interconnect` and `163d000.interconnect` providers respectively
+  (`sm8250.dtsi:2105-2124`), matching both reported pending providers. The BAM
+  node is declared at `:2609-2624`. **[V: `drivers/crypto/Kconfig:529-536`]**
+  The QCE driver is hidden on ARCH_QCOM unless `COMPILE_TEST` or `BROKEN` is
+  enabled. Its OF table matches the fallback `qcom,qce` compatible
+  (`drivers/crypto/qce/core.c:332-336`); probe acquires the named memory
+  interconnect path, requests `rx` and `tx` channels, then checks the hardware
+  version (`core.c:198-260`). It requests both named DMA channels
+  (`drivers/crypto/qce/dma.c:19-32`), derives the paired pipe ID from the RX
+  channel (`drivers/crypto/qce/core.c:151-180`), and rejects QCE v5.0 only
+  (`core.c:151-167`). The source and DT declarations line up for SM8250;
+  successful BAM/IOMMU probe on this phone remains **[I]**.
   Kconfig also says this driver does not have exclusive access to the engine
   (secure-world races are possible) and is slower than the CPU
   (`drivers/crypto/Kconfig:537-540`), so this is a diagnostic RAM-only enable,
@@ -225,7 +233,10 @@ specified by the owner before G2-G5. [I]
 - **[V: `arch/arm64/boot/dts/qcom/sm8250-oneplus-instantnoodlep.dts:561-575`,
   `arch/arm64/boot/dts/qcom/sm8250.dtsi:3012-3047`,
   `drivers/gpu/drm/msm/adreno/a6xx_gmu.c:2282-2310`]** The board enables both
-  the GMU and GPU. Adreno's GPU probe initializes the GMU through its
+  the GMU and GPU. The GMU consumer node requests GPUCC and GCC clocks,
+  GPUCC CX/GX power domains and the Adreno SMMU (`sm8250.dtsi:3012-3040`),
+  matching the reported `gcc-sm8250` and `sm8250-gpucc` suppliers. Adreno's
+  GPU probe initializes the GMU through its
   platform-device node, but the GMU helper is called from the GPU driver and
   does not bind a driver to the separate GMU device
   (`drivers/gpu/drm/msm/adreno/a6xx_gmu.c:2282-2310`). Since fw_devlink marks a
@@ -238,22 +249,71 @@ specified by the owner before G2-G5. [I]
 
 #### Candidate and phone gate
 
-**[V]** Candidate `k3-daily2-qce` is daily2 plus only QCE support. This kernel
-tree hides `CRYPTO_DEV_QCE` behind `COMPILE_TEST` on ARCH_QCOM, so the minimal
-Kconfig route also enables `CONFIG_COMPILE_TEST=y`; QCE is `=m`, with the QCE
-algorithm choice enabled, and `LOCALVERSION` is pinned to
-`-instantnoodlep-k3-daily2-qce`. The resulting config, release, image size,
-modules and hashes will be recorded in the build directory below. **[I]**
-`qcrypto.ko` must load and bind against the phone's BAM/IOMMU before this can
-qualify as a sync-state fix.
+**[V: source `inumineq/linux-omarchy-mobile` daily2 commit
+`c5e256242`]** Candidate `k3-daily2-qce` was built on the daily2 DTS with QCE
+as a module. This kernel hides `CRYPTO_DEV_QCE` behind `COMPILE_TEST` on
+ARCH_QCOM, so `CONFIG_COMPILE_TEST=y` is required; `CRYPTO_DEV_QCE=m`, the
+default all-algorithm choice, and `LOCALVERSION=-instantnoodlep-k3-daily2-qce`
+are set. The config diff also retains Kconfig-selected `GENERIC_IRQ_CHIP=y`,
+`GPIO_EP93XX=y`, `PIC32_EVIC=y`, `VIRTIO_PCI_ADMIN_LEGACY=y` and changes
+`GPIO_GENERIC` from module to built-in; most compile-test-only options were
+explicitly returned to `n` after `olddefconfig`. Build used clang/LLD 23.1.3
+with `LOCALVERSION=` in the build environment to keep Kbuild from appending
+`+` to the release. **[I]** `qcrypto.ko` still must load and bind against the
+phone's BAM/IOMMU before this can qualify as a sync-state fix.
+
+**[V] Build report:** release
+`7.3.0-rc6-instantnoodlep-k3-daily2-qce`, raw Image `image_size=0x1750000`
+(below the `0x2b60000` ABL ceiling), and `qcrypto.ko` contains OF aliases for
+`qcom,qce`, `qcom,crypto-v5.1`, and `qcom,crypto-v5.4`. Artifacts are in
+`~/android/build/k3-daily2-qce/`; `SHA256SUMS` verifies the listed files.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `Image.gz` | `96390bff0ca88084c9943b7c9de9a569e4d41ce112860f5c0544e3e39512fa53` |
+| `sm8250-oneplus-instantnoodlep.dtb` | `4a58be32100b1baeceb84949b8a58258adbcc473f9e5ba180b2d27408e7984a7` |
+| `modules-7.3.0-rc6-instantnoodlep-k3-daily2-qce.tar.zst` | `60fa1ffdef55ee4f9d228c27f0a504c07e5ee60a805fcdda40860d7e19856037` |
+| `kernel.release` | `f21dc18a920c9af8db0b994d52e5d2852581c4829ba805e8523de55ff1c72fa7` |
+| `image_size.txt` | `a2a5bad47454646aaba23fc62a94e5145ecaf59449ff61235d1d7c0cbe42969b` |
+| `kernel.config` | `27db735bc013d50c57f8ba83a0ea0130562afe67361d71ceddf46894c5c24d03` |
+| `SHA256SUMS` | `c60a0dffb1b9a08dcf953ad9f8e7c98f46b396a01d49f895fd6765856393d70f` |
+
+No boot image was packed: this host has no prepared initramfs root, stock
+entry-16 overlay, AOSP `mkbootimg.py` or `ufdt_apply_overlay`, which the repo
+packer requires. **[I]** A boot image may be packed on the owner host from
+these exact kernel/DTB artifacts and the established daily2 runbook inputs.
 
 Owner/coordinator only; no phone access or boot has been done by this worker.
+This host has no private packer inputs, so no `boot-daily2-qce.img` exists
+yet. On the coordinator's host, use the established daily2 inputs to pack it
+from the repository root:
+
+```sh
+tools/build-instantnoodlep-probe \
+  --kernel ~/android/build/k3-daily2-qce/Image.gz \
+  --dtb ~/android/build/k3-daily2-qce/sm8250-oneplus-instantnoodlep.dtb \
+  --ssh-key ~/.ssh/omamobile_probe.pub \
+  --mkbootimg ~/aosp-tools/system/tools/mkbootimg/mkbootimg.py \
+  --omarchy-mobile ~/src/omarchy-mobile \
+  --initramfs-root ~/android/build/initramfs-root \
+  --stock-overlay ~/android/build/p3/entry16.dtbo \
+  --ufdt-apply ~/android/build/ufdt/ufdt_apply_overlay \
+  --boot 2 --root userdata --debug-shell \
+  --out ~/android/build/k3-daily2-qce/boot-daily2-qce.img
+```
+
 Use the existing DAILY-K3-PLAN §8 Part R prep and rollback. First verify all
 artifact hashes and stage the matching modules archive under
 `/usr/lib/modules/<release>/` (do not replace or unpin the installed daily
 module tree). With the owner ready and a recovery path available, RAM-boot
-only `~/android/build/k3-daily2-qce/boot-daily2-qce.img`. Expect a successful
-boot, SSH and `uname -r` equal to the recorded candidate release. Confirm
+only the packed image:
+
+```sh
+fastboot boot ~/android/build/k3-daily2-qce/boot-daily2-qce.img
+```
+
+**[I]** Expect a successful boot, SSH and `uname -r` equal to
+the recorded candidate release. Confirm
 `qcrypto` loaded automatically; if it did not, run `sudo modprobe qcrypto`
 once. Confirm `/sys/bus/platform/devices/1dfa000.crypto/driver` resolves to
 the QCE driver, then capture
@@ -270,7 +330,7 @@ cat /sys/kernel/debug/qcom_stats/cxsd
 cat /sys/kernel/debug/qcom_stats/aosd
 ```
 
-Expect the crypto device driver symlink to resolve; report any GMU pending
+**[I]** Expect the crypto device driver symlink to resolve; report any GMU pending
 line separately. A pending log line is historical, so record whether it was
 emitted before or after QCE bound. Compare counter counts and elapsed-time
 values between reads; the acceptance condition is that relevant counters
@@ -299,7 +359,8 @@ for i in $(seq 12); do
 done | tee floor.txt
 ```
 
-Median `current_now` is the reported floor; expect status `Discharging`.
+**[V: upstream issue #867, Part B]** Median `current_now` is the reported
+floor and the status column should say `Discharging`.
 Record kernel, module/config, Wi-Fi power-save, room temp if known and gauge
 calibration state. Values are µA; battery temperature is tenths °C and zone
 temperatures are thousandths °C. Stop if SSH drops before the log is safely

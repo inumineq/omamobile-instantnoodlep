@@ -4,6 +4,24 @@
 Newest first. Findings that matter beyond one subsystem go here; subsystem
 detail lives in the *-PLAN.md files.
 
+## 2026-11-19: SM8250 interconnect sync-state diagnostic candidate
+
+- [V: owner phone report, k3-daily2] PSCI idle works, while `ddr_stats`,
+  `cxsd`, and `aosd` each show `Count 0`; interconnect providers report pending
+  sync state due to `1dfa000.crypto` and `3d6a000.gmu`. The report also gives
+  about 360 mA screen-off draw. The capture remains private.
+- [V: `PM-PLAN.md` §4.4] Source audit found the crypto node's QCE/BAM DMA path
+  declared and built a QCE module candidate on daily2. The QCE Kconfig guard
+  requires `COMPILE_TEST` on ARCH_QCOM; the config warns about secure-world
+  races and possible slower performance. This candidate is RAM-only.
+- [V: `PM-PLAN.md` §4.4] Release `7.3.0-rc6-instantnoodlep-k3-daily2-qce`,
+  `image_size=0x1750000`, checksums and artifact location are recorded. [I]
+  QCE probe/bind, resolution of the crypto sync-state wait, qcom_stats deltas,
+  the GMU wait, and the Part B screen-off floor await the owner RAM gate.
+- [I: `PM-PLAN.md` §4.4] No second variant is prepared unless the QCE module
+  cannot bind; the crypto-node-disabled variant would test only the
+  absent-consumer path and would not accelerate crypto.
+
 ## 2026-11-18: two offline Type-C recovery candidates
 
 - [V] Both slim-all derivatives built with clang/LLD 23.1.6 on macbookpro
