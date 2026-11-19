@@ -119,28 +119,70 @@ information per boot. Tests that need no new kernel come first. Each kernel
 candidate changes one variable and gets a gated RAM-boot runbook in PM-PLAN
 before it is requested.
 
-The ranking below is the first version. Four research units are checking it
-against the kernel source and against other mainline SM8250 ports. Their
-results will reorder steps 3-6 and are recorded in §4.
+This is the second version of the ranking. Four research units checked the
+first one against the kernel source and against other mainline ports; what
+they changed is in §3.1.
 
 | Rank | Step | Needs | Answers | Target |
 | --- | --- | --- | --- | --- |
-| 1 | Baseline with the #867 recipe, Part A, B and C, on the daily kernel and on `k3-daily2-qce-gmu` | existing images | the comparable floor, and who is awake | T2.1, T5 |
-| 2 | s2idle first attempt: `pm_test` ladder, then one real suspend with a power-key wake and an RTC dead-man | existing image | whether suspend works at all, and whether cxsd and aosd move inside s2idle | T1.2, T1.5 |
-| 3 | Runtime holder matrix over Wi-Fi SSH, cable out: one volatile toggle at a time, reading `qcom_stats`, the cluster domain and the gauge after each. Toggles: unbind the USB gadget, unload bwmon, Wi-Fi off, PCIe ASPM policy, UFS auto-hibernate | existing image | which holder keeps the cluster and CX up | T1.1-T1.3 |
-| 4 | Drop `pd_ignore_unused`, then `clk_ignore_unused` | repack only, one flag per boot | whether unused domains and clocks are the CX holder | T1.4 |
-| 5 | One kernel candidate per confirmed holder, most valuable first. Suspects: USB interconnect vote held with the cable out, CPU bwmon interrupt rate, UFS and PCIe link power states | kernel build | the fix | T1.1-T1.3, T2.1 |
-| 6 | Wake sources in the DTS and drivers: RTC alarm, charger plug | kernel build | T1.6 | T1.6 |
-| 7 | Charging C1: source detection and input current limit for DCP and Type-C current advertisement | kernel build, owner present | faster charging from a wall charger at 5 V | T3.1, T3.2 |
-| 8 | Charging C2: JEITA and skin-temperature current steps, termination and recharge in the kernel | kernel build, owner present | T3.3, T3.4, T3.7 | T3 |
-| 9 | Charging C3: `charge_control_end_threshold` | kernel build | T3.5 | T3.5 |
-| 10 | Charging C4: USB-PD sink at 9 V with Type-C enabled and DP alt mode off | kernel build, owner present | whether PD can be had without the DP gadget regression | T3.2 |
-| 11 | Thermal: skin zone, then `power_allocator` | kernel build | T4 | T4 |
-| 12 | Device package: sleep profile, wake switches, charge-limit and Wi-Fi power save defaults | package build | T1.5, T3.5 | T5 |
+| 1 | s2idle first attempt: `pm_test` ladder, one real sleep with an RTC dead-man, then power-key wake. Runbook: [`S2IDLE-FIRST-RUNBOOK.md`](../../docs/runbooks/S2IDLE-FIRST-RUNBOOK.md) | existing image | whether suspend works, and whether cxsd and aosd move once every CPU is down | T1.2, T1.5, T1.6 |
+| 2 | Runtime holder matrix over Wi-Fi SSH, cable out, one volatile toggle per row: Wi-Fi power save on, Bluetooth off, UFS QoS off, bwmon unloaded, CPUs 1-7 offline, USB runtime PM allowed, all combined | existing image, the matrix tool | what breaks the cluster's idle window and which toggle lowers the floor | T1.1, T2.1 |
+| 3 | Baseline with the #867 recipe, Part A, B and C | existing image, the baseline tool | the comparable floor for the upstream issue | T2.1, T5 |
+| 4 | Kernel K2: CPU DDR votes active-only in `sm8250.dtsi` | kernel build | whether DDR low-power mode appears once the CPUs' vote leaves the sleep set | T1.3 |
+| 5 | Charging K1: two driver fixes and a Type-C Rp-aware input limit without the Type-C stack | kernel build, owner present, inline USB-C meter | 1.5 A or 3 A input from USB-C sources that are held at 500 mA today | T3.1, T3.2 |
+| 6 | Drop `clk_ignore_unused`, then `pd_ignore_unused`, one flag per boot | repack only. Check the USB node for `qcom,select-utmi-as-pipe-clk` first | whether orphan clocks and domains hold CX | T1.4 |
+| 7 | Device package: Wi-Fi power save on, USB `power/control=auto`, Bluetooth off when idle. Each only after its matrix row showed a gain | package build | the awake floor without a kernel change | T2.1, T5 |
+| 8 | Charger wake: mark the charger device wakeup-capable so a plug wakes the phone | kernel build | T1.6 | T1.6 |
+| 9 | Charging: `charge_control_end_threshold` and `charge_behaviour` | kernel build | T3.5, and the out-of-tree `charging_enabled` property goes away | T3.5 |
+| 10 | Charging: FCC step-down from the charger thermistor, then a skin zone | kernel build, owner present | T3.3, T4.2 | T3.3, T4 |
+| 11 | Charging: Type-C stack as sink with DP alt mode removed, PD at 5 V / 3 A | kernel build, owner present | whether PD can be had without the DP gadget regression | T3.2 |
+| 12 | Device package: sleep profile with `SuspendState=freeze`, wake switches, charge-limit default. Upstream: `omamobile-sleepd` power-key IRQ name | package build | T1.5, T3.5 | T5 |
+| 13 | Thermal: `power_allocator` | kernel build | T4.3 | T4 |
 
-Steps 1-3 share one phone session where possible. Steps 7-10 run in parallel
-with 4-6 in separate kernel branches and are merged into one daily candidate
-only after each passed alone.
+USB-PD at 9 V is deferred: at the driver's 2 A charge current, 5 V / 3 A
+already covers the cell plus the system load [I: computed in the charging
+review, not measured].
+
+### 3.1 What the source review changed
+
+All of this is source analysis on kernel `instantnoodlep-k3-daily2-qce-gmu` @
+`bd566b604`. Nothing here was measured on the phone.
+
+- [V] The RPMh sleep set is written only when the cluster power domain turns
+  off (`drivers/soc/qcom/rpmh-rsc.c:943-952`). The cluster state needs every
+  CPU idle for about 13 ms (`sm8250.dtsi:365-371`, entry plus exit latency
+  and minimum residency). [I] With 8 cluster entries in 2.3 h, `Count: 0` on
+  ddr, cxsd and aosd is expected whatever the votes look like. Cluster
+  collapse is the precondition, and s2idle forces it. That is why s2idle is
+  rank 1.
+- [V] The eight CPU nodes vote for DDR bandwidth with interconnect tag 0
+  (`sm8250.dtsi:111`), and tag 0 means "always", so the vote stays in the
+  sleep set (`drivers/interconnect/qcom/icc-rpmh.c:92-93`). sc7180 uses the
+  active-only tag on the same path (`sc7180.dtsi:92`). [I] This keeps DDR up
+  even in s2idle. It is kernel candidate K2.
+- [V] dwc3 forbids runtime PM at probe (`drivers/usb/dwc3/core.c:2383`), so
+  the USB controller holds its power domain and bandwidth vote with or
+  without a cable.
+- [V] Wi-Fi power save is off (Part A in #867). [I] It is probably the
+  largest single term in the awake floor.
+- [V] `pcie0` has no `interconnects` property in `sm8250.dtsi`, and the bwmon
+  votes are active-only. Neither holds DDR in sleep. Both were suspects
+  before.
+- [V] The charger caps a USB-C source without BC1.2 data lines at 500 mA: the
+  Type-C current advertisement is defined in the driver but never read
+  (`drivers/power/supply/qcom_pm8150b_charger.c:197-211, 514-517`). The laptop
+  port's 500 mA minus the system load is the 150-190 mA seen at the battery
+  [I: the load share is computed].
+- [V] The charger's kernel policy does not depend on the userspace guard:
+  temperature zones from the gauge, a hard stop at 4.46 V, safe limits on bad
+  gauge data, and a PMIC watchdog that stops charging when the policy work
+  stops (`qcom_pm8150b_charger.c:871-907, 1018-1023, 984-991, 1108-1113`).
+- [V] No other mainline SM8250 port publishes cxsd or aosd counts or a
+  suspended current, so the T2 goals stay proposals until measured here.
+
+Steps 1-3 need no new kernel. The charging steps run in parallel with the
+sleep steps in separate kernel branches and are merged into one daily
+candidate only after each passed alone.
 
 ### Gates that apply to every step
 
@@ -160,3 +202,7 @@ only after each passed alone.
 | 2026-11-19 | Targets and plan live in this file, not in PM-PLAN | PM-PLAN is changed by open PRs #136 and #141 |
 | 2026-11-19 | `fw_devlink.sync_state=timeout` is not used | it kills the USB gadget [V: PM-PLAN §4.5 on PR #141] |
 | 2026-11-19 | Warp/VOOC and wireless charging stay out of scope | proprietary protocols [V: POWER-M5-PLAN §3.1, §3.4] |
+| 2026-11-19 | s2idle moves to rank 1 | the sleep set is applied only at cluster power-off, which s2idle forces (§3.1) |
+| 2026-11-19 | First kernel candidate for sleep is the CPU DDR vote tag, not USB or bwmon | §3.1 |
+| 2026-11-19 | Charging starts with a Type-C Rp-aware input limit in the local driver. The local driver is kept instead of porting the `qcom_smbx` smb5 patch | the smb5 patch writes Type-C mode at init and was held up in review for it [I: from the charging review's reading of the list thread] |
+| 2026-11-19 | USB-PD at 9 V is deferred | no gain at a 2 A charge current (§3) |
