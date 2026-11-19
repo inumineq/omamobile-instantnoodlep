@@ -4,6 +4,16 @@
 Newest first. Findings that matter beyond one subsystem go here; subsystem
 detail lives in the *-PLAN.md files.
 
+## 2026-11-19: Dell USB-C dock on typec-fix1
+
+- [V: attended phone report] Fix1 showed DisplayPort and charged on the
+  U3219Q. The Logitech receiver produced no keyboard or mouse input,
+  and the laptop gadget had not returned 60 seconds after replug.
+- [I] Fix2 is next. The
+  [T7 runbook](TYPEC-DP-PLAN.md#t7-owner-attended-ram-gate) captures the
+  negotiated DP assignment, Type-C and DWC3 roles, xHCI and hub state
+  through detach and replug.
+
 ## 2026-11-18: two offline Type-C recovery candidates
 
 - [V] Both slim-all derivatives built with clang/LLD 23.1.6 on macbookpro
@@ -13,7 +23,7 @@ detail lives in the *-PLAN.md files.
   checksums and source findings in
   [Type-C recovery research](../../docs/research/typec-dp-usb-recovery.md).
 - [I] Gadget recovery and USB2 hub enumeration await independent
-  RAM-boot gates T6 and T7 in `TYPEC-DP-PLAN.md` §7.
+  RAM-boot gates (fix1 result and T7 follow-up above) in `TYPEC-DP-PLAN.md` §7.
 
 ## 2026-11-18: screen-off idle audit and camera-hang bisect prepared offline
 

@@ -186,49 +186,179 @@ Use `~/android/build/k3-slim-typec-ram5v/boot-typec-5v.img` (sha256
 instead of `boot-typec.img`. Restore the 9 V/12 V PDOs only together with the
 qualified charger (POWER-M5-PLAN P2/P3) and its owner gate.
 
-## 7. Recovery candidates after DP disconnect
+## 7. Dell U3219Q hub and gadget recovery
 
-Updated 2026-11-18 after the slim-all DP and replug observations. Research:
-[`docs/research/typec-dp-usb-recovery.md`](../../docs/research/typec-dp-usb-recovery.md).
-Both candidates branch from `instantnoodlep-k3-slim-all` and use the base
-`~/android/configs/slim-all.config`. They have separate images and module
-trees. The coordinator packs the boot images from the artifacts. Use the checksums
-and release strings in the research report to verify the input before packing.
-For each candidate, the coordinator runs the corresponding RAM boot command
-with the phone selected by serial and the owner present.
+[V: 2026-11-19 attended phone report] RAM kernel typec-fix1
+(`d3b1dfc5c376`) showed DP and charged on the U3219Q, but the Logitech
+receiver produced neither keyboard nor mouse input. The laptop gadget
+had not returned 60 seconds after replug. [V: 2026-11-18 slim-all RAM
+test, learning `l-4ba3a6b2`] The prior failure included USB root-port
+`connect-debounce failed`, a QMP timeout and DWC3 `ep0out` failure.
+[I] The fix1 result alone does not establish where either path failed.
+
+### Required transitions
+
+- [V: kernel base `c30e3f696707`, `drivers/usb/typec/tcpm/tcpm.c:1224-1234`,
+  `drivers/usb/dwc3/drd.c:450-473`, `drivers/usb/dwc3/core.c:290-301`]
+  TCPM passes the negotiated USB data role to DWC3, which queues role
+  work. [I] For this dock expect the phone to remain a power **sink** but
+  become the data **host** (DFP), via a PD data-role swap if attached as
+  UFP. Expect `[host]` in Type-C `data_role` and `host` from the DWC3 role
+  switch, then a bound `xhci-hcd` child and USB2 root hub. The root hub must
+  detect, debounce, reset and enumerate the Dell hub, and the receiver
+  must enumerate below it and bind a HID driver before testing input.
+  Picture and charging alone establish neither data role nor hub status.
+- [V: base `drivers/phy/qualcomm/phy-qcom-qmp-combo.c:4810-4848` and
+  mainline commit `f546912bcac6`] C/E allocates all four SuperSpeed pairs
+  to DP. D/F allocates two to DP and leaves one SuperSpeed TX pair and one RX pair for USB.
+  USB2 D+/D− remains available in both modes through the separate
+  USB2 PHY. [V: base `drivers/usb/typec/mux/fsa4480.c:88-105`] The existing
+  FSA4480 code enables the USB path in all four of those states.
+- [V: Dell U3219Q User's Guide, pp. 14, 59 and 68] Dell documents USB2 data
+  on the USB-C input alongside DP and PD, with a separate USB 3.0 upstream
+  input. The guide documents automatic USB upstream selection for USB-C
+  video. [I] Treat this U3219Q connection as a USB2 hub test, expect C/E
+  and read the negotiated assignment. The guide does not establish the
+  pin assignment or document a High Data Speed control. If the actual
+  OSD offers one, log it and require D/F before treating it as a two-lane
+  control. A known multifunction DP dock is another D/F control.
+  [Dell U3219Q User's Guide](https://downloads.dell.com/manuals/all-products/esuprt_display_projector/esuprt_display/dell-u3219q-monitor_user%27s-guide_en-us.pdf)
+- [V: base QMP lines 4044–4099 and legacy DWC3 glue lines 517–531, 787–795]
+  QMP holds USB3 PCS in reset in DP-only mode and keeps a common PIPE
+  clock reference for USB2. Fix2 selects UTMI as the wrapper's PIPE
+  clock source at probe using `qcom,select-utmi-as-pipe-clk`; its DTB
+  still describes both PHYs. [I] If the phone reaches host and xHCI
+  appears but the Dell hub only works on fix2, the clock selection is
+  implicated. This is USB2 operation over D+/D− with the normal xHCI
+  driver. Static UTMI is a diagnostic, and SuperSpeed needs a separate
+  baseline check over a known SuperSpeed laptop port and cable.
+- [V: base TCPM lines 5147–5205, DWC3 core role worker and QMP lines
+  4201–4214, 4810–4848] TCPM requests SAFE/none and removes the partner
+  on detach. QMP's base mux drops mode changes while DP is powered.
+  Fix1 queues the request for DP power-off. [I] On detach expect DP
+  shutdown, xHCI teardown and restoration of QMP USB-only routing.
+  Laptop attach should negotiate phone UFP/device, restore PIPE for
+  SuperSpeed-capable operation and let the gadget bind and enable ep0.
+  A role readout of `device` alone is insufficient. Require a new
+  laptop enumeration, network function binding and usable gadget SSH.
+  The detached DWC3 role can reflect the board's peripheral default.
+
+### T7 owner-attended RAM gate
+
+[V: build inputs, sizes and SHA-256 manifest in
+[recovery research](../../docs/research/typec-dp-usb-recovery.md#fix2)]
+Fix2 is the independent static-UTMI candidate `255b48e80527`, with
+`image_size=0x1780000` and clang/LLD 23.1.6. [I] Run fix2 first. Verify
+the inputs before packing and check the packed boot image against the
+coordinator's packing manifest. Check T1/R baseline and working Wi-Fi
+SSH or a phone-local terminal before unplugging the laptop. Use the same
+cable orientation for each comparable run and keep the receiver and
+monitor input fixed. Unplug the separate USB-B upstream cable for this
+test. Keep captures in the coordinator's private `captures/` and share
+only redacted excerpts.
 
 ```sh
-fastboot -s "{{SERIAL}}" boot ~/android/build/k3-typec-fix1/boot-typec-fix1.img
-# Separately, after exiting the first RAM boot and returning to the bootloader:
 fastboot -s "{{SERIAL}}" boot ~/android/build/k3-typec-fix2/boot-typec-fix2.img
 ```
 
-Expect fastboot to report `OKAY` for sending and booting, then confirm the
-candidate release with `uname -r` before testing. Before connecting the
-monitor, confirm a plain laptop replug still enumerates at baseline. Keep the
-same cables, plug orientation, and U3219Q setting for each comparison.
-Read the active pin assignment from the bracketed value in
-`/sys/bus/typec/devices/*/displayport/pin_assignment` while DP is up.
-C/E confirms four-lane DP. D/F confirms the shared DP/USB configuration.
-Use `lsusb -t` on the phone for the monitor hub and on the laptop for the
-phone gadget. Capture logs on both ends. Use a local phone journal or a
-separate phone log path that spans the interval without the gadget.
-Keep captures private as in §5.
+[I] **Expect** fastboot sending and booting both `OKAY`, then
+`uname -r` = `7.3.0-rc6-instantnoodlep-k3-typec-fix2`. Take a plain laptop
+replug baseline before DP. Start the event stream below before the first
+disconnect. Take snapshots at laptop baseline, unplugged, dock attached
+with picture, receiver removal/reinsert, dock detached, and laptop
+replug immediately and at 60 s. Record the owner-visible picture, charge
+state and both keyboard/mouse actions. On the laptop compare `lsusb -t`,
+`sudo dmesg -w` and gadget SSH before and after DP.
 
-| Step | Candidate and action | Pass evidence | Stop condition | Rollback |
-| --- | --- | --- | --- | --- |
-| T6 | Candidate 1. **OWNER** connects the Dell U3219Q in High Resolution mode, confirms DP picture and four-lane DP, unplugs the monitor, then reconnects the laptop cable. | The laptop `dmesg` shows a new high-speed or SuperSpeed USB device and `cdc_ncm` or `cdc_ether` binds. SSH returns over NCM. Sysfs reports `data_role=device` and the DWC3 role switch reports `device`. Phone `dmesg` has no `phy initialization timed-out` or DWC3 `ep0out` error. | DP never enters or exits, the phone stops responding, or the USB gadget does not return within 2 min. A replug timeout, new `ep0out` errors, or a stuck role fail the recovery gate. | **OWNER** unplugs the cable and holds Power+VolUp 10-30 s to leave the RAM boot. Daily K3 remains on `boot_b`. Do not flash. |
-| T7 | Candidate 2. **OWNER** connects the U3219Q in High Resolution mode, then plugs a keyboard and mouse into the monitor hub. Unplug the monitor and reconnect the laptop cable after the hub check. | `lsusb -t` shows the hub at `480M` with the keyboard and mouse below it at their own speeds; `dmesg` shows the hub's `new high-speed USB device` and HID enumeration and no `connect-debounce failed`. The DP picture remains. The laptop gadget returns after the monitor is removed. Compare the laptop link speed before and after DP. | Hub still fails to enumerate, `connect-debounce failed` repeats, the phone stops responding, or DP or gadget recovery fails. | **OWNER** unplugs the cable and holds Power+VolUp 10-30 s to leave the RAM boot. Daily K3 remains on `boot_b`. Do not flash. |
+[I] **Expect on the dock** sink/host, C/E, bound xHCI, the hub below
+the USB2 root hub (normally `480M`) and the receiver below the hub with
+a HID interface. **Expect after laptop replug** device role, gadget NIC
+enumeration and SSH within 60 s. [I] **Stop** on wrong release, missing
+baseline or independent capture access, unresponsive phone, lost DP,
+or new QMP/PIPE/ep0 errors. A missing hub or input fails the dock gate.
+If the phone remains responsive, finish the single detach/replug
+observation and stop if the gadget has not returned at 60 s. Capture
+before rollback. Use T5 to leave the RAM boot and return to daily2 on
+`boot_b`. If unresponsive the owner disconnects USB and uses the
+Power+VolUp recovery from the candidate recovery procedure. No partition writes.
 
-Run T6 and T7 independently from the same baseline. Record `uname -r`,
-`image_size`, role values, `lsusb -t`, and the masked DP/QMP/DWC3 log lines.
-T6 tests observable USB recovery. The candidate config disables dynamic
-debug, so confirming whether QMP took its deferred path needs a debug build.
-If a timeout or `gcc_usb3_prim_phy_pipe_clk already disabled` warning
-appears, mark whether it preceded DP entry, followed detach, or occurred
-on laptop replug. A repeat of the known entry error fails full qualification.
-If the phone and display stay responsive, record detach and replug as a
-separate result. For T7, record functional keyboard and mouse events
-and watch for a SuperSpeed regression from static UTMI selection. As a
-separate display-menu control, repeat the baseline with High Data Speed
-and record the negotiated assignment.
+[V: capture interfaces are Linux Type-C, USB role, platform driver,
+UDC and USB device sysfs plus usbutils/systemd tools] Run this snapshot
+on the phone as root for each phase, replacing the phase label.
+Missing attributes are printed explicitly.
+
+```sh
+phase=laptop-baseline
+printf '\nphase=%s uptime=' "$phase"
+cat /proc/uptime
+uname -r
+for f in /sys/class/typec/port0/data_role /sys/class/typec/port0/power_role \
+         /sys/class/typec/port0/port_type /sys/class/typec/port0/power_operation_mode \
+         /sys/class/typec/port0/orientation \
+         /sys/bus/typec/devices/port0*/displayport/pin_assignment \
+         /sys/class/usb_role/*/role /sys/class/udc/*/state \
+         /sys/class/udc/*/current_speed; do
+    printf '%s: ' "$f"
+    if [ -r "$f" ]; then cat "$f"; else printf 'absent\n'; fi
+done
+printf 'Bound xHCI platform devices:\n'
+find /sys/bus/platform/drivers/xhci-hcd -maxdepth 1 -type l \
+    -name 'xhci-hcd.*' -printf '%f\n' 2>/dev/null
+lsusb -t
+dmesg --color=never | grep -Ei 'pmic.typec|tcpm|typec|fsa4480|displayport|msm.*dp|qmp|pipe_clk|utmi|dwc3|xhci|usb [0-9]+-|usb[0-9]+-port|logitech|hid|ep0|cdc_ncm|cdc_ether'
+```
+
+[V: `udevadm monitor` supports repeatable subsystem filters and kernel
+and udev event sources] In a second phone session independent of the USB
+gadget, start this before the baseline. Stop it with Ctrl+C after the
+final snapshot. Use uptime to align events with dmesg. Collect this over
+Wi-Fi to a private laptop log or watch it from the phone console.
+
+```sh
+stdbuf -oL udevadm monitor --kernel --udev \
+    --subsystem-match=typec --subsystem-match=usb_role \
+    --subsystem-match=platform --subsystem-match=usb \
+    --subsystem-match=udc --subsystem-match=hid --subsystem-match=input
+```
+
+### Build-host decision after T7
+
+- [I] If Type-C remains device or DWC3 never reaches host, inspect TCPM
+  DR_Swap and the DWC3 role worker first. If host is reported without
+  xHCI, check the `dwc3_host_init()` return and child binding. If the hub
+  and receiver enumerate, check HID binding and pairing before proposing
+  PHY changes.
+- [I] If fix2 restores the four-lane hub but loses SuperSpeed in ordinary
+  USB or D/F, make the next candidate dynamic instead of carrying
+  static UTMI into daily2. In
+  `drivers/usb/dwc3/dwc3-qcom-legacy.c`, adapt the v3 clock switching
+  sequence to `dwc3_qcom_select_utmi_clk()`: gate the clock using
+  `PIPE_UTMI_CLK_DIS`, set `PIPE_UTMI_CLK_SEL | PIPE3_PHYSTATUS_SW` for
+  C/E and clear those bits when USB PHY PIPE is ready again. Serialize
+  the switch against wrapper PM and controller reset. Keep the static
+  property semantics for existing USB2-only boards. Use the legacy
+  wrapper `&usb_1` in
+  `arch/arm64/boot/dts/qcom/sm8250-oneplus-instantnoodlep.dts` for any
+  wrapper `mode-switch` registration and add the matching legacy
+  binding and connector graph routing. Arrange notification order so
+  entry selects UTMI before PHY PIPE is withdrawn and exit selects PIPE
+  after PHY restoration. The same-board Nura 0090/0092 QMP/controller
+  guard is a reference for coordinating those transitions.
+  [DWC3 UTMI v3 proposal](https://lkml.iu.edu/2611.1/15253.html)
+- [I] If logs instead show the QMP PCS timeout during four-lane entry,
+  isolate the QMP change before combining it with dynamic UTMI.
+  In `drivers/phy/qualcomm/phy-qcom-qmp-combo.c`, make
+  `qmp_combo_usb_init()` and `qmp_combo_usb_exit()` hold and release
+  common resources symmetrically even in DP-only, while
+  `qmp_combo_usb_power_on()` and `qmp_combo_usb_power_off()` skip USB PCS
+  work in DP-only. Remove the USB PCS timeout path's duplicate PIPE
+  disable and keep that clock's lifetime in common init/exit. Verify
+  the first USB-capable transition powers PCS back up with an existing
+  USB init reference. If the failure instead starts at detach, trace
+  `qmp_combo_typec_mux_set()`, `qmp_combo_dp_power_off()` and the DWC3
+  role worker together before settling on a combined candidate.
+- [I] Once the trace identifies a change, build it on the slim-all
+  comparison base with one delta, clang/LLD 23, pinned LOCALVERSION
+  without git metadata, and arm64 header `image_size < 0x2b60000`.
+  Use the same attended gate and then a verified D/F or plain SuperSpeed
+  control before proposing a daily2 integration.
