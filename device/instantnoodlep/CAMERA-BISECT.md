@@ -175,3 +175,144 @@ driver defect because the newly enabled DTS nodes and their dependencies are
 also part of that rung. Capture the last available boot log before drawing a
 conclusion. Never commit device identifiers, camera frames, calibration or
 firmware.
+
+## B2 follow-up after the 2026-11-18/19 phone bisect
+
+- [V] The owner/coordinator observed B1 boot and shut down cleanly. B2
+  (`7.3.0-rc6-instantnoodlep-k3-cam-b2-g350441f7b9fe`) hung before root,
+  with no journal or pstore (coordinator report, 2026-11-18/19).
+- [V] The verified omabook copies show CCI `=m` and `cci1` disabled in B1,
+  versus CCI `=y` and `cci1` okay in B2 (`kernel.config`, DTB
+  `/soc@0/cci@ac50000/status`, and `SHA256SUMS` in
+  `k3-cam-b{1,2}-omaserver`). B2 leaves `i2c-bus@0`, `camera@10` and
+  CAMSS disabled (B2 DTB and board DTS lines 509–559).
+
+### Ranked causes
+
+Kernel source references below are at [B2 commit 350441f7b9fe](https://github.com/inumineq/linux-omarchy-mobile/commit/350441f7b9fe41e66d0e8b63923bfcb4fbd2b132).
+DTS paths are relative to `arch/arm64/boot/dts/qcom/`.
+
+1. **Reset uses an uninitialized completion.** [V] Probe initializes each
+   master's completion inside the loop over available DT children.
+   Controller reset always uses master 0, and the ISR completes master 0
+   on reset ACK (`drivers/i2c/busses/i2c-qcom-cci.c:133–146,271–286,523–563`).
+   `reinit_completion()` only clears `done`. `init_completion()` also
+   initializes the wait queue, whose list is used to enqueue a waiter
+   (`include/linux/completion.h:84–100`, `kernel/sched/swait.c:85–90`).
+   [I] With only master 1 enabled, the reset waiter or ACK handler can hit
+   the invalid queue before the nominal 100 ms reset timeout. Enabling
+   empty master 0 or initializing all hardware masters in the driver
+   should remove that fault.
+2. **CCI MMIO path lacks a usable clock or powered domain.** [V] CCI0 and
+   CCI1 each declare five CAMCC clocks and `TITAN_TOP_GDSC`, with their
+   respective CCI branch and source; their MMIO bases are `0xac4f000` and
+   `0xac50000` (`sm8250.dtsi:4407–4486`). Platform probing requests
+   domain power-on (`drivers/base/platform.c:1501`,
+   `drivers/pmdomain/core.c:3413,3461`). CCI bulk-enables the declared
+   clocks before registering the IRQ and reading `CCI_HW_VERSION`
+   (`i2c-qcom-cci.c:464–466,565–600`). Titan Top polls the GDSC status
+   (`drivers/clk/qcom/camcc-sm8250.c:2259–2266`).
+   [I] An inaccessible branch, missing upstream bus clock, or incorrectly
+   reported GDSC state could stall the first MMIO access. A normal
+   clock-enable error returns from probe. If both completion tests fail
+   and the controller-off control boots, trace domain attach, each clock
+   enable, and the first version read in that order.
+3. **Camera configuration interconnect vote is missing at CCI probe.**
+   [V] CAMSS declares the path from `MASTER_AMPSS_M0` to
+   `SLAVE_CAMERA_CFG`; the CCI nodes declare no interconnect and CCI probe
+   takes no vote (`sm8250.dtsi:4407–4486,4632`,
+   `i2c-qcom-cci.c:505–620`). [I] B2 could depend on a firmware vote for
+   CPU-to-camera register access that is absent when CAMSS is disabled.
+   Investigate a specific configuration-path vote if power and clocks
+   succeed and the first MMIO access stalls. A property alone would
+   leave this driver's vote behavior unchanged.
+4. **CCI functional source runs at an unsuitable rate.** [V] CAMCC supports
+   19.2 MHz from XO and 37.5 MHz from PLL0 for both CCI sources; the CCI1
+   DT node has no assigned rate. Its bus `clock-frequency` selects a
+   timing table, which is programmed after reset
+   (`camcc-sm8250.c:439–473`, `sm8250.dtsi:4448–4486`,
+   `i2c-qcom-cci.c:228–288,553–560`). [I] A bad parent or inherited
+   rate could prevent reset ACK. Test a supported source rate only after
+   completion initialization, with evidence that register access works.
+5. **Pinctrl conflict.** [V] CCI1 selects only GPIO107/108 in B2
+   (`sm8250-oneplus-instantnoodlep.dts:525–533`,
+   `sm8250.dtsi:5232–5267`). Driver core binds pinctrl before probe
+   (`drivers/base/dd.c:684`). The B2 camera node supplies AVDD from a
+   GPIO24-gated 2.8 V regulator, DVDD from LDO3 at 1.056 V, and DOVDD from
+   LDO7 at 1.8 V. Its reset is GPIO78 and its MCLK3 is 19.2 MHz
+   (`sm8250-oneplus-instantnoodlep.dts:207–218,490–502,535–559`).
+   [I] A second consumer of GPIO107/108 could make binding fail or
+   disrupt that consumer when the mux switches. The disabled sensor and
+   empty adapter make sensor rail sequencing and I²C wire speed poor
+   explanations for the B2 probe hang. Leave the sensor disabled.
+
+### Console feasibility
+
+[V] B2 sets `stdout-path` to `framebuffer0`, a `simple-framebuffer`
+(`sm8250-oneplus-instantnoodlep.dts:98–113`). Earlier builds showed
+`tty0` text via simpledrm ([NOTES.md](NOTES.md), 2026-11-17 night).
+This path uses the simpledrm platform driver at device initcall time
+(`drivers/gpu/drm/sysfb/simpledrm.c`, platform driver registration).
+Stock's `earlycon=msm_geni_serial,0xa90000` describes a serial console
+([r4-stock-images.md §2](../../docs/research/r4-stock-images.md#2-bootimg-header)).
+The B2 earlycon OF table lacks a `simple-framebuffer` match
+(`git grep EARLYCON_DECLARE` at the B2 commit). The requested diagnostic
+image is skipped because the panel path depends on the DRM console.
+[I] Whether `tty0` can display the final CCI initcall is unverified.
+
+### Ranked owner-attended RAM tests
+
+[V] The DT-only variants use the original clang/LLD 23.1.3 B2 `Image.gz`,
+release and modules from `~/android/build/k3-cam-b2-omaserver/` on
+omabook. The original manifest verified, and `image_size=0x1780000`.
+Sorted DTB decompiles show one changed property per variant (`dtb.diff`
+in each output directory). The stock overlay check, boot-image read-back,
+and boot manifest hashes all passed (`pack.log` and
+`boot-cam-b2-*.SHA256SUMS`). Outputs are under
+`~/android/build/k3-cam-b2-followup/` on omabook.
+
+| Rank | Variant | Single change | Expected observation |
+| --- | --- | --- | --- |
+| 1 | B2-master0 | Change `/soc@0/cci@ac50000/i2c-bus@0/status` from disabled to okay. The empty adapter has no clients and still no master-0 pinmux selection. | [I] SSH within two minutes and two Qualcomm-CCI adapters parented by `ac50000.cci` support the reset-completion hypothesis. An SSH pass with no adapter shows only that the fatal symptom cleared. |
+| 2 | B2-completion | Initialize all hardware-master completions before parsing DT children. Use the original B2 board DTB, with only master 1 enabled. | [I] SSH and one Qualcomm-CCI adapter without a reset timeout would show that the empty master-0 adapter is unnecessary when the completion is initialized. |
+| 3 | B2-off | Change `/soc@0/cci@ac50000/status` from okay to disabled; keep the same built-in driver. Use if the first tests hang or fail to bind. | [I] SSH with zero Qualcomm-CCI adapters implicates the live CCI1 device path. A repeat hang with CCI1 disabled redirects the bisect away from that live probe. |
+
+[V] DT-only boot and input DTB hashes (SHA-256):
+
+| File under `k3-cam-b2-followup/` | SHA-256 |
+| --- | --- |
+| `master0/boot-cam-b2-master0.img` | `3a6bb7d82979d653269010cc7657d87457b03220b94da9887f7aad104b7f508a` |
+| `master0/sm8250-oneplus-instantnoodlep.dtb` | `c91a3dc0da9eb57cb74575eab2594ba40416ddb96c85e8d9bf614788023c4a2a` |
+| `off/boot-cam-b2-off.img` | `2cdad83beeb3231649f88b3118e37d7d9b2ac714a4014c8788c0c1b267352b87` |
+| `off/sm8250-oneplus-instantnoodlep.dtb` | `1bb2abecaf231570c91c83d333674db5f9ecd0c618756248997bb8aedbf72b5e` |
+
+[I] Use the owner/coordinator RAM gates above, including matching modules
+and slot checks. With the owner present, run the appropriate command
+individually from omabook:
+
+```sh
+fastboot boot ~/android/build/k3-cam-b2-followup/master0/boot-cam-b2-master0.img
+fastboot boot ~/android/build/k3-cam-b2-followup/completion/boot-cam-b2-completion.img
+fastboot boot ~/android/build/k3-cam-b2-followup/off/boot-cam-b2-off.img
+```
+
+[I] Expect `Booting OKAY`, then SSH within two minutes. On the candidate
+over SSH, read:
+
+```sh
+uname -r
+findmnt -no SOURCE,FSTYPE /
+sudo journalctl -k -b --no-pager -g 'CCI|ac50000|pinctrl|Unable to handle|BUG:|WARNING:'
+for adapter in /sys/bus/i2c/devices/i2c-*; do
+    [ "$(cat "$adapter/name" 2>/dev/null)" = Qualcomm-CCI ] || continue
+    readlink -f "$adapter"
+done
+```
+
+[I] Expect the candidate release, the normal root, and the adapter count
+from the table. Preserve any failure excerpt locally and redact device
+identifiers before reporting. Stop on a hash or slot mismatch, fastboot
+refusal, SSH timeout, CCI reset error or kernel warning. Have the owner
+recover to the installed daily on slot B before deliberately opening
+another gate. B3 stays parked until B2-completion reaches root and
+enumerates its CCI adapter.
