@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Host test for tools/instantnoodlep-usbin-watch. Runs the tool against a fake
+# power_supply directory and checks each stop limit from both sides: the value
+# that must stop the session, and the nearest value that must not. No phone.
+# TOOL=<path> selects the tool under test (used for mutation checks).
+set -eu
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+TOOL=${TOOL:-$ROOT/tools/instantnoodlep-usbin-watch}
+T=$(mktemp -d)
+trap 'rm -rf "$T"' EXIT
+fail() { echo "not ok - $*" >&2; exit 1; }
+ok() { echo "ok - $*"; }
+
+# fixture <online> <vusb> <iusb> <icl> <aicl>; "-" leaves the file out.
+fixture() {
+  rm -rf "$T/c"; mkdir -p "$T/c"
+  printf '1\n' >"$T/c/charging_enabled"
+  printf 'SDP\n' >"$T/c/usb_type"
+  local n=0 f
+  for f in online voltage_now current_now input_current_limit current_max; do
+    n=$((n + 1))
+    [ "${!n}" = - ] || printf '%s\n' "${!n}" >"$T/c/$f"
+  done
+}
+
+# run <interval> <ceiling> <seconds>: sets rc and out.
+run() {
+  rc=0
+  out=$(USBIN_WATCH_SYSFS=$T/c USBIN_WATCH_PIDFILE=$T/pid USBIN_WATCH_INTERVAL=$1 \
+        sh "$TOOL" "$2" "$3" 2>&1) || rc=$?
+}
+
+# passes <name>: the session ran to its end and charging was left alone.
+passes() {
+  [ "$rc" = 0 ] || fail "$1: rc $rc, wanted 0: $out"
+  [ "$(cat "$T/c/charging_enabled")" = 1 ] || fail "$1: charging was switched off"
+  ok "$1"
+}
+
+# stops <name> <text>: STOP with the reason, exit 1, charging switched off.
+stops() {
+  [ "$rc" = 1 ] || fail "$1: rc $rc, wanted 1: $out"
+  case "$out" in *"STOP "*"$2"*"Unplug the cable."*) ;; *) fail "$1: no STOP with '$2': $out";; esac
+  [ "$(cat "$T/c/charging_enabled")" = 0 ] || fail "$1: charging was left on"
+  ok "$1"
+}
+
+fixture 1 5000000 450000 500000 500000; run 1 500000 1
+passes "500 mA port inside every limit"
+[ "$(cat "$T/pid")" -gt 0 ] || fail "no PID file"
+
+fixture 1 5000000 450000 1500000 500000; run 1 500000 1
+stops "limit above the step ceiling" "above the step ceiling"
+fixture 0 - - 1500000 -; run 1 500000 1
+stops "limit above the ceiling with the cable out" "above the step ceiling"
+fixture 1 5000000 450000 1500000 1500000; run 1 1500000 1
+passes "the same limit under a 1.5 A ceiling"
+
+fixture 1 5000000 650000 500000 500000; run 1 500000 1
+passes "input current exactly at limit + 10 % + 100 mA"
+fixture 1 5000000 650001 500000 500000; run 1 500000 1
+stops "input current one step above that" "input current 650001"
+
+fixture 1 5600000 450000 500000 500000; run 1 500000 1
+passes "input voltage exactly 5.6 V"
+fixture 1 5600001 450000 500000 500000; run 1 500000 1
+stops "input voltage above 5.6 V" "input voltage 5600001 >"
+
+fixture 1 4499999 450000 500000 500000; run 1 500000 3
+stops "input voltage below 4.5 V" "twice"
+case "$out" in *$'\n'*$'\n'*$'\n'*) ;; *) fail "sag stopped on the first sample: $out";; esac
+ok "the sag stop waited for a second sample"
+
+fixture 1 4700000 450000 500000 500000; run 1 500000 1
+passes "4.70 V for two samples"
+fixture 1 4700000 450000 500000 500000; run 1 500000 27
+passes "4.70 V for 28 samples"
+fixture 1 4700000 450000 500000 500000; run 1 500000 40
+stops "4.70 V for 30 samples" "for 30 samples"
+[ "$(printf '%s\n' "$out" | grep -c ' 4700000 ')" = 30 ] || fail "low-voltage stop not on sample 30: $out"
+ok "the low-voltage stop came on sample 30"
+fixture 1 4750000 450000 500000 500000; run 1 500000 1
+passes "exactly 4.75 V"
+
+fixture 1 5000000 450000 500000 550000; run 1 500000 1
+passes "AICL result above the limit is not a stop"
+case "$out" in *"NOTE AICL result 550000 above the limit 500000"*) ;; *) fail "no AICL note: $out";; esac
+ok "AICL result above the limit is logged"
+fixture 1 5000000 450000 500000 -; run 1 500000 1
+passes "no AICL result"
+
+# The source switches off, or the owner unplugs, in the middle of a session.
+fixture 1 5000000 450000 500000 500000
+( sleep 1.5; printf '0\n' >"$T/c/online" ) &
+run 1 500000 3; wait
+passes "input lost during the session"
+case "$out" in *"INPUT LOST"*) ;; *) fail "no INPUT LOST line: $out";; esac
+[ "$(printf '%s\n' "$out" | grep -c 'INPUT LOST')" = 1 ] || fail "INPUT LOST repeated: $out"
+ok "input lost is logged once"
+fixture 0 - - 500000 -; run 1 500000 1
+case "$out" in *"INPUT LOST"*) fail "INPUT LOST with the cable out from the start";; esac
+ok "no INPUT LOST before the first plug"
+
+fixture 0 - - 500000 -; run 1 500000 1
+passes "cable out, no input readings"
+fixture 1 5000000 - 500000 500000; run 1 500000 1
+stops "online without an input current" "unreadable"
+fixture 1 5000000 450000 - 500000; run 1 500000 1
+stops "no input_current_limit" "input_current_limit unreadable"
+fixture - 5000000 450000 500000 500000; run 1 500000 1
+stops "no online" "online unreadable"
+
+fixture 1 5000000 450000 500000 500000
+for args in "" "abc" "0" "500000 x" "5000000000"; do
+  rc=0
+  # shellcheck disable=SC2086
+  USBIN_WATCH_SYSFS=$T/c USBIN_WATCH_PIDFILE=$T/pid sh "$TOOL" $args >/dev/null 2>&1 || rc=$?
+  [ "$rc" = 2 ] || fail "arguments '$args': rc $rc, wanted 2"
+done
+[ "$(cat "$T/c/charging_enabled")" = 1 ] || fail "a usage error touched charging"
+ok "bad arguments are refused"
+for iv in 0 -1 x 0.5; do
+  rc=0
+  USBIN_WATCH_SYSFS=$T/c USBIN_WATCH_PIDFILE=$T/pid USBIN_WATCH_INTERVAL=$iv \
+    sh "$TOOL" 500000 1 >/dev/null 2>&1 || rc=$?
+  [ "$rc" = 2 ] || fail "interval '$iv': rc $rc, wanted 2"
+done
+ok "a bad interval is refused"
+fixture 1 50000000000 450000 500000 500000; run 1 500000 1
+stops "an absurdly long reading" "unreadable"
+
+fixture 1 5000000 450000 500000 500000
+rc=0; USBIN_WATCH_SYSFS=$T/none sh "$TOOL" 500000 1 >/dev/null 2>&1 || rc=$?
+[ "$rc" = 2 ] || fail "missing charger directory: rc $rc, wanted 2"
+ok "missing charger directory"
+echo "all passed"
