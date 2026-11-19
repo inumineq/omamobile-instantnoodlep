@@ -109,17 +109,29 @@ meter all the time; the coordinator checks the gauge each step. The meter has no
 ## Session without a meter
 
 The owner has no inline USB-C meter. The rules of "Session without a meter"
-in [`CHARGER-RP-RUNBOOK.md`](CHARGER-RP-RUNBOOK.md) apply here as well: M-P4,
-M-P5, S5m, S6m, S7m, and E1, R1 and R2 at the phone's plug.
+in [`CHARGER-RP-RUNBOOK.md`](CHARGER-RP-RUNBOOK.md) apply: M-P4, M-P5, S5m,
+S6m, S7m and the watch started with a ceiling of 500000 before every plug.
+In this section they replace every meter rule of this runbook.
 
-- The ceiling is always 500000 (USB-A). This kernel never raises the input
-  limit above what the daily kernel uses today.
-- Start the watch before every plug and stop it by its PID before any
-  `rmmod`. A sleep step freezes the watch with the rest of userspace; it
-  reads again after resume.
-- H1, H2 and H8: every "meter" expectation is read from the watch log and
-  from the gauge `current_now` instead.
-- W1 to W5: "meter in line" is dropped.
+- [V] This kernel contains the Type-C Rp change (C1). On a C-to-C source it
+  raises the input limit, and the owner's laptop USB-C port advertises 3.0 A.
+  So the whole session uses a laptop USB-A port with an A-to-C cable whose
+  G0 read was 0x1506 = 08. No C-to-C source is plugged while this kernel's
+  charger module is loaded. If one is, the watch prints STOP: pull the cable.
+- E1: the owner pulls the cable at the phone.
+- R1: `echo 0 > $C/charging_enabled; cat $C/charging_enabled` must print 0.
+  Within 10 s the gauge `current_now` no longer has the H1 "charging" sign.
+  Otherwise E1.
+- R2: the owner unplugs at the phone; `cat $C/online` prints 0.
+- H1: instead of the meter, every watch line has `icl_uA` 500000 and
+  `iusb_uA` <= 650000.
+- H2: instead of the meter, the gauge `current_now` expectation stands alone.
+- H8: "the meter shows charge current again" becomes: the gauge
+  `current_now` has the H1 "charging" sign again.
+- W1 to W5: "meter in line" is dropped. Start the watch before the sleep
+  step. It is frozen during the sleep and reads again after resume.
+- Stop the watch by its PID before any `rmmod`.
+- Send back the `/root/usbin-*.log` files in place of the meter readings.
 
 ## Emergency stop
 
