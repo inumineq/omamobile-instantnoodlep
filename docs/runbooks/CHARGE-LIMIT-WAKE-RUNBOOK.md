@@ -118,11 +118,11 @@ In this section they replace every meter rule of this runbook.
   So the whole session uses a laptop USB-A port with an A-to-C cable whose
   G0 read was 0x1506 = 08. No C-to-C source is plugged while this kernel's
   charger module is loaded. If one is, the watch prints STOP: pull the cable.
-- E1: the owner pulls the cable at the phone.
-- R1: `echo 0 > $C/charging_enabled; cat $C/charging_enabled` must print 0.
-  Within 10 s the gauge `current_now` no longer has the H1 "charging" sign.
-  Otherwise E1.
-- R2: the owner unplugs at the phone; `cat $C/online` prints 0.
+- The source must have passed gate M0 of CHARGER-RP-RUNBOOK on the daily
+  kernel. In every watch line with `online` 1, `usb_type` is `SDP` (or
+  `Unknown` for about the first second after a plug). Any other type:
+  Emergency.
+- E1, R1 and R2 below carry their own "without a meter" wording.
 - H1: instead of the meter, every watch line has `icl_uA` 500000 and
   `iusb_uA` <= 650000.
 - H2: instead of the meter, the gauge `current_now` expectation stands alone.
@@ -137,7 +137,8 @@ In this section they replace every meter rule of this runbook.
 
 Fixed order; the first step uses no software.
 
-- E1: the owner pulls the cable at the meter. Input and charging end at once.
+- E1: the owner pulls the cable at the meter, or at the phone when there is no meter. Input and charging
+  end at once.
 - E2: the owner holds Power+VolUp until the phone resets. It boots the slot from P1.
 - E3: after boot, the coordinator checks `uname -r` is the daily release and saves
   `/root/charge-watch.log`, `/var/lib/s2idle/*.log` and `/sys/fs/pstore/*` if reachable.
@@ -146,8 +147,10 @@ Fixed order; the first step uses no software.
 
 - R0: `echo 100 > $C/charge_control_end_threshold`.
 - R1: `echo 0 > $C/charging_enabled; cat $C/charging_enabled` must print 0. Within 10 s the meter
-  must drop to the system load (no charge current). Otherwise go to E1.
-- R2: the owner unplugs at the meter; the meter reads 0 A.
+  must drop to the system load (no charge current). Without a meter: within 10 s the gauge
+  `current_now` no longer has the "charging" sign. Otherwise go to E1.
+- R2: the owner unplugs at the meter; the meter reads 0 A. Without a meter: the owner unplugs at
+  the phone; `cat $C/online` prints 0.
 - R3: `sync; reboot -f` if the link is up, else Power+VolUp.
 - R4: `uname -r` is the daily release.
 - `rmmod` is never a rollback step.
@@ -180,5 +183,6 @@ the owner presses Power once; no reaction by N + 120 s: forced reboot (long-pres
 ## What to send back
 
 `/var/lib/s2idle/H7.log`, `H8.log` and `W*.log`, the `st`, `ss` and `gate`
-output of every step with the meter readings, and `/root/charge-watch.log`.
+output of every step with the meter readings (without a meter: the
+`/root/usbin-*.log` files), and `/root/charge-watch.log`.
 Remove serial numbers and MAC addresses before pasting anything public.
