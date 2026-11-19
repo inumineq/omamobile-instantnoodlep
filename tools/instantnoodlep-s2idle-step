@@ -7,6 +7,8 @@
 # Start it detached (USB SSH drops at the devices level and deeper):
 #   systemd-run --unit=s2idle-R1 --collect /var/lib/s2idle/step R1 freezer 0
 # Runbook: docs/runbooks/S2IDLE-FIRST-RUNBOOK.md
+#
+# Environment: S2IDLE_KEEP_CHARGING=1 does not switch charging off for the step.
 set -u
 
 [ $# -eq 3 ] || { echo "usage: $0 <step> <pm_test level|none> <rtc seconds|0>" >&2; exit 2; }
@@ -56,7 +58,9 @@ echo 1 > /sys/power/pm_print_times
 echo N > /sys/module/printk/parameters/console_suspend
 
 # The charger driver refuses suspend with -EBUSY while it charges.
+# S2IDLE_KEEP_CHARGING=1 leaves charging alone, for steps that test that refusal.
 for f in /sys/class/power_supply/*/charging_enabled; do
+  [ "${S2IDLE_KEEP_CHARGING:-0}" = 1 ] && break
   [ -w "$f" ] || continue
   [ "$(cat "$f")" = 1 ] || continue
   echo 0 > "$f" && charging_off="$charging_off $f"
