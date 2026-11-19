@@ -224,7 +224,7 @@ write_header() {
 }
 
 part_a() {
-  local z d found states names
+  local z d found states names f
   log 'Part A: system state'
   {
     printf '## Part A - system state (any time)\n\n'
@@ -288,6 +288,18 @@ part_a() {
       dmesg 2>/dev/null | grep 'sync_state() pending' | redact || printf '(none)\n'
     else
       printf 'dmesg: not found\n'
+    fi
+    printf 'qcom_stats raw files, printed once (Qualcomm addition):\n'
+    if [[ -d $debugfs/qcom_stats ]]; then
+      found=0
+      while IFS= read -r -d '' f; do
+        found=1
+        printf -- '--- %s ---\n' "${f##*/}"
+        cat -- "$f" 2>/dev/null | redact || printf '%s: missing\n' "$f"
+      done < <(find "$debugfs/qcom_stats" -maxdepth 1 -type f -print0 | sort -z)
+      if ((found)); then :; else printf '(no regular files under %s)\n' "$debugfs/qcom_stats"; fi
+    else
+      printf '%s: missing\n' "$debugfs/qcom_stats"
     fi
     printf '```\n\n'
     printf '</details>\n\n'
@@ -408,21 +420,57 @@ part_b() {
   log "Part B: done (all Discharging: $all_discharging)"
 }
 
-declare -A qcom_a=() qcom_b=() irq_a=() irq_b=() genpd_a=() genpd_b=()
+declare -A qcom_a=() qcom_b=() qcom_raw_a=() qcom_raw_b=() irq_a=() irq_b=() genpd_a=() genpd_b=()
 
-# Each snap function prints "key<TAB>value" lines and the caller fills its
-# associative array. Namerefs (`local -n`) are deliberately not used here:
-# the linter cannot see through them and reports SC2178/SC2034 false
-# positives on the array writes.
-qcom_snap() { # every regular file under qcom_stats: file name -> sum of its numbers
-  local d=$debugfs/qcom_stats f s
+# qcom_stats file formats (drivers/soc/qcom/qcom_stats.c, the seq_printf calls):
+#   sleep-stats files (cxsd, aosd, ...): "Count: %u", "Last Entered At: %llu",
+#     "Last Exited At: %llu", "Accumulated Duration: %llu", "Client Votes: %#x"
+#   ddr_stats rows: "DDR LPM Stat Name:0x%lx\tcount:%u\tDuration (ticks):%llu"
+#     and "DDR Freq %luMhz:\tCP IDX:%u\tcount:%u\tDuration (ticks):%llu"
+# qcom_snap prints a line protocol for the caller to fill qcom_a/qcom_raw_a:
+#   "N\t<file>|<Field name>\t<value>"  one per recognized field (parsed by name,
+#                                      never summed across fields)
+#   "U\t<file>\t<base64 raw>"          a file in an unknown format, reported raw
+qcom_snap() {
+  local d=$debugfs/qcom_stats f
   [[ -d $d ]] || return 0
   while IFS= read -r -d '' f; do
-    s=$(awk '{for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+$/) t += $i} END {print t + 0}' "$f" 2>/dev/null) || s=0
-    printf '%s\t%s\n' "${f##*/}" "$s"
+    qcom_snap_file "$f"
   done < <(find "$d" -maxdepth 1 -type f -print0 | sort -z)
 }
 
+qcom_snap_file() {
+  local f=$1 name=${1##*/}
+  if grep -qE '^(Count:|Accumulated Duration:|Last (Entered|Exited) At:|Client Votes:|DDR (LPM Stat Name|Freq))' "$f" 2>/dev/null; then
+    awk -v fname="$name" '
+      $1 == "Count:" { printf "N\t%s|Count\t%s\n", fname, $2; next }
+      $1 == "Accumulated" && $2 == "Duration:" { printf "N\t%s|Accumulated Duration\t%s\n", fname, $3; next }
+      $1 == "Last" && $2 == "Entered" && $3 == "At:" { printf "N\t%s|Last Entered At\t%s\n", fname, $4; next }
+      $1 == "Last" && $2 == "Exited" && $3 == "At:" { printf "N\t%s|Last Exited At\t%s\n", fname, $4; next }
+      $1 == "Client" && $2 == "Votes:" { printf "N\t%s|Client Votes\t%s\n", fname, $3; next }
+      $1 == "DDR" && $2 == "LPM" && $3 == "Stat" && $4 ~ /^Name:0x/ && $5 ~ /^count:/ && $7 ~ /^\(ticks\):/ {
+        row = $1 " " $2 " " $3 " " $4
+        c = $5; sub(/^count:/, "", c); du = $7; sub(/^\(ticks\):/, "", du)
+        printf "N\t%s|%s count\t%s\n", fname, row, c
+        printf "N\t%s|%s Duration (ticks)\t%s\n", fname, row, du
+        next
+      }
+      $1 == "DDR" && $2 == "Freq" && $3 ~ /Mhz:$/ && $4 == "CP" && $5 ~ /^IDX:/ && $6 ~ /^count:/ && $8 ~ /^\(ticks\):/ {
+        mhz = $3; sub(/Mhz:$/, "Mhz", mhz)
+        row = $1 " " $2 " " mhz " " $4 " " $5
+        c = $6; sub(/^count:/, "", c); du = $8; sub(/^\(ticks\):/, "", du)
+        printf "N\t%s|%s count\t%s\n", fname, row, c
+        printf "N\t%s|%s Duration (ticks)\t%s\n", fname, row, du
+        next
+      }
+    ' "$f" 2>/dev/null || true
+  else
+    printf 'U\t%s\t%s\n' "$name" "$(base64 -w0 "$f" 2>/dev/null || base64 "$f" 2>/dev/null || printf '')"
+  fi
+}
+
+# irq_snap/genpd_snap print the same "key<TAB>value" protocol (no namerefs;
+# see the qcom_snap comment).
 irq_snap() { # /proc/interrupts: irq -> "total label..."
   local line irq total tok rest i
   local -a fields=()
@@ -473,7 +521,7 @@ genpd_snap() { # cpu* genpd domains: "domain|S<state>" -> "usage time_ms"
 }
 
 part_c() {
-  local intr_a ctxt_a intr_b ctxt_b top_delay k v before after ta ra tb rb ua ub
+  local intr_a ctxt_a intr_b ctxt_b top_delay k v tag before after ta ra tb rb ua ub
   log "Part C: sampling over ${partc}s"
   {
     printf '## Part C - who is awake (%ss window, screen off)\n\n' "$partc"
@@ -487,7 +535,12 @@ part_c() {
     printf '%s: missing\n' "$proc/stat" >>"$out"
     intr_a=0 ctxt_a=0
   fi
-  while IFS=$'\t' read -r k v; do qcom_a["$k"]=$v; done < <(qcom_snap)
+  while IFS=$'\t' read -r tag k v; do
+    case $tag in
+      N) qcom_a["$k"]=$v ;;
+      U) qcom_raw_a["$k"]=$v ;;
+    esac
+  done < <(qcom_snap)
   while IFS=$'\t' read -r k v; do irq_a["$k"]=$v; done < <(irq_snap)
   while IFS=$'\t' read -r k v; do genpd_a["$k"]=$v; done < <(genpd_snap)
   sleep "$partc"
@@ -497,7 +550,12 @@ part_c() {
   else
     intr_b=0 ctxt_b=0
   fi
-  while IFS=$'\t' read -r k v; do qcom_b["$k"]=$v; done < <(qcom_snap)
+  while IFS=$'\t' read -r tag k v; do
+    case $tag in
+      N) qcom_b["$k"]=$v ;;
+      U) qcom_raw_b["$k"]=$v ;;
+    esac
+  done < <(qcom_snap)
   while IFS=$'\t' read -r k v; do irq_b["$k"]=$v; done < <(irq_snap)
   while IFS=$'\t' read -r k v; do genpd_b["$k"]=$v; done < <(genpd_snap)
   {
@@ -520,20 +578,33 @@ part_c() {
     else
       printf '%s: missing\n' "$debugfs/wakeup_sources"
     fi
-    printf 'qcom_stats before/after delta over %ss (Qualcomm addition):\n' "$partc"
+    printf 'qcom_stats before/after over %ss (Qualcomm addition; fields parsed by name, unknown formats raw+unparsed, never summed):\n' "$partc"
     if [[ -d $debugfs/qcom_stats ]]; then
-      if ((${#qcom_a[@]} == 0 && ${#qcom_b[@]} == 0)); then
+      if ((${#qcom_a[@]} == 0 && ${#qcom_b[@]} == 0 && ${#qcom_raw_a[@]} == 0 && ${#qcom_raw_b[@]} == 0)); then
         printf '(no regular files under %s)\n' "$debugfs/qcom_stats"
       fi
-      for k in "${!qcom_a[@]}"; do
-        before=${qcom_a[$k]}
-        after=${qcom_b[$k]:-0}
-        printf '%s: %s -> %s (delta %s)\n' "$k" "$before" "$after" "$((after - before))"
+      {
+        printf '%s\n' "${!qcom_a[@]}"
+        printf '%s\n' "${!qcom_b[@]}"
+      } | sort -u | while IFS= read -r k; do
+        [[ -n $k ]] || continue
+        file=${k%%|*}
+        field=${k#*|}
+        before=${qcom_a["$k"]:-0}
+        after=${qcom_b["$k"]:-0}
+        case $field in
+          Last*) printf '%s %s: %s -> %s\n' "$file" "$field" "$before" "$after" ;;
+          *) printf '%s %s: %s -> %s (delta %s)\n' "$file" "$field" "$before" "$after" "$((after - before))" ;;
+        esac
       done
-      for k in "${!qcom_b[@]}"; do
-        if [[ -z ${qcom_a[$k]:-} ]]; then
-          printf '%s: 0 -> %s (delta %s)\n' "$k" "${qcom_b[$k]}" "${qcom_b[$k]}"
-        fi
+      {
+        printf '%s\n' "${!qcom_raw_a[@]}"
+        printf '%s\n' "${!qcom_raw_b[@]}"
+      } | sort -u | while IFS= read -r k; do
+        [[ -n $k ]] || continue
+        printf '%s: unparsed (unknown format), raw before -> after:\n' "$k"
+        printf '  before: %s\n' "$(printf '%s' "${qcom_raw_a["$k"]:-}" | base64 -d 2>/dev/null)"
+        printf '  after:  %s\n' "$(printf '%s' "${qcom_raw_b["$k"]:-}" | base64 -d 2>/dev/null)"
       done
     else
       printf '%s: missing\n' "$debugfs/qcom_stats"

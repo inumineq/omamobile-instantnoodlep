@@ -61,10 +61,16 @@ mkfixture() {
   printf 'gpu\n' >"$fx/debug/pm_genpd/gpu-domain/name"
   printf 'State  Time(ms)  Usage\nS0  5  1\n' >"$fx/debug/pm_genpd/gpu-domain/idle_states"
   if [[ $with_qcom == yes ]]; then
+    # Real formats from drivers/soc/qcom/qcom_stats.c seq_printf calls:
+    # sleep-stats files and ddr_stats rows, plus one unknown-format file.
     mkdir -p "$fx/debug/qcom_stats"
-    printf 'ddr 1000 2000\n' >"$fx/debug/qcom_stats/ddr"
-    printf 'cxsd 5\n' >"$fx/debug/qcom_stats/cxsd"
-    printf 'aosd 7\n' >"$fx/debug/qcom_stats/aosd"
+    printf 'Count: 5\nLast Entered At: 1000\nLast Exited At: 1100\nAccumulated Duration: 700\n' \
+      >"$fx/debug/qcom_stats/cxsd"
+    printf 'Count: 7\nLast Entered At: 2000\nLast Exited At: 2050\nAccumulated Duration: 300\n' \
+      >"$fx/debug/qcom_stats/aosd"
+    printf 'DDR LPM Stat Name:0xd4\tcount:10\tDuration (ticks):500\nDDR LPM Stat Name:0xd3\tcount:3\tDuration (ticks):120\nDDR Freq 1804Mhz:\tCP IDX:0\tcount:7\tDuration (ticks):900\n' \
+      >"$fx/debug/qcom_stats/ddr_stats"
+    printf 'some vendor blob\n42 17\n' >"$fx/debug/qcom_stats/weird"
   fi
   printf 'name\t\tactive_count\t\tevent_count\t\twakeup_count\nws1\t\t10\t\t500\t\t5\neth%s\t\t1\t\t900\t\t0\n' \
     "$MAC" >"$fx/debug/wakeup_sources"
@@ -200,6 +206,9 @@ grep -q 'clk_ignore_unused' "$T/out5.md" || fail 'ignore_unused cmdline flag not
 grep -q 'wlan0: Power save: on' "$T/out5.md" || fail 'wi-fi power save per interface missing'
 grep -q -- '- room temperature: 21 C' "$T/out5.md" || fail 'room-temp not recorded'
 grep -q 'omamobile-device-instantnoodlep 0.0.6-1' "$T/out5.md" || fail 'device package missing'
+grep -q -- '--- ddr_stats ---' "$T/out5.md" || fail 'Part A does not print raw qcom_stats files'
+grep -q 'Accumulated Duration: 700' "$T/out5.md" || fail 'Part A raw qcom_stats content missing'
+grep -q 'DDR LPM Stat Name:0xd4' "$T/out5.md" || fail 'Part A raw ddr_stats rows missing'
 [[ $(grep -c '<details>' "$T/out5.md") == 3 ]] || fail 'report does not have three <details> parts'
 grep -q 'Power baseline: OnePlus 8 Pro (instantnoodlep)' "$T/out5.md" || fail 'title missing'
 ok 'MAC, serial, SSID never appear; cmdline flags and conditions do; 3 <details> parts'
@@ -263,18 +272,33 @@ printf 'State  Time(ms)  Usage  Rejected  Above  Below  S2idle\nS0  1000  42  0 
   printf 'cpu  1\nintr 1600 5\nctxt 2600\n' >"$fx/proc/stat"
   printf 'State  Time(ms)  Usage  Rejected  Above  Below  S2idle\nS0  1600  90  0  0  0  0\nS1  500  7  0  0  0  0\n' \
     >"$fx/debug/pm_genpd/cpu0-domain/idle_states"
-  printf 'ddr 1500 2500\n' >"$fx/debug/qcom_stats/ddr"
-  printf 'cxsd 8\n' >"$fx/debug/qcom_stats/cxsd"
-  printf 'aosd 7\n' >"$fx/debug/qcom_stats/aosd"
+  printf 'Count: 8\nLast Entered At: 1000\nLast Exited At: 1500\nAccumulated Duration: 1300\n' \
+    >"$fx/debug/qcom_stats/cxsd"
+  printf 'Count: 7\nLast Entered At: 2000\nLast Exited At: 2050\nAccumulated Duration: 300\n' \
+    >"$fx/debug/qcom_stats/aosd"
+  printf 'DDR LPM Stat Name:0xd4\tcount:12\tDuration (ticks):900\nDDR LPM Stat Name:0xd3\tcount:3\tDuration (ticks):120\nDDR Freq 1804Mhz:\tCP IDX:0\tcount:7\tDuration (ticks):900\n' \
+    >"$fx/debug/qcom_stats/ddr_stats"
+  printf 'some vendor blob\n99 99\n' >"$fx/debug/qcom_stats/weird"
 ) >/dev/null 2>&1 &
 rewriter=$!
 PARTC_SECONDS=3 run_tool "$fx" --part c --out "$T/out8.md" >/dev/null
 while kill -0 "$rewriter" 2>/dev/null; do sleep 0.05; done
 grep -q '200 interrupts/s, 200 context switches/s over 3s' "$T/out8.md" \
   || fail "part C rates wrong: $(grep 'interrupts/s' "$T/out8.md")"
-grep -q 'ddr: 3000 -> 4000 (delta 1000)' "$T/out8.md" || fail 'qcom ddr delta wrong'
-grep -q 'cxsd: 5 -> 8 (delta 3)' "$T/out8.md" || fail 'qcom cxsd delta wrong'
-grep -q 'aosd: 7 -> 7 (delta 0)' "$T/out8.md" || fail 'qcom aosd delta wrong'
+# qcom_stats: Count and Accumulated Duration parsed by field name, per file
+# and per ddr_stats row; count and duration deltas asserted separately.
+grep -q '^cxsd Count: 5 -> 8 (delta 3)' "$T/out8.md" || fail 'cxsd Count delta wrong'
+grep -q '^cxsd Accumulated Duration: 700 -> 1300 (delta 600)' "$T/out8.md" || fail 'cxsd Duration delta wrong'
+grep -q '^aosd Count: 7 -> 7 (delta 0)' "$T/out8.md" || fail 'aosd Count delta wrong'
+grep -q '^ddr_stats DDR LPM Stat Name:0xd4 count: 10 -> 12 (delta 2)' "$T/out8.md" || fail 'ddr 0xd4 count delta wrong'
+grep -q '^ddr_stats DDR LPM Stat Name:0xd4 Duration (ticks): 500 -> 900 (delta 400)' "$T/out8.md" \
+  || fail 'ddr 0xd4 duration delta wrong'
+grep -q '^ddr_stats DDR Freq 1804Mhz CP IDX:0 count: 7 -> 7 (delta 0)' "$T/out8.md" || fail 'ddr freq row count wrong'
+# unknown format: raw before/after with the unparsed note, never summed
+grep -q '^weird: unparsed (unknown format)' "$T/out8.md" || fail 'unparsed note missing'
+grep -q 'before: some vendor blob' "$T/out8.md" || fail 'unparsed raw before missing'
+grep -q 'after:  some vendor blob' "$T/out8.md" || fail 'unparsed raw after missing'
+if grep -qE '^weird: [0-9]+ -> [0-9]+' "$T/out8.md"; then fail 'weird file was summed like a counter'; fi
 grep -q 'cpu0-domain|S0: usage 42 -> 90 (delta 48), time(ms) 1000 -> 1600 (delta 600)' "$T/out8.md" \
   || fail "idle_states S0 delta wrong: $(grep 'S0: usage' "$T/out8.md")"
 grep -q 'cpu0-domain|S1: usage 7 -> 7 (delta 0), time(ms) 500 -> 500 (delta 0)' "$T/out8.md" \
