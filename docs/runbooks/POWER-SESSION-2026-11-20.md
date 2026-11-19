@@ -118,7 +118,8 @@ After each sleep, once SSH is back, with the same `V` and `D`:
 
 A new SSH session after the replug has lost `V`, `D` and `ok`: set `V` and
 `D` again and `ok=1` by hand, after reading back that `V` is the variant
-that is booted.
+that is booted and that `ls "$D"` shows this boot's capture files. An error
+from any single command counts as well as a `STOP` line.
 
 **Smoke test**: the screen shows the desktop and an animation moves
 smoothly (GPU), touch reacts, Wi-Fi is connected and a `ping` to the gateway
