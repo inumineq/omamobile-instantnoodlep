@@ -230,6 +230,13 @@ ssh_iface() {
 
 pre_usb() {
   [[ -e $usb_dev/power/control ]] || { REASON="$usb_dev/power/control missing"; return 1; }
+  local status
+  status=$(state_get "file:$usb_dev/power/runtime_status")
+  [[ -n $status ]] || { REASON="$usb_dev/power/runtime_status missing or unreadable"; return 1; }
+  if [[ $status != suspended && -z $(udc_files) ]]; then
+    REASON="no $configfs/usb_gadget/*/UDC; the unbind fallback could not run"
+    return 1
+  fi
   if ((cable_online && !force_a4)); then REASON='cable in (pass --force-a4 to run it anyway)'; return 1; fi
   ((force_a4)) && return 0
   local via
@@ -253,7 +260,7 @@ apply_usb() {
   change "file:$usb_dev/power/control" auto
   pause 10
   local status f
-  status=$(<"$usb_dev/power/runtime_status")
+  status=$(state_get "file:$usb_dev/power/runtime_status")
   if ((dry)); then
     echo "    # the UDC is unbound only if runtime_status is still active (now: $status)"
   else

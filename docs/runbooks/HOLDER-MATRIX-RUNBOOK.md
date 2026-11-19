@@ -29,7 +29,9 @@ coordinator runs it on the phone.
   needs `--force-a4`).
 - Row a4 is skipped unless the SSH session's local address is on the Wi-Fi
   interface, so unbinding the USB gadget cannot cut the session that
-  started the run.
+  started the run. It is also skipped, before any write, when
+  `power/runtime_status` is missing or unreadable, or when no configfs
+  `usb_gadget/*/UDC` exists while the controller is not yet suspended.
 - SIGKILL and a kernel hang cannot be trapped. Then `reboot` restores
   everything, because nothing persistent was changed.
 

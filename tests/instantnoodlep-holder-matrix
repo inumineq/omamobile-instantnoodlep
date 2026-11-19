@@ -10,6 +10,7 @@ trap 'rm -rf "$T"' EXIT
 fail() { echo "not ok - $*" >&2; exit 1; }
 # Built at run time so no literal MAC sits in git (trail-lite lint).
 MAC=$(printf '%s:' de ad be ef 00)42
+IP=$(printf '%s.' 192 0 2)77
 
 fake_bin() {
   local b=$T/bin
@@ -127,7 +128,7 @@ fixture() {
     echo '           CPU0       CPU1'
     echo ' 11:        100        200     GICv3  27 Level     arch_timer'
     echo "174:         50          0     GICv3 206 Level     90b6400.pmu"
-    echo " 99:          5          5     GICv3 99 Edge      wlan-$MAC"
+    echo " 99:          5          5     GICv3 99 Edge      wlan-$MAC-$IP"
     echo 'IPI0:        10         10       Rescheduling interrupts'
     echo 'Err:          0'
   } >"$s/proc/interrupts"
@@ -299,5 +300,45 @@ echo "ok - median/min/max, cluster and qcom_stats deltas, IRQ rate and top IRQs 
 # (8) a MAC planted in an IRQ name never reaches summary.md.
 grep -q 'wlan-' "$F/out/run/summary.md" || fail "privacy: the planted IRQ is not in the top 5, test proves nothing"
 grep -qi "$MAC" "$F/out/run/summary.md" && fail "privacy: MAC reached summary.md"
+grep -qF "$IP" "$F/out/run/summary.md" && fail "privacy: the planted IPv4 address reached summary.md"
 grep -qE '([0-9]{1,3}\.){3}[0-9]{1,3}' "$F/out/run/summary.md" && fail "privacy: an IPv4 address reached summary.md"
-echo "ok - a planted MAC in an IRQ name is redacted from summary.md"
+grep -q 'wlan-<mac>-<ip>' "$F/out/run/summary.md" || fail "privacy: the planted IRQ name is not redacted to wlan-<mac>-<ip>"
+echo "ok - a MAC and an IPv4 address planted in an IRQ name are redacted from summary.md"
+
+# (9) a4 skips before any write: runtime_status missing, no configfs UDC, or
+# an SSH session over the USB interface. Control starts at on so any write shows.
+usb=sys/bus/platform/devices/a6f8800.usb
+a4_untouched() {
+  [ "$(v $usb/power/control)" = on ] || fail "$1: usb power/control was written"
+  [ "$(v cfg/usb_gadget/g1/UDC 2>/dev/null || echo gone)" = "$2" ] || fail "$1: UDC was written"
+  grep -qE "> .*(a6f8800.usb|/UDC)" "$F/out/run/run.log" && fail "$1: run.log shows a USB write"
+  grep -q '^| a5 | .* | ok' "$F/out/run/summary.md" || fail "$1: the run did not continue to a5"
+}
+for case in no_status no_udc ssh_usb; do
+  fixture
+  echo on >"$F/sys/$usb/power/control"
+  udc=a600000.usb ssh="10.9.8.1 50000 10.9.8.7 22"
+  case $case in
+    no_status) rm "$F/sys/$usb/power/runtime_status"; want='runtime_status missing or unreadable' ;;
+    no_udc) rm -rf "$F/sys/cfg/usb_gadget"; udc=gone; want='no .*/UDC; the unbind fallback could not run' ;;
+    ssh_usb) ssh="10.6.5.1 50000 10.6.5.4 22"; want='SSH session runs over usb0' ;;
+  esac
+  rc=$(run_tool env SSH_CONNECTION="$ssh" "$TOOL" --rows a4,a5 --wait 15 --settle 0 --out "$F/out/run")
+  [ "$rc" = 0 ] || { cat "$F/stdout"; fail "a4 $case: exit $rc"; }
+  grep -q "^| a4 | .* | skipped: .*$want" "$F/out/run/summary.md" || { cat "$F/out/run/summary.md"; fail "a4 $case: not SKIPPED with reason"; }
+  a4_untouched "a4 $case" "$udc"
+  echo "ok - a4 $case: SKIPPED with its reason, nothing USB-related written, the run continues"
+done
+
+# (10) runtime_status already suspended after control=auto: the UDC stays bound.
+fixture
+echo on >"$F/sys/$usb/power/control"
+echo suspended >"$F/sys/$usb/power/runtime_status"
+rc=$(run_tool "$TOOL" --rows a4 --wait 15 --settle 0 --out "$F/out/run")
+[ "$rc" = 0 ] || { cat "$F/stdout"; fail "a4 suspended: exit $rc"; }
+grep -q "echo auto > .*a6f8800.usb/power/control" "$F/out/run/run.log" || fail "a4 suspended: control=auto never written"
+grep -q '/UDC' "$F/out/run/run.log" && fail "a4 suspended: the UDC was written"
+grep -q '^| a4 | .* | ok' "$F/out/run/summary.md" || fail "a4 suspended: row not ok"
+[ "$(v cfg/usb_gadget/g1/UDC)" = a600000.usb ] || fail "a4 suspended: UDC changed"
+[ "$(v $usb/power/control)" = on ] || fail "a4 suspended: control not restored to on"
+echo "ok - a4 with runtime_status already suspended never writes the UDC"
