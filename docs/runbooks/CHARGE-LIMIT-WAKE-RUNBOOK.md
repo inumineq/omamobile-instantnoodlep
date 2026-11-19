@@ -106,6 +106,21 @@ meter all the time; the coordinator checks the gauge each step. The meter has no
 | S11 | charger write failed | any dmesg `cannot set charging` or `cannot stop charging, not suspending`, at any time | cable in: Emergency; cable out: soft rollback, then end the session. No repeat until reviewed |
 | S12 | charging against the decision | 0x1042 bit 0 = 1 while `status` is not `Charging` or `Full`, read twice 6 s apart | Emergency |
 
+## Session without a meter
+
+The owner has no inline USB-C meter. The rules of "Session without a meter"
+in [`CHARGER-RP-RUNBOOK.md`](CHARGER-RP-RUNBOOK.md) apply here as well: M-P4,
+M-P5, S5m, S6m, S7m, and E1, R1 and R2 at the phone's plug.
+
+- The ceiling is always 500000 (USB-A). This kernel never raises the input
+  limit above what the daily kernel uses today.
+- Start the watch before every plug and stop it by its PID before any
+  `rmmod`. A sleep step freezes the watch with the rest of userspace; it
+  reads again after resume.
+- H1, H2 and H8: every "meter" expectation is read from the watch log and
+  from the gauge `current_now` instead.
+- W1 to W5: "meter in line" is dropped.
+
 ## Emergency stop
 
 Fixed order; the first step uses no software.
