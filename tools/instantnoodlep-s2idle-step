@@ -74,7 +74,7 @@ fi
 sync
 sleep 1
 rc=0
-echo freeze > /sys/power/state || rc=$?
+if ! echo freeze > /sys/power/state; then rc=1; fi
 echo "state write rc=$rc"
 
 echo "== after $(date -Is) uptime=$(cut -d' ' -f1 /proc/uptime)"
