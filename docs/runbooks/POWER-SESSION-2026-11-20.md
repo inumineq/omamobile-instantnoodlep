@@ -65,9 +65,11 @@ the eight CPU memory-bus cells only (plan §4, K2 row).
 **Boot a variant** (owner's go):
 
 ```sh
-adb reboot bootloader            # or the key combination
-fastboot getvar current-slot     # Expect: b
-fastboot boot <image>
+IMG=boot-daily2-qce-gmu-nopd.img   # the variant's image file
+adb reboot bootloader              # or the key combination
+fastboot getvar current-slot       # Expect: b
+sha256sum "$IMG"                   # Expect: the value in the Images table
+fastboot boot "$IMG"
 ```
 
 **Check after boot**, over USB SSH, or Wi-Fi SSH if USB is missing:
@@ -75,9 +77,11 @@ fastboot boot <image>
 ```sh
 V=nopd        # the variant's name: boot_b, nopd, noclk, noboth or k2dtb
 D=/var/lib/s2idle
+case $V in boot_b|nopd|noclk|noboth|k2dtb) ;; *) echo "STOP: unknown variant $V";; esac
 uname -r
 tr ' ' '\n' </proc/cmdline | grep -E 'slot_suffix|ignore_unused'
-findmnt -no SOURCE,FSTYPE /; test -d $D && echo "log directory present"
+findmnt -no SOURCE,FSTYPE / || echo "STOP: no root mount shown"
+test -d $D && test -w $D && echo "log directory ok" || echo "STOP: no writable $D"
 sha256sum $D/step
 modprobe rtc-pm8xxx; modprobe qcom_stats
 dmesg | grep -iE 'genpd|gdsc|rpmhpd|unused|PC mode|OSI|failed|error' > $D/$V-dmesg.txt
@@ -93,8 +97,9 @@ exactly the options the variant should have, the root file system on
 `userdata` as on the daily boot, the log directory present, and the step
 tool with sha256
 `6c5200f48d0508fba3ceb3d66f350ee408af8898b66065dedc24bd4894309f1e`. The last
-line prints 0 or 1; record it. Stop if the slot is not `_b` or the root is
-not the usual one: this runbook is only valid there.
+line prints 0 or 1; record it. Stop if the slot is not `_b`, if the root is
+not the usual one, or on any line that starts with `STOP`: this runbook is
+only valid there, and the captures below would be lost.
 
 After each sleep, once SSH is back, with the same `V` and `D`:
 
@@ -107,18 +112,28 @@ dmesg | grep -E 'PC mode|suspend entry|suspend exit|failed|error' > $D/$V-dmesg-
 **Smoke test**: the screen shows the desktop and an animation moves
 smoothly (GPU), touch reacts, Wi-Fi is connected and a `ping` to the gateway
 answers, one of the two SSH paths works and `scp` of a small file passes,
-`$V-dmesg.txt` has no UFS, PCIe, GPU or clock error, and
-`cat /sys/class/power_supply/*/temp` shows no value above 400 (40 °C).
-
-**One sleep, cable out** (`<step>` is the step name):
+`$V-dmesg.txt` has no UFS, PCIe, GPU or clock error, and the temperature
+check passes:
 
 ```sh
-systemd-run --on-active=45 --unit=s2idle-<step> --collect /var/lib/s2idle/step <step> none 60
+grep -H . /sys/class/power_supply/*/temp
+```
+
+Each line names a supply and its temperature in tenths of a degree Celsius
+[V: `drivers/power/supply/bq27xxx_battery.c:1706-1728`]. Pass: at least the
+battery gauge prints a value, and no value is above 400 (40.0 °C). No line
+at all is a failed check.
+
+**One sleep, cable out**:
+
+```sh
+STEP=R4d      # R4d, R4e, R4f or R4g, as the step says
+systemd-run --on-active=45 --unit=s2idle-$STEP --collect /var/lib/s2idle/step $STEP none 60
 ```
 
 The owner pulls the cable within 30 s, leaves the screen off, touches
 nothing for 2 minutes, then plugs the cable back in. Read
-`/var/lib/s2idle/<step>.log`.
+`/var/lib/s2idle/$STEP.log`.
 
 **Stop conditions for every boot**: no picture and no SSH on either path
 3 minutes after `fastboot boot`, a black panel that stays black, a
@@ -234,8 +249,16 @@ systemd-run --on-active=45 --unit=s2idle-R6 --collect sh -c \
 ```
 
 Cable out within 30 s; the alarm is set when the unit starts, 45 s after the
-command. Expect in `R6.log`: `Timekeeping suspended for` about 300 s and no
-`Watchdog timeout` line. Afterwards `loginctl` and `nmcli general` answer.
+command. The `sleep 20` only gives the journal time to catch up after the
+resume; it proves nothing. Expect in `R6.log`: `Timekeeping suspended for`
+about 300 s and no `Watchdog timeout` line. Then, with the cable back in and
+within 2 minutes of the resume, all three must hold:
+
+```sh
+systemctl is-system-running        # Expect: running or degraded, not stopping
+loginctl list-sessions --no-legend | wc -l    # Expect: 1 or more
+nmcli -t -f STATE general          # Expect: connected
+```
 
 Stop conditions and rollback as in `S2IDLE-FIRST-RUNBOOK.md`, rows R5b and R6.
 
