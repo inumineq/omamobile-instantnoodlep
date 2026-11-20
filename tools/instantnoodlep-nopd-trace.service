@@ -6,6 +6,7 @@
 [Unit]
 Description=Trace power domains on a kernel without pd_ignore_unused
 ConditionKernelCommandLine=!pd_ignore_unused
+ConditionKernelCommandLine=clk_ignore_unused
 
 [Service]
 Type=oneshot

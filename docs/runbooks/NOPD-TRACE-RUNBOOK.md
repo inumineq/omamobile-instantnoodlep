@@ -32,12 +32,15 @@ Three files on the phone's root, all removed again by the rollback:
   `tools/instantnoodlep-nopd-trace.service`.
 - `/var/lib/s2idle/nopd-armed`, an empty file. The tool runs only when it
   exists and is less than 30 minutes old, and removes it when it starts. One
-  arming gives one run, and it cannot carry over to a later boot. `nopd` is
-  the daily kernel with another command line, so the kernel version cannot
-  tell the two apart; the flag and the arming do.
+  arming gives one run, and it cannot carry over to a later boot.
+
+`nopd` is the daily kernel with another command line, so the kernel version
+cannot tell the two apart. The command line does: the unit and the tool both
+require `clk_ignore_unused` present and `pd_ignore_unused` absent. Of the
+images in the session runbook only `nopd` has that pair.
 
 Three things keep the unit from running by accident. The unit's condition is
-false on the daily kernel. The tool refuses when the flag is set, when it is
+false on the daily kernel. The tool refuses any command line but `nopd`'s, when it is
 not armed, on any slot but B and with less than 100 MB free. The tool exits 0
 only after a complete trace: a refusal, an unreadable power-domain summary, a
 failed write or a failed wait is a failed first command, and systemd then
@@ -58,7 +61,7 @@ tool has been tested under bash only.
    sha256sum tools/instantnoodlep-nopd-trace
    scp tools/instantnoodlep-nopd-trace root@PHONE:/var/lib/s2idle/nopd-trace
    scp tools/instantnoodlep-nopd-trace.service root@PHONE:/etc/systemd/system/nopd-trace.service
-   ssh root@PHONE 'chmod 755 /var/lib/s2idle/nopd-trace; sha256sum /var/lib/s2idle/nopd-trace /var/lib/s2idle/step; df -h /var/lib/s2idle | tail -1; systemctl daemon-reload; systemctl enable nopd-trace.service; systemctl start nopd-trace.service; systemctl status nopd-trace.service | head -5; ls /var/lib/s2idle | grep -c trace-; touch /var/lib/s2idle/nopd-armed; ls /var/lib/s2idle/nopd-armed'
+   ssh root@PHONE 'set -e; cd /var/lib/s2idle; chmod 755 nopd-trace; sha256sum nopd-trace step; df -h . | tail -1; systemctl daemon-reload; systemctl enable nopd-trace.service; systemctl start nopd-trace.service; systemctl status nopd-trace.service | head -5 || true; ls -d trace-* 2>/dev/null | wc -l; touch nopd-armed; ls nopd-armed'
    ```
 
    Run the lines one at a time. The first must print `1`; if it does not,
@@ -93,7 +96,10 @@ tool has been tested under bash only.
 
    Expect: `index.txt` has a `start` line, about 25 samples and an `end`
    line; the count is `0`; `R4d.log` ends with the `== after` block;
-   `grep -l UNREADABLE "$d"/*` prints nothing.
+   `grep -l UNREADABLE "$d"/*` prints nothing. A file it does print is a
+   source this kernel does not offer (clock or regulator summary, deferred
+   list, kernel log); report its name. The run still counts, because the
+   power-domain summary is the one source the tool requires.
    The phone's hardware clock is not kept across boots, so the clock early
    in boot is the one systemd saved at the last clean shutdown. If the tool
    refused with "armed ... s away from now", that clock was off; this is a

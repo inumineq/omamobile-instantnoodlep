@@ -18,8 +18,9 @@
 # It runs once per arming: it refuses (exit 1) unless the file
 # /var/lib/s2idle/nopd-armed exists and was written less than 30 minutes ago,
 # and removes that file when it starts, so an arming cannot carry over to a
-# later, unrelated boot. It also refuses when pd_ignore_unused is on the
-# command line, on any slot but B, and with less than 100 MB free.
+# later, unrelated boot. It also refuses on any command line but the `nopd`
+# variant's (clk_ignore_unused present, pd_ignore_unused absent), on any slot
+# but B, and with less than 100 MB free.
 #
 # It exits 0 only after a complete trace. A refusal, an unreadable
 # power-domain summary, a failed write or a failed wait is a non-zero exit, so
@@ -51,6 +52,7 @@ num "$DURATION" && num "$INTERVAL" && [ "$INTERVAL" -gt 0 ] && [ $# -le 2 ] ||
   { echo "usage: ${0##*/} [seconds [interval]]" >&2; exit 2; }
 
 grep -qw pd_ignore_unused "$CMDLINE" && { echo "pd_ignore_unused is set, refusing" >&2; exit 1; }
+grep -qw clk_ignore_unused "$CMDLINE" || { echo "clk_ignore_unused is not set: not the nopd variant, refusing" >&2; exit 1; }
 grep -q 'androidboot.slot_suffix=_b' "$CMDLINE" || { echo "not on slot B, refusing" >&2; exit 2; }
 [ -f "$OUT/nopd-armed" ] || die "not armed ($OUT/nopd-armed missing), refusing"
 armed=$(stat -c %Y "$OUT/nopd-armed" 2>/dev/null); now=$(date +%s)
