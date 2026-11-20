@@ -9,6 +9,10 @@ scripts=(
   build
   install
   omamobile-device-instantnoodlep.install
+  bin/omamobile-instantnoodlep-start-adsp
+  bin/omamobile-instantnoodlep-adsp-firmware
+  systemd/omamobile-instantnoodlep-adsp.service
+  test/adsp-firmware
   bin/omamobile-bt-public-addr
   bin/omamobile-instantnoodlep-mobile-profile
   bin/omamobile-instantnoodlep-app-launcher
@@ -26,6 +30,7 @@ srcinfo=$(mktemp)
 trap 'rm -f "$srcinfo"' EXIT
 makepkg --printsrcinfo > "$srcinfo"
 grep -q "^pkgbase = omamobile-device-instantnoodlep$" "$srcinfo"
+./test/adsp-firmware
 ./test/bt-public-addr
 ./test/mobile-profile.sh
 ./test/scaling.sh
@@ -34,6 +39,10 @@ grep -q "^pkgbase = omamobile-device-instantnoodlep$" "$srcinfo"
 stage=$(mktemp -d)
 trap 'rm -rf "$stage" "$srcinfo"' EXIT
 ./install "$stage"
+test -x "$stage/usr/bin/omamobile-instantnoodlep-start-adsp"
+test -x "$stage/usr/bin/omamobile-instantnoodlep-adsp-firmware"
+test -f "$stage/usr/lib/systemd/system/omamobile-instantnoodlep-adsp.service"
+test -L "$stage/usr/lib/systemd/system/multi-user.target.wants/omamobile-instantnoodlep-adsp.service"
 test -f "$stage/usr/share/omamobile/device.conf"
 test -f "$stage/usr/share/omamobile/firmware.map"
 cmp -s firmware.map ../../device/instantnoodlep/firmware.map

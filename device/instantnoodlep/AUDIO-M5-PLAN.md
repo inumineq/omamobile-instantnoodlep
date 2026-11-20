@@ -347,3 +347,81 @@ probe, suspend/resume behavior, and first sound — one speaker at a time,
 go. The phase-2 DTS enablement (i2c15 + nodes `okay`, tertiary-MI2S speaker
 link) is still not implemented; this work is driver + binding only.
 
+
+## 11. Audio phase 2: ADSP boot ordering and card registration (2026-11-20)
+
+### 11.1 LPASS TLMM probe deferral [V]
+
+The deferral is a missing clock supplier, not a guessed local pinctrl power
+rail. The SM8250 DTS gives `pinctrl@33c0000` two required clocks from
+`q6afecc`: `LPASS_HW_MACRO_VOTE` (`core`) and `LPASS_HW_DCODEC_VOTE`
+(`audio`) [V: `sm8250.dtsi:2811-2813`]. `pinctrl-lpass-lpi.c` creates PM
+clock links from the DT with `of_pm_clk_add_clks()` during probe
+[V: `pinctrl-lpass-lpi.c:534-540`]; `of_pm_clk_add_clks()` resolves each DT clock with `of_clk_get()` and propagates lookup errors [V: `drivers/base/power/clock_ops.c:281-299`]. Their provider is the
+`qcom,q6afe-clocks` node nested under the APR q6afe service
+[V: `sm8250.dtsi:6058-6073`], and those two clock IDs are explicitly
+implemented as q6dsp vote clocks [V: `sound/soc/qcom/qdsp6/q6afe-clocks.c:86-99`].
+The q6afe service advertises protection domains `avs/audio` and
+`msm/adsp/audio_pd` [V: `sm8250.dtsi:6058-6063`]. With ADSP stopped, APR
+has not instantiated q6afe/q6afecc, so the supplier lookup defers LPASS
+TLMM; rxmacro, txmacro, codec and soundwire consumers then wait downstream.
+The phone's qce-gmu deferral and the post-manual-start q6afe appearance are
+[V: coordinator's 2026-11-19 phone result recorded in PR #137].
+
+### 11.2 ADSP start timing [V/I]
+
+Keep `QCOM_Q6V5_PAS=y` and the existing ADSP DT auto-boot. The firmware
+request happens during built-in probe, before the root filesystem exists;
+phase 1 observed `adsp.mbn` ENOENT at that point, while writing `start` to
+the remoteproc state after boot worked [V: PR #137 phone result]. The
+smallest correct recovery is a package-provided oneshot after
+`local-fs.target`: install the mapped firmware from the phone's own
+read-only `modem_a`, then issue the same remoteproc `start` operation if it
+isn't running. This keeps the kernel/DT unchanged, avoids embedding private
+firmware in an initramfs, and directly follows the phase-1 proven start
+path. Whether the auto-boot failure leaves the device in a state that the
+service can always restart is [I] until the next RAM boot; service failure is
+a stop condition, not permission to reset or reload the DSP.
+
+### 11.3 Package extraction design
+
+`firmware.map` remains names-only: `modem:/image/adsp.mdt` maps to
+`qcom/sm8250/OnePlus/instantnoodlep/adsp.mbn`. Package lifecycle hooks run
+`omamobile-instantnoodlep-adsp-firmware`, which resolves the GPT partition
+by `PARTNAME=modem_a`, mounts it read-only, concatenates `adsp.mdt` and the
+numbered `adsp.bNN` segments into a temporary file, and atomically installs
+the output at the map destination. The package contains only the script and
+mapping, never vendor bytes. A missing modem partition is a logged skip;
+a present but incomplete image is an error. This assumes the phone's FAT
+partition's member format and numeric segment ordering match the phase-1
+manual assembly [I; PR #137 reports successful manual assembly but does not
+specify the exact file ordering method]. Host fixture tests exercise
+assembly and missing-segment rejection; partition mounting remains phone
+unverified.
+
+### 11.4 RAM test candidate and gated runbook
+
+Candidate source: `~/src/l-k3-audio2`, based on
+`instantnoodlep-k3-daily2-qce-gmu` @ `bd566b604`; no DTB edit is needed for
+this phase because that base already carries the sound card/audio DT nodes.
+Build output: `~/android/build/k3-daily2-qce-gmu-audio2/`; kernel release
+must end in `-audio2`. Nothing in this section authorizes a flash.
+
+**Prerequisites:** coordinator confirms candidate build artifacts, their
+SHA256SUMS, and ADSP firmware installation script/package revision; phone is
+booted to fastboot, slot B remains the rollback target. All commands below
+are owner-run; replace placeholders before execution.
+
+| Step | Exact command block | Expect | Stop | Rollback |
+| --- | --- | --- | --- | --- |
+| A2-1 | `fastboot -s {{SERIAL}} boot {{AUDIO2_BOOT_IMG}}` | `Booting OKAY`; phone returns to USB SSH; `uname -r` ends `-audio2`; no partition is written | fastboot error, no SSH within 2 minutes, crash/watchdog, ADSP firmware load failure, ADSP crash loop, or service failure | `fastboot -s {{SERIAL}} reboot` to the installed system on `boot_b`; if fastboot boot is stuck, hold Power+VolUp until reboot, then verify slot B |
+| A2-2 | `ssh root@172.16.42.1 'systemctl status omamobile-instantnoodlep-adsp.service --no-pager; for r in /sys/class/remoteproc/remoteproc*; do [ "$(cat "$r/name" 2>/dev/null)" = adsp ] && cat "$r/state"; done; dmesg | grep -Ei "lpass|q6afe|remoteproc|sound|snd" | tail -100; cat /proc/asound/cards; aplay -l'` | ADSP is `running`; q6afe/q6afecc services appear; deferred `33c0000.pinctrl` binds; `aplay -l` lists the OnePlus SM8250 card and `MultiMedia1` no longer errors | card absent, MultiMedia1 CPU DAI error persists, any unexplained kernel error or DSP instability | `ssh root@172.16.42.1 'systemctl stop omamobile-instantnoodlep-adsp.service'` then reboot to `boot_b`; retain logs only with identifying data redacted |
+| A2-3 (separate speaker gate) | **Only after A2-2 passes, a later candidate includes the TFA987x driver and amp DT nodes, and the owner explicitly chooses to test:** set phone volume low on-screen, confirm the TFA `Playback Volume` control reads raw 0 and boost remains off, then `ssh root@172.16.42.1 'speaker-test -D hw:0,0 -c 1 -t sine -f 440 -l 1'` | brief low-volume tone from the selected speaker; TFA987x `Playback Volume` raw gain remains 0 and boost remains off | unexpected loud sound, amp fault, clipping, thermal rise, or sound from an unintended output | `ssh root@172.16.42.1 'pkill -x speaker-test || true; reboot -f'` to `boot_b` |
+
+A2-1/A2-2 only verify card registration; speaker testing is an independent
+owner gate because the TFA987x amplifier path has not been electrically
+qualified. No phone command has run for this phase. Open questions: does
+`modem_a` remain mounted cleanly after package hooks; does built-in remoteproc
+recover from its initial missing-firmware auto-boot attempt using one later
+`start`; which physical speaker is wired to `hw:0,0`; and does q6afecc
+supplier appearance clear all four recorded LPASS consumer deferrals?

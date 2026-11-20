@@ -1,0 +1,21 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+mkdir "$tmp/source"
+printf '%s\n' 'modem:/image/adsp.mdt|qcom/sm8250/OnePlus/instantnoodlep/adsp.mbn' > "$tmp/firmware.map"
+export ADSP_FIRMWARE_MAP="$tmp/firmware.map"
+printf MDT > "$tmp/source/adsp.mdt"
+printf SEG00 > "$tmp/source/adsp.b00"
+printf SEG01 > "$tmp/source/adsp.b01"
+ADSP_FIRMWARE_OUTPUT="$tmp/out/adsp.mbn" ./bin/omamobile-instantnoodlep-adsp-firmware --source-dir "$tmp/source"
+printf 'MDTSEG00SEG01' > "$tmp/expected"
+cmp "$tmp/expected" "$tmp/out/adsp.mbn"
+rm "$tmp/source/adsp.b00"
+if ADSP_FIRMWARE_OUTPUT="$tmp/out/invalid.mbn" ./bin/omamobile-instantnoodlep-adsp-firmware --source-dir "$tmp/source" 2>/dev/null; then
+  echo 'expected missing-segment failure' >&2
+  exit 1
+fi
+[[ ! -e $tmp/out/invalid.mbn ]]

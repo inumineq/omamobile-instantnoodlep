@@ -1,0 +1,73 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Assemble this phone's own ADSP image into the firmware.map destination.
+set -euo pipefail
+
+source_dir=
+output=${ADSP_FIRMWARE_OUTPUT:-}
+while (($#)); do
+  case $1 in
+    --source-dir) source_dir=${2:?missing source directory}; shift 2 ;;
+    --output) output=${2:?missing output path}; shift 2 ;;
+    *) echo "Usage: $0 [--source-dir DIR] [--output FILE]" >&2; exit 2 ;;
+  esac
+done
+
+map=${ADSP_FIRMWARE_MAP:-/usr/share/omamobile/firmware.map}
+destination=$(awk -F'|' '$1 == "modem:/image/adsp.mdt" { print $2; found++ } END { if (found != 1) exit 1 }' "$map") || {
+  echo 'firmware.map must contain exactly one modem:/image/adsp.mdt row' >&2
+  exit 1
+}
+[[ $destination == qcom/sm8250/OnePlus/instantnoodlep/adsp.mbn ]] || {
+  echo "unexpected ADSP firmware.map destination: $destination" >&2
+  exit 1
+}
+[[ -n $output ]] || output="/usr/lib/firmware/$destination"
+
+mount_dir=
+cleanup() {
+  if [[ -n $mount_dir ]]; then
+    umount "$mount_dir" || true
+    rmdir "$mount_dir" || true
+  fi
+}
+trap cleanup EXIT
+
+if [[ -z $source_dir ]]; then
+  # Resolve by GPT PARTNAME; do not guess a /dev/block path or mount writable.
+  part=
+  for uevent in /sys/class/block/*/uevent; do
+    [[ -r $uevent ]] || continue
+    if grep -qx 'PARTNAME=modem_a' "$uevent"; then
+      [[ -z $part ]] || { echo 'multiple modem_a partitions found' >&2; exit 1; }
+      part=/dev/${uevent%/uevent}
+      part=${part##*/}
+    fi
+  done
+  [[ -n $part && -b /dev/$part ]] || { echo 'modem_a partition unavailable; ADSP firmware skipped' >&2; exit 0; }
+  mount_dir=$(mktemp -d /run/omamobile-adsp.XXXXXX)
+  mount -t vfat -o ro "/dev/$part" "$mount_dir"
+  source_dir="$mount_dir/image"
+fi
+
+[[ -s $source_dir/adsp.mdt ]] || { echo 'modem_a:/image/adsp.mdt missing' >&2; exit 1; }
+shopt -s nullglob
+segments=("$source_dir"/adsp.b[0-9][0-9])
+((${#segments[@]})) || { echo 'ADSP image has no numbered segments' >&2; exit 1; }
+expected=0
+for segment in "${segments[@]}"; do
+  actual=${segment##*.b}
+  printf -v wanted '%02d' "$expected"
+  [[ $actual == "$wanted" ]] || { echo "ADSP segment gap: expected adsp.b$wanted" >&2; exit 1; }
+  [[ -s $segment ]] || { echo "empty ADSP segment: ${segment##*/}" >&2; exit 1; }
+  expected=$((expected + 1))
+done
+
+mkdir -p "${output%/*}"
+tmp=$(mktemp "${output}.XXXXXX")
+trap 'rm -f "$tmp"; cleanup' EXIT
+cat "$source_dir/adsp.mdt" "${segments[@]}" > "$tmp"
+[[ -s $tmp ]]
+chmod 0644 "$tmp"
+mv -f "$tmp" "$output"
+echo "Installed ADSP firmware from modem_a:/image to ${output}"

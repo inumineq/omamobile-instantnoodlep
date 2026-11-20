@@ -57,9 +57,17 @@ pre_upgrade() {
 
 post_install() {
   add_repository
+  install_adsp_firmware
 }
 
 post_upgrade() {
   add_repository
   keep_local_channel
+  install_adsp_firmware
+}
+
+install_adsp_firmware() {
+  /usr/bin/omamobile-instantnoodlep-adsp-firmware || {
+    echo '==> ADSP firmware extraction failed; audio will remain unavailable.' >&2
+  }
 }

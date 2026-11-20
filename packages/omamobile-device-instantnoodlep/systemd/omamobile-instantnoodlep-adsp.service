@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Start instantnoodlep ADSP after root firmware is available
+After=local-fs.target
+ConditionPathExists=/usr/lib/firmware/qcom/sm8250/OnePlus/instantnoodlep/adsp.mbn
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-instantnoodlep-start-adsp
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
