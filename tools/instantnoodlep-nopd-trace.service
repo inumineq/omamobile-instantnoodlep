@@ -3,8 +3,8 @@
 # The conditions keep it idle on the daily kernel, which has both flags: the
 # unit starts only when one of them is missing. The trace tool runs once per
 # arming file, which is valid for 30 minutes and names the variant, and exits
-# 0 only after a complete trace; otherwise systemd does not run the sleep step
-# after it. The step name comes from the file the tool writes last.
+# 0 only after a complete trace with the cable out; otherwise systemd does not
+# run the sleep step after it. The step name comes from the file the tool writes last.
 [Unit]
 Description=Trace a kernel without pd_ignore_unused or clk_ignore_unused
 ConditionKernelCommandLine=|!pd_ignore_unused

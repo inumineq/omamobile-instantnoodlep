@@ -11,7 +11,10 @@ fail() { echo "not ok - $*" >&2; exit 1; }
 ok() { echo "ok - $*"; }
 
 setup() {
-  rm -rf "$T/out" "$T/udc" "$T/plat"
+  rm -rf "$T/out" "$T/udc" "$T/plat" "$T/psy"
+  mkdir -p "$T/psy/usb" "$T/psy/bat"
+  echo USB >"$T/psy/usb/type"; echo "${ONLINE:-0}" >"$T/psy/usb/online"
+  echo Battery >"$T/psy/bat/type"; echo 1 >"$T/psy/bat/online"
   mkdir -p "$T/out" "$T/udc/a600000.usb" "$T/plat/a600000.usb/power"
   echo "${VARIANT:-nopd}" >"$T/out/nopd-armed"
   printf 'active\n' >"$T/plat/a600000.usb/power/runtime_status"
@@ -27,7 +30,7 @@ run() {
   out=$(NOPD_TRACE_CMDLINE=$T/cmdline NOPD_TRACE_DIR=$T/out NOPD_TRACE_GENPD=$T/genpd \
         NOPD_TRACE_CLK=$T/clk NOPD_TRACE_UDC=$T/udc NOPD_TRACE_BOOTID=$T/bootid \
         NOPD_TRACE_REG=$T/reg NOPD_TRACE_DEFERRED=$T/deferred NOPD_TRACE_PLAT=$T/plat \
-        NOPD_TRACE_MIN_FREE_KB=${MINFREE:-1} \
+        NOPD_TRACE_MIN_FREE_KB=${MINFREE:-1} NOPD_TRACE_PSY=$T/psy \
         sh "$TOOL" "$@" 2>&1) || rc=$?
 }
 B='console=tty0 clk_ignore_unused androidboot.slot_suffix=_b'
@@ -90,6 +93,19 @@ VARIANT=noclk setup "$C"; run 1 1
 grep -q '^end' "$T/out/trace-noclk-abcdef01/index.txt" || fail "noclk: no end line"
 [ "$(cat "$T/out/trace-step")" = R4e ] || fail "noclk: wrong step name"
 ok "noclk is traced and names step R4e"
+
+ONLINE=1 setup "$B"; run 1 1
+[ "$rc" = 3 ] || fail "cable in: rc $rc"
+grep -q '^end' "$D/index.txt" || fail "cable in: the trace itself is not complete"
+grep -q '^cable in$' "$D/index.txt" || fail "cable in: not noted"
+setup "$B"; rm "$T/psy/usb/online"; run 1 1
+[ "$rc" = 3 ] || fail "cable unreadable: rc $rc"
+setup "$B"; echo Mains >"$T/psy/usb/type"; run 1 1
+[ "$rc" = 3 ] || fail "no USB supply: rc $rc"
+grep -q '^cable unknown$' "$D/index.txt" || fail "no USB supply: not noted"
+setup "$B"; run 1 1
+grep -q '^cable out$' "$D/index.txt" || fail "cable out: not noted"
+ok "no sleep step unless a USB supply reads offline"
 
 setup "$B"; touch -d '2 hours ago' "$T/out/nopd-armed"; run 1 1
 [ "$rc" = 1 ] || fail "stale arming: rc $rc"

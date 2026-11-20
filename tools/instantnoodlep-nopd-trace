@@ -26,7 +26,10 @@
 #
 # After a complete trace it writes the name of the sleep step that belongs to
 # the variant (R4d for nopd, R4e for noclk) to /var/lib/s2idle/trace-step,
-# which the unit hands to the step tool.
+# which the unit hands to the step tool. The sleep step must run with the
+# cable out. So the tool then reads every USB power supply: if one is online,
+# or none can be read, it notes that in index.txt and exits 3, and the unit
+# does not sleep.
 #
 # It exits 0 only after a complete trace. A refusal, an unreadable
 # power-domain summary, a failed write or a failed wait is a non-zero exit, so
@@ -46,6 +49,7 @@ UDC=${NOPD_TRACE_UDC:-/sys/class/udc}
 REG=${NOPD_TRACE_REG:-/sys/kernel/debug/regulator/regulator_summary}
 DEFERRED=${NOPD_TRACE_DEFERRED:-/sys/kernel/debug/devices_deferred}
 PLAT=${NOPD_TRACE_PLAT:-/sys/bus/platform/devices}
+PSY=${NOPD_TRACE_PSY:-/sys/class/power_supply}
 MIN_FREE_KB=${NOPD_TRACE_MIN_FREE_KB:-102400}
 ARM_WINDOW=1800   # seconds
 die() { echo "$*" >&2; exit 1; }
@@ -130,4 +134,20 @@ echo "end $(date -Is) uptime=$(up) samples=$((n + 1))" >> "$dir/index.txt" ||
   die "cannot write the end line"
 echo "$step" > "$OUT/trace-step" || die "cannot write $OUT/trace-step"
 sync || die "sync failed"
+
+# cable: "out" when every USB supply reads 0, "in" when one reads 1,
+# "unknown" when there is no USB supply or one cannot be read.
+cable=unknown
+for t in "$PSY"/*/type; do
+  [ -f "$t" ] || continue
+  case "$(cat "$t" 2>/dev/null)" in USB*) ;; *) continue;; esac
+  case "$(cat "${t%/type}/online" 2>/dev/null)" in
+  0) [ "$cable" = unknown ] && cable=out;;
+  1) cable=in; break;;
+  *) cable=unknown; break;;
+  esac
+done
+echo "cable $cable" >> "$dir/index.txt" || die "cannot write the cable line"
+sync
+[ "$cable" = out ] || { echo "cable $cable: no sleep step" >&2; exit 3; }
 exit 0

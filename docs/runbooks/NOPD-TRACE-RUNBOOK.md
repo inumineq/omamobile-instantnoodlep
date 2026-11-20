@@ -53,9 +53,12 @@ of the armed variant: `nopd` has `clk_ignore_unused` and lacks
 and the `noboth` image has neither; the tool refuses both.
 
 The tool also refuses when it is not armed, on any slot but B and with less
-than 100 MB free. It exits 0 only after a complete trace: a refusal, an
-unreadable power-domain summary, a failed write or a failed wait is a failed
-first command, and systemd then skips the sleep step after it.
+than 100 MB free. It exits 0 only after a complete trace with the cable out:
+a refusal, an unreadable power-domain summary, a failed write or a failed
+wait is a failed first command, and systemd then skips the sleep step after
+it. The same holds when a USB power supply reads online after the trace, or
+when none can be read; `index.txt` then ends with `cable in` or
+`cable unknown`, and the unit shows as failed with exit status 3.
 
 After a complete trace of 240 s the unit runs the one sleep step that the
 session never reached (60 s, RTC wake): `R4d` on `nopd`, `R4e` on `noclk`. It
@@ -77,6 +80,7 @@ V=nopd      # or: V=noclk
 
    ```sh
    ssh root@PHONE 'test -x /var/lib/s2idle/step && grep -c "clk_ignore_unused pd_ignore_unused" /proc/cmdline'
+   ssh root@PHONE 'grep -H . /sys/class/power_supply/*/type /sys/class/power_supply/*/online'
    sha256sum tools/instantnoodlep-nopd-trace
    scp tools/instantnoodlep-nopd-trace root@PHONE:/var/lib/s2idle/nopd-trace
    scp tools/instantnoodlep-nopd-trace.service root@PHONE:/etc/systemd/system/nopd-trace.service
@@ -85,7 +89,9 @@ V=nopd      # or: V=noclk
    ```
 
    Run the lines one at a time. The first must print `1`; if it does not,
-   stop before copying anything. Boot the variant (step 2) within 30 minutes
+   stop before copying anything. The second must show a supply of type `USB`
+   whose `online` is `1` now, with the cable in. If there is none, the tool
+   cannot see the cable and will skip the sleep step; go on, and report it. Boot the variant (step 2) within 30 minutes
    of the last line, because the arming expires.
 
    Expect: the two tool hashes match the laptop's and the step hash from the
@@ -110,14 +116,15 @@ V=nopd      # or: V=noclk
    after 4 minutes and must run with the cable out, like every sleep step
    before it. The trace's last samples will show `usb` changing; that is the
    unplug, and the laptop's log gives its time.
-   If the cable is still in at 4 minutes: do not pull it then. Let the run
-   finish and report that the sleep step ran with the cable in; its result
-   is not comparable.
+   If the cable is still in when the trace ends, the tool sees it and the
+   unit does not sleep. The trace itself still counts. Do not pull the cable
+   late to save the sleep step.
 
    Then leave the phone alone until 8 minutes on the timer. Do not touch the
    screen or the keys.
    Expect: it looks normal, then the screen goes dark for about a minute
-   (the sleep step) and comes back.
+   (the sleep step) and comes back. If it never goes dark, the sleep step
+   was skipped; go to step 4 at 8 minutes.
    Stop: the phone feels hot, or shows nothing 9 minutes after boot. In both
    cases go to step 4 at once.
 
@@ -134,8 +141,8 @@ V=nopd      # or: V=noclk
    grep -l UNREADABLE "$d"/*
    ```
 
-   Expect: `index.txt` has a `start` line, about 25 samples and an `end`
-   line; exactly one flag is printed, the one the variant keeps; the step
+   Expect: `index.txt` has a `start` line, about 25 samples, an `end` line
+   and `cable out`; exactly one flag is printed, the one the variant keeps; the step
    name is `R4d` for `nopd` and `R4e` for `noclk`, and its log ends with the
    `== after` block; the last command prints nothing. A file it does print
    is a source this kernel does not offer (clock or regulator summary,
@@ -147,8 +154,9 @@ V=nopd      # or: V=noclk
    refused with "armed ... s away from now", that clock was off; this is a
    void run, not a fault of the kernel under test.
 
-   If there is no trace folder, no `end` line or no step log from this run:
-   the run is void. Read `journalctl -b -1 -u nopd-trace.service`, report it
+   If `index.txt` ends with `cable in` or `cable unknown`, there is no step
+   log from this run, by design; report the trace and say so.
+   If there is no trace folder or no `end` line: the run is void. Read `journalctl -b -1 -u nopd-trace.service`, report it
    and stop.
 
    Compare the first sample with the daily reference:
