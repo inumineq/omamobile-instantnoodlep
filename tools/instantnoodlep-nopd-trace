@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: MIT
 #
 # instantnoodlep-nopd-trace: run ON THE PHONE (as root) from a systemd unit,
-# on a RAM-booted kernel whose command line lacks pd_ignore_unused.
+# on a RAM-booted kernel whose command line lacks pd_ignore_unused (variant
+# nopd) or clk_ignore_unused (variant noclk).
 #
-# Why: on that kernel the USB gadget vanished about two minutes after it
-# enumerated (session 2026-11-20, step S1), so nobody could log in and read
-# what had changed. This tool needs no login. It writes what the kernel
+# Why: on nopd the USB gadget vanished about two minutes after it enumerated,
+# and on noclk the laptop never saw it (session 2026-11-20, steps S1 and S2a),
+# so nobody could log in and read what had changed. This tool needs no login. It writes what the kernel
 # reports to the root file system, and the owner reads it after a reboot into
 # the daily kernel.
 #
@@ -18,9 +19,14 @@
 # It runs once per arming: it refuses (exit 1) unless the file
 # /var/lib/s2idle/nopd-armed exists and was written less than 30 minutes ago,
 # and removes that file when it starts, so an arming cannot carry over to a
-# later, unrelated boot. It also refuses on any command line but the `nopd`
-# variant's (clk_ignore_unused present, pd_ignore_unused absent), on any slot
-# but B, and with less than 100 MB free.
+# later, unrelated boot. The file holds the variant to trace, nopd or noclk.
+# The tool refuses when the command line is not that variant's: nopd has
+# clk_ignore_unused and lacks pd_ignore_unused, noclk is the reverse. It also
+# refuses on any slot but B and with less than 100 MB free.
+#
+# After a complete trace it writes the name of the sleep step that belongs to
+# the variant (R4d for nopd, R4e for noclk) to /var/lib/s2idle/trace-step,
+# which the unit hands to the step tool.
 #
 # It exits 0 only after a complete trace. A refusal, an unreadable
 # power-domain summary, a failed write or a failed wait is a non-zero exit, so
@@ -28,7 +34,7 @@
 # sources are optional: a missing one is stored as UNREADABLE.
 #
 # usage: instantnoodlep-nopd-trace [seconds [interval]]   (default 300 10)
-# Output: /var/lib/s2idle/trace-<boot id>/
+# Output: /var/lib/s2idle/trace-<variant>-<boot id>/
 # Runbook: docs/runbooks/NOPD-TRACE-RUNBOOK.md
 set -u
 
@@ -51,21 +57,32 @@ INTERVAL=${2:-10}
 num "$DURATION" && num "$INTERVAL" && [ "$INTERVAL" -gt 0 ] && [ $# -le 2 ] ||
   { echo "usage: ${0##*/} [seconds [interval]]" >&2; exit 2; }
 
-grep -qw pd_ignore_unused "$CMDLINE" && { echo "pd_ignore_unused is set, refusing" >&2; exit 1; }
-grep -qw clk_ignore_unused "$CMDLINE" || { echo "clk_ignore_unused is not set: not the nopd variant, refusing" >&2; exit 1; }
+has() { grep -qw "$1" "$CMDLINE"; }
+has pd_ignore_unused && has clk_ignore_unused && { echo "both flags are set, refusing" >&2; exit 1; }
+has pd_ignore_unused || has clk_ignore_unused || { echo "neither flag is set, refusing" >&2; exit 1; }
 grep -q 'androidboot.slot_suffix=_b' "$CMDLINE" || { echo "not on slot B, refusing" >&2; exit 2; }
 [ -f "$OUT/nopd-armed" ] || die "not armed ($OUT/nopd-armed missing), refusing"
 armed=$(stat -c %Y "$OUT/nopd-armed" 2>/dev/null); now=$(date +%s)
+variant=$(cat "$OUT/nopd-armed" 2>/dev/null)
 rm -f "$OUT/nopd-armed" && [ ! -e "$OUT/nopd-armed" ] || die "cannot disarm, refusing"
 case "$armed" in ''|*[!0-9]*) die "cannot read the arming time, refusing";; esac
 age=$((now - armed)); [ "$age" -lt 0 ] && age=$((-age))
 [ "$age" -lt "$ARM_WINDOW" ] || die "armed $age s away from now, refusing"
+case "$variant" in
+nopd)
+  has clk_ignore_unused && ! has pd_ignore_unused || die "armed for nopd, but this is another command line"
+  step=R4d;;
+noclk)
+  has pd_ignore_unused && ! has clk_ignore_unused || die "armed for noclk, but this is another command line"
+  step=R4e;;
+*) die "the arming file names no variant (nopd or noclk), refusing";;
+esac
 free=$(df -Pk "$OUT" | awk 'NR==2 {print $4}')
 case "$free" in ''|*[!0-9]*) echo "cannot read free space" >&2; exit 1;; esac
 [ "$free" -ge "$MIN_FREE_KB" ] || { echo "only $free kB free, refusing" >&2; exit 1; }
 
 id=$(cut -c1-8 "$BOOTID" 2>/dev/null)
-dir=$OUT/trace-${id:-unknown}
+dir=$OUT/trace-$variant-${id:-unknown}
 mkdir -p "$dir" && chmod 700 "$dir" || { echo "cannot create $dir" >&2; exit 2; }
 [ -r "$GENPD" ] || mount -t debugfs none /sys/kernel/debug 2>/dev/null
 [ -r "$GENPD" ] || die "cannot read $GENPD, refusing"
@@ -111,5 +128,6 @@ while :; do
 done
 echo "end $(date -Is) uptime=$(up) samples=$((n + 1))" >> "$dir/index.txt" ||
   die "cannot write the end line"
+echo "$step" > "$OUT/trace-step" || die "cannot write $OUT/trace-step"
 sync || die "sync failed"
 exit 0

@@ -1,18 +1,20 @@
 # SPDX-License-Identifier: MIT
 # Installed by docs/runbooks/NOPD-TRACE-RUNBOOK.md and removed by its rollback.
-# The condition keeps it idle on the daily kernel. The trace tool runs once
-# per arming file, which is valid for 30 minutes, and exits 0 only after a
-# complete trace; otherwise systemd does not run the sleep step after it.
+# The conditions keep it idle on the daily kernel, which has both flags: the
+# unit starts only when one of them is missing. The trace tool runs once per
+# arming file, which is valid for 30 minutes and names the variant, and exits
+# 0 only after a complete trace; otherwise systemd does not run the sleep step
+# after it. The step name comes from the file the tool writes last.
 [Unit]
-Description=Trace power domains on a kernel without pd_ignore_unused
-ConditionKernelCommandLine=!pd_ignore_unused
-ConditionKernelCommandLine=clk_ignore_unused
+Description=Trace a kernel without pd_ignore_unused or clk_ignore_unused
+ConditionKernelCommandLine=|!pd_ignore_unused
+ConditionKernelCommandLine=|!clk_ignore_unused
 
 [Service]
 Type=oneshot
 ExecStartPre=-/usr/bin/modprobe -a rtc-pm8xxx qcom_stats
 ExecStart=/var/lib/s2idle/nopd-trace 240 10
-ExecStart=/var/lib/s2idle/step R4d none 60
+ExecStart=/bin/sh -c 'exec /var/lib/s2idle/step "$$(cat /var/lib/s2idle/trace-step)" none 60'
 
 [Install]
 WantedBy=multi-user.target

@@ -13,7 +13,7 @@ ok() { echo "ok - $*"; }
 setup() {
   rm -rf "$T/out" "$T/udc" "$T/plat"
   mkdir -p "$T/out" "$T/udc/a600000.usb" "$T/plat/a600000.usb/power"
-  : >"$T/out/nopd-armed"
+  echo "${VARIANT:-nopd}" >"$T/out/nopd-armed"
   printf 'active\n' >"$T/plat/a600000.usb/power/runtime_status"
   printf 'vdda 1 1\n' >"$T/reg"; : >"$T/deferred"
   printf '%s\n' "$1" >"$T/cmdline"
@@ -31,17 +31,18 @@ run() {
         sh "$TOOL" "$@" 2>&1) || rc=$?
 }
 B='console=tty0 clk_ignore_unused androidboot.slot_suffix=_b'
-D=$T/out/trace-abcdef01
+D=$T/out/trace-nopd-abcdef01
+C='console=tty0 pd_ignore_unused androidboot.slot_suffix=_b'
 
 setup "$B pd_ignore_unused"; run 1 1
 [ "$rc" = 1 ] || fail "flag set: rc $rc"
 [ "$(ls "$T/out")" = nopd-armed ] || fail "flag set: wrote files or disarmed"
-ok "refuses while pd_ignore_unused is set and stays armed"
+ok "refuses the daily command line (both flags) and stays armed"
 
 setup "console=tty0 androidboot.slot_suffix=_b"; run 1 1
 [ "$rc" = 1 ] || fail "no flag at all: rc $rc"
 [ "$(ls "$T/out")" = nopd-armed ] || fail "no flag at all: wrote files or disarmed"
-ok "refuses a command line without clk_ignore_unused"
+ok "refuses a command line with neither flag and stays armed"
 
 setup "console=tty0 clk_ignore_unused androidboot.slot_suffix=_a"; run 1 1
 [ "$rc" = 2 ] || fail "slot A: rc $rc"
@@ -70,9 +71,25 @@ ok "refuses with too little free space"
 setup "$B"; run 1 1
 [ "$rc" = 0 ] || fail "armed run: rc $rc: $out"
 [ ! -e "$T/out/nopd-armed" ] || fail "still armed after a run"
+[ "$(cat "$T/out/trace-step")" = R4d ] || fail "nopd: wrong step name"
 run 1 1
 [ "$rc" = 1 ] || fail "second run without arming: rc $rc"
 ok "one run per arming"
+
+setup "$C"; run 1 1
+[ "$rc" = 1 ] || fail "nopd arming on the noclk command line: rc $rc"
+VARIANT=noclk setup "$B"; run 1 1
+[ "$rc" = 1 ] || fail "noclk arming on the nopd command line: rc $rc"
+setup "$B"; : >"$T/out/nopd-armed"; run 1 1
+[ "$rc" = 1 ] || fail "arming without a variant: rc $rc"
+[ -z "$(ls "$T/out")" ] || fail "a wrong arming wrote files"
+ok "the arming must name the variant of this command line"
+
+VARIANT=noclk setup "$C"; run 1 1
+[ "$rc" = 0 ] || fail "noclk run: rc $rc: $out"
+grep -q '^end' "$T/out/trace-noclk-abcdef01/index.txt" || fail "noclk: no end line"
+[ "$(cat "$T/out/trace-step")" = R4e ] || fail "noclk: wrong step name"
+ok "noclk is traced and names step R4e"
 
 setup "$B"; touch -d '2 hours ago' "$T/out/nopd-armed"; run 1 1
 [ "$rc" = 1 ] || fail "stale arming: rc $rc"
@@ -90,6 +107,7 @@ setup "$B"; mkdir -p "$T/bin"; printf '#!/bin/sh\nexit 1\n' >"$T/bin/sleep"; chm
 PATH=$T/bin:$PATH run 3 1
 [ "$rc" = 1 ] || fail "failed wait: rc $rc"
 grep -q '^end' "$D/index.txt" && fail "failed wait wrote an end line"
+[ ! -e "$T/out/trace-step" ] || fail "failed wait named a sleep step"
 ok "a failed wait is an error and writes no end line"
 
 # The output directory becomes unwritable in the middle of the run.
