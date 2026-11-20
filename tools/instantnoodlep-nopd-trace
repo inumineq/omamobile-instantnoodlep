@@ -16,11 +16,15 @@
 # no kernel setting.
 #
 # It runs once per arming: it refuses (exit 1) unless the file
-# /var/lib/s2idle/nopd-armed exists, and removes that file when it starts. It
-# also refuses when pd_ignore_unused is on the command line, on any slot but
-# B, and with less than 100 MB free. A refusal is a non-zero exit, so a unit
-# that lists a sleep step after this tool does not reach it. It stops (exit 1)
-# when it can no longer write its index.
+# /var/lib/s2idle/nopd-armed exists and was written less than 30 minutes ago,
+# and removes that file when it starts, so an arming cannot carry over to a
+# later, unrelated boot. It also refuses when pd_ignore_unused is on the
+# command line, on any slot but B, and with less than 100 MB free.
+#
+# It exits 0 only after a complete trace. A refusal, an unreadable
+# power-domain summary, a failed write or a failed wait is a non-zero exit, so
+# a unit that lists a sleep step after this tool does not reach it. The other
+# sources are optional: a missing one is stored as UNREADABLE.
 #
 # usage: instantnoodlep-nopd-trace [seconds [interval]]   (default 300 10)
 # Output: /var/lib/s2idle/trace-<boot id>/
@@ -36,6 +40,8 @@ REG=${NOPD_TRACE_REG:-/sys/kernel/debug/regulator/regulator_summary}
 DEFERRED=${NOPD_TRACE_DEFERRED:-/sys/kernel/debug/devices_deferred}
 PLAT=${NOPD_TRACE_PLAT:-/sys/bus/platform/devices}
 MIN_FREE_KB=${NOPD_TRACE_MIN_FREE_KB:-102400}
+ARM_WINDOW=1800   # seconds
+die() { echo "$*" >&2; exit 1; }
 BOOTID=${NOPD_TRACE_BOOTID:-/proc/sys/kernel/random/boot_id}
 
 num() { case "$1" in *[!0-9]*|''|??????*) return 1;; esac; }
@@ -46,8 +52,12 @@ num "$DURATION" && num "$INTERVAL" && [ "$INTERVAL" -gt 0 ] && [ $# -le 2 ] ||
 
 grep -qw pd_ignore_unused "$CMDLINE" && { echo "pd_ignore_unused is set, refusing" >&2; exit 1; }
 grep -q 'androidboot.slot_suffix=_b' "$CMDLINE" || { echo "not on slot B, refusing" >&2; exit 2; }
-[ -f "$OUT/nopd-armed" ] || { echo "not armed ($OUT/nopd-armed missing), refusing" >&2; exit 1; }
-rm -f "$OUT/nopd-armed" && [ ! -e "$OUT/nopd-armed" ] || { echo "cannot disarm, refusing" >&2; exit 1; }
+[ -f "$OUT/nopd-armed" ] || die "not armed ($OUT/nopd-armed missing), refusing"
+armed=$(stat -c %Y "$OUT/nopd-armed" 2>/dev/null); now=$(date +%s)
+rm -f "$OUT/nopd-armed" && [ ! -e "$OUT/nopd-armed" ] || die "cannot disarm, refusing"
+case "$armed" in ''|*[!0-9]*) die "cannot read the arming time, refusing";; esac
+age=$((now - armed)); [ "$age" -lt 0 ] && age=$((-age))
+[ "$age" -lt "$ARM_WINDOW" ] || die "armed $age s away from now, refusing"
 free=$(df -Pk "$OUT" | awk 'NR==2 {print $4}')
 case "$free" in ''|*[!0-9]*) echo "cannot read free space" >&2; exit 1;; esac
 [ "$free" -ge "$MIN_FREE_KB" ] || { echo "only $free kB free, refusing" >&2; exit 1; }
@@ -56,6 +66,7 @@ id=$(cut -c1-8 "$BOOTID" 2>/dev/null)
 dir=$OUT/trace-${id:-unknown}
 mkdir -p "$dir" && chmod 700 "$dir" || { echo "cannot create $dir" >&2; exit 2; }
 [ -r "$GENPD" ] || mount -t debugfs none /sys/kernel/debug 2>/dev/null
+[ -r "$GENPD" ] || die "cannot read $GENPD, refusing"
 
 up() { cut -d' ' -f1 /proc/uptime; }
 usb() {
@@ -66,7 +77,10 @@ usb() {
 # take <name> <command...>: store the output as <name>.<n>; say if it changed.
 take() {
   name=$1; shift
-  "$@" > "$dir/$name.$n" 2>/dev/null || echo "UNREADABLE" > "$dir/$name.$n"
+  "$@" > "$dir/$name.$n" 2>/dev/null || echo "UNREADABLE" > "$dir/$name.$n" ||
+    die "cannot write $dir/$name.$n, stopping"
+  [ -s "$dir/$name.$n" ] || [ "$name" = deferred ] || [ "$name" = usb ] ||
+    die "$dir/$name.$n is empty, stopping"
   if [ "$n" -gt 0 ] && ! cmp -s "$dir/$name.$n" "$dir/$name.$((n - 1))"; then
     changed="$changed $name"
   fi
@@ -80,6 +94,7 @@ n=0
 while :; do
   changed=
   take genpd cat "$GENPD"
+  grep -q UNREADABLE "$dir/genpd.$n" && die "power-domain summary unreadable, stopping"
   take clk cat "$CLK"
   take reg cat "$REG"
   take deferred cat "$DEFERRED"
@@ -87,10 +102,12 @@ while :; do
   take dmesg dmesg
   echo "$n uptime=$(up) changed:${changed:- none}" >> "$dir/index.txt" ||
     { echo "cannot write $dir/index.txt, stopping" >&2; exit 1; }
-  sync
+  sync || die "sync failed, stopping"
   [ $(( $(date +%s) - start )) -ge "$DURATION" ] && break
+  sleep "$INTERVAL" || die "wait failed, stopping"
   n=$((n + 1))
-  sleep "$INTERVAL" || break
 done
-echo "end $(date -Is) uptime=$(up) samples=$((n + 1))" >> "$dir/index.txt"
-sync
+echo "end $(date -Is) uptime=$(up) samples=$((n + 1))" >> "$dir/index.txt" ||
+  die "cannot write the end line"
+sync || die "sync failed"
+exit 0

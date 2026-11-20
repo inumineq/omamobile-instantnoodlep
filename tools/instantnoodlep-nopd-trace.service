@@ -1,12 +1,11 @@
 # SPDX-License-Identifier: MIT
 # Installed by docs/runbooks/NOPD-TRACE-RUNBOOK.md and removed by its rollback.
 # The condition keeps it idle on the daily kernel. The trace tool runs once
-# per arming file and exits non-zero on every refusal, and then systemd does
-# not run the sleep step after it.
+# per arming file, which is valid for 30 minutes, and exits 0 only after a
+# complete trace; otherwise systemd does not run the sleep step after it.
 [Unit]
 Description=Trace power domains on a kernel without pd_ignore_unused
 ConditionKernelCommandLine=!pd_ignore_unused
-After=multi-user.target
 
 [Service]
 Type=oneshot

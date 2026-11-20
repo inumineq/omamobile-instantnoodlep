@@ -31,12 +31,17 @@ Three files on the phone's root, all removed again by the rollback:
 - `/etc/systemd/system/nopd-trace.service`, a copy of
   `tools/instantnoodlep-nopd-trace.service`.
 - `/var/lib/s2idle/nopd-armed`, an empty file. The tool runs only when it
-  exists and removes it when it starts, so one arming gives one run.
+  exists and is less than 30 minutes old, and removes it when it starts. One
+  arming gives one run, and it cannot carry over to a later boot. `nopd` is
+  the daily kernel with another command line, so the kernel version cannot
+  tell the two apart; the flag and the arming do.
 
 Three things keep the unit from running by accident. The unit's condition is
 false on the daily kernel. The tool refuses when the flag is set, when it is
-not armed, on any slot but B and with less than 100 MB free. Each refusal is a
-failed first command, and systemd then skips the sleep step after it.
+not armed, on any slot but B and with less than 100 MB free. The tool exits 0
+only after a complete trace: a refusal, an unreadable power-domain summary, a
+failed write or a failed wait is a failed first command, and systemd then
+skips the sleep step after it.
 
 On `nopd` the unit traces for 240 s and then runs the one sleep step that S1
 never reached (60 s, RTC wake), with the step tool from
@@ -49,11 +54,16 @@ tool has been tested under bash only.
 1. **Install, on the daily kernel over USB SSH** (from the repo root on the laptop):
 
    ```sh
+   ssh root@PHONE 'test -x /var/lib/s2idle/step && grep -c pd_ignore_unused /proc/cmdline'
    sha256sum tools/instantnoodlep-nopd-trace
    scp tools/instantnoodlep-nopd-trace root@PHONE:/var/lib/s2idle/nopd-trace
    scp tools/instantnoodlep-nopd-trace.service root@PHONE:/etc/systemd/system/nopd-trace.service
    ssh root@PHONE 'chmod 755 /var/lib/s2idle/nopd-trace; sha256sum /var/lib/s2idle/nopd-trace /var/lib/s2idle/step; df -h /var/lib/s2idle | tail -1; systemctl daemon-reload; systemctl enable nopd-trace.service; systemctl start nopd-trace.service; systemctl status nopd-trace.service | head -5; ls /var/lib/s2idle | grep -c trace-; touch /var/lib/s2idle/nopd-armed; ls /var/lib/s2idle/nopd-armed'
    ```
+
+   Run the lines one at a time. The first must print `1`; if it does not,
+   stop before copying anything. Boot `nopd` (step 2) within 30 minutes of
+   this block, because the arming expires.
 
    Expect: the two tool hashes match the laptop's and the step hash from the
    session runbook (`6c5200f4...`); more than 1 GB free; the status shows the
@@ -84,8 +94,13 @@ tool has been tested under bash only.
    Expect: `index.txt` has a `start` line, about 25 samples and an `end`
    line; the count is `0`; `R4d.log` ends with the `== after` block;
    `grep -l UNREADABLE "$d"/*` prints nothing.
-   If there is no trace folder, or no `end` line: the run is void. Read
-   `journalctl -b -1 -u nopd-trace.service`, report it and stop.
+   The phone's hardware clock is not kept across boots, so the clock early
+   in boot is the one systemd saved at the last clean shutdown. If the tool
+   refused with "armed ... s away from now", that clock was off; this is a
+   void run, not a fault of the kernel under test.
+   If there is no trace folder, no `end` line or no `R4d.log` from this run:
+   the run is void. Read `journalctl -b -1 -u nopd-trace.service`, report it
+   and stop.
    For each sample `N` that `index.txt` marks as changed:
 
    ```sh
