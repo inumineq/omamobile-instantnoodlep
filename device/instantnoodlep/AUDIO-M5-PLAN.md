@@ -401,11 +401,19 @@ unverified.
 
 ### 11.4 RAM test candidate and gated runbook
 
-Candidate source: `~/src/l-k3-audio2`, based on
-`instantnoodlep-k3-daily2-qce-gmu` @ `bd566b604`; no DTB edit is needed for
-this phase because that base already carries the sound card/audio DT nodes.
-Build output: `~/android/build/k3-daily2-qce-gmu-audio2/`; kernel release
-must end in `-audio2`. Nothing in this section authorizes a flash.
+Candidate source: `~/src/l-k3-audio2`, branch
+`instantnoodlep-k3-daily2-qce-gmu-audio2` @ `bd566b604`; no DTB edit is
+needed for this phase because that base already carries the sound card/audio
+DT nodes. Built with clang/LLD 23, `LLVM=1`, `ARCH=arm64`,
+`LOCALVERSION=-audio2`, `Image.gz`, the board DTB and all configured modules
+[V: local build 2026-11-20]. Release is
+`7.3.0-rc6-instantnoodlep-k3-daily2-qce-gmu-audio2`, image size
+`0x1750000` (under the `0x2b60000` ABL ceiling). Artifacts and verified
+SHA256SUMS are in `~/android/build/k3-daily2-qce-gmu-audio2/`; no boot image
+was packed because the private probe initramfs, stock overlay and packer
+inputs are not available on this host. The coordinator packages these kernel
+artifacts into the RAM-only boot image. Nothing in this section authorizes a
+flash.
 
 **Prerequisites:** coordinator confirms candidate build artifacts, their
 SHA256SUMS, and ADSP firmware installation script/package revision; phone is

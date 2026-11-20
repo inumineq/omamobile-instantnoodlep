@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # State: where the port stands now
 
-Last updated: 2026-11-18 afternoon (morning session: RAM tests of slim features, packages 0.0.6/1.2/0.1.3 installed, module-tree loss found and fixed), claude on omabook.
+Last updated: 2026-11-20 (audio phase 2 candidate built offline, no phone access), Codex on omaserver.
 
 The one page an agent reads first. Keep it short and current: it is
 overwritten, not appended to. History goes to `device/instantnoodlep/NOTES.md`
@@ -26,7 +26,7 @@ of it from `origin/main` plus the pushed branches.
 | Slim-all Type-C recovery | [V] Two clang/LLD 23.1.6 candidates built offline with `image_size=0x1780000`. [I] QMP DP-exit recovery and static UTMI for the USB2 hub await T6/T7 in [TYPEC-DP-PLAN §7](../../device/instantnoodlep/TYPEC-DP-PLAN.md#7-recovery-candidates-after-dp-disconnect). |
 | Neutral `dtbo_b` (DTBO-PLAN) | Parked: ABL rejected v1 (table) and v2 (raw FDT); stock dtbo back [V: DTBO-PLAN §6; learning `l-48e0c482`] |
 | M3 display stack on the device (hardware GL) | Hardware GL works under combo K3 with the freedreno Mesa (rootfs, not upstream yet) [V: NOTES 2026-11-17 day; learning `l-405b6773`] |
-| M5 (Wi-Fi/BT, modem, GNSS, audio, sensors, power, camera, misc) | All plans written; the five original M5 plans cross-reviewed [V: `device/instantnoodlep/*-M5-PLAN.md`, `GNSS-M5-PLAN.md`, `CAMERA-PLAN.md`, `MISC-HW-PLAN.md`, `M5-REVIEW.md`]. Audio phase 2: TFA987x codec driver series compile-checked offline (clang 23.1.3, checkpatch/dt_binding_check clean), patches in `device/instantnoodlep/patches/audio-tfa987x/`, plan §10; first sound still phone-gated (PR #82 §9) [V: AUDIO-M5-PLAN §10] |
+| M5 (Wi-Fi/BT, modem, GNSS, audio, sensors, power, camera, misc) | All plans written; the five original M5 plans cross-reviewed [V: `device/instantnoodlep/*-M5-PLAN.md`, `GNSS-M5-PLAN.md`, `CAMERA-PLAN.md`, `MISC-HW-PLAN.md`, `M5-REVIEW.md`]. Audio phase 1: ADSP/APR passed on phone for 60 s after manual start; built-in auto-boot races root mount [V: PR #137 comment]. Audio phase 2: LPASS TLMM waits on q6afecc macro/codec vote clocks; phone-local firmware extraction + post-filesystem ADSP start package, source runbook, and daily2 audio2 kernel candidate prepared offline (release `7.3.0-rc6-instantnoodlep-k3-daily2-qce-gmu-audio2`, image_size `0x1750000`; artifacts in private build dir) [V: AUDIO-M5-PLAN §11, NOTES 2026-11-20]. Card registration and sound remain phone-gated [I]. |
 | M5 Wi-Fi/BT | Daily on `boot_b`: Wi-Fi connects; BT works after `btmgmt public-addr` [V: NOTES 2026-11-17 night]. One persistent phone-local address helper and device package 0.0.4 are proposed in PR #92; phone qualification remains [I] in `DEVICE-PACKAGE-PLAN.md`. |
 | M5 modem/GNSS | Kernel candidate rebuilt on slim K3 with omabook clang 23.1.3: branch `instantnoodlep-k3-slim-modem` @ `7dc2ea318807`, release `7.3.0-rc6-instantnoodlep-k3-slim-modem-g7dc2ea318807`, `image_size` 0x1750000 (ceiling 0x2b60000), dtbs_check clean, RAM image `~/android/build/k3-slim-modem-ram/boot-slim-modem.img` [V: MODEM-M5-DELTA §6.2]. No handset test; private EFS/DDR policy still blocks first boot (gates A-C). The earlier MBP clang 19 candidate (`e9ff58528f8b`) is superseded. |
 | M5 power | Charger P2 (`slim-p2`, module loaded by hand) passed P2-5..P2-7 in RAM on 2026-11-18: charges from the laptop at SDP 500 mA, 15 min without a STOP, max 29.7 °C, unplug/replug correct. Not on `boot_b`; the daily K3 still does not charge [V: learning 2026-11-18 slim-all] |

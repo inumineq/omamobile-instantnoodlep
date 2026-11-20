@@ -13,6 +13,10 @@ detail lives in the *-PLAN.md files.
   `modem_a` and a post-filesystem ADSP start unit.
 - [I] The package extraction and deferred start have not run on the handset;
   card registration, speaker identity and safe amp output remain phone-gated.
+- [V: private `~/android/build/k3-daily2-qce-gmu-audio2/SHA256SUMS`] The
+  candidate release is `7.3.0-rc6-instantnoodlep-k3-daily2-qce-gmu-audio2`,
+  `image_size=0x1750000`, and its Image.gz, DTB, config and stripped module
+  archive checksums verify. No boot image was packed and no phone test ran.
 
 ## 2026-11-18: two offline Type-C recovery candidates
 
