@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Installed by docs/runbooks/NOPD-TRACE-RUNBOOK.md and removed by its rollback.
+# The conditions keep it idle on the daily kernel, which has both flags: the
+# unit starts only when one of them is missing. The trace tool runs once per
+# arming file, which names the variant and is removed on the next daily boot
+# by instantnoodlep-nopd-disarm.service, and exits
+# 0 only after a complete trace with the cable out; otherwise systemd does not
+# run the sleep step after it. The step name comes from the file the tool writes last.
+[Unit]
+Description=Trace a kernel without pd_ignore_unused or clk_ignore_unused
+ConditionKernelCommandLine=|!pd_ignore_unused
+ConditionKernelCommandLine=|!clk_ignore_unused
+
+[Service]
+Type=oneshot
+ExecStartPre=-/usr/bin/modprobe -a rtc-pm8xxx qcom_stats
+ExecStart=/var/lib/s2idle/nopd-trace 240 10
+ExecStart=/bin/sh -c 'exec /var/lib/s2idle/step "$$(cat /var/lib/s2idle/trace-step)" none 60'
+
+[Install]
+WantedBy=multi-user.target

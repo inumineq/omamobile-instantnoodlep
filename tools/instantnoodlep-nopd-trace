@@ -1,0 +1,151 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+#
+# instantnoodlep-nopd-trace: run ON THE PHONE (as root) from a systemd unit,
+# on a RAM-booted kernel whose command line lacks pd_ignore_unused (variant
+# nopd) or clk_ignore_unused (variant noclk).
+#
+# Why: on nopd the USB gadget vanished about two minutes after it enumerated,
+# and on noclk the laptop never saw it (session 2026-11-20, steps S1 and S2a),
+# so nobody could log in and read what had changed. This tool needs no login. It writes what the kernel
+# reports to the root file system, and the owner reads it after a reboot into
+# the daily kernel.
+#
+# Every interval it stores the power-domain, clock and regulator summaries,
+# the deferred-probe list, the USB controller state and the kernel log, and it
+# notes in index.txt which of them changed since the sample before. It changes
+# no kernel setting.
+#
+# It runs once per arming: it refuses (exit 1) unless the file
+# /var/lib/s2idle/nopd-armed exists, and removes that file when it starts.
+# The file holds the variant to trace, nopd or noclk. The check uses no clock:
+# early in boot this phone's clock reads January 1970, and a time limit on the
+# arming made the first run refuse. Instead a second unit,
+# instantnoodlep-nopd-disarm.service, removes the arming on every boot of the
+# daily kernel, so an arming lasts until the next boot and no longer.
+# The tool refuses when the command line is not that variant's: nopd has
+# clk_ignore_unused and lacks pd_ignore_unused, noclk is the reverse. It also
+# refuses on any slot but B and with less than 100 MB free.
+#
+# After a complete trace it writes the name of the sleep step that belongs to
+# the variant (R4d for nopd, R4e for noclk) to /var/lib/s2idle/trace-step,
+# which the unit hands to the step tool. The sleep step must run with the
+# cable out. So the tool then reads every USB power supply: if one is online,
+# or none can be read, it notes that in index.txt and exits 3, and the unit
+# does not sleep.
+#
+# It exits 0 only after a complete trace. A refusal, an unreadable
+# power-domain summary, a failed write or a failed wait is a non-zero exit, so
+# a unit that lists a sleep step after this tool does not reach it. The other
+# sources are optional: a missing one is stored as UNREADABLE.
+#
+# usage: instantnoodlep-nopd-trace [seconds [interval]]   (default 300 10)
+# Output: /var/lib/s2idle/trace-<variant>-<boot id>/
+# Runbook: docs/runbooks/NOPD-TRACE-RUNBOOK.md
+set -u
+
+CMDLINE=${NOPD_TRACE_CMDLINE:-/proc/cmdline}
+OUT=${NOPD_TRACE_DIR:-/var/lib/s2idle}
+GENPD=${NOPD_TRACE_GENPD:-/sys/kernel/debug/pm_genpd/pm_genpd_summary}
+CLK=${NOPD_TRACE_CLK:-/sys/kernel/debug/clk/clk_summary}
+UDC=${NOPD_TRACE_UDC:-/sys/class/udc}
+REG=${NOPD_TRACE_REG:-/sys/kernel/debug/regulator/regulator_summary}
+DEFERRED=${NOPD_TRACE_DEFERRED:-/sys/kernel/debug/devices_deferred}
+PLAT=${NOPD_TRACE_PLAT:-/sys/bus/platform/devices}
+PSY=${NOPD_TRACE_PSY:-/sys/class/power_supply}
+MIN_FREE_KB=${NOPD_TRACE_MIN_FREE_KB:-102400}
+die() { echo "$*" >&2; exit 1; }
+BOOTID=${NOPD_TRACE_BOOTID:-/proc/sys/kernel/random/boot_id}
+
+num() { case "$1" in *[!0-9]*|''|??????*) return 1;; esac; }
+DURATION=${1:-300}
+INTERVAL=${2:-10}
+num "$DURATION" && num "$INTERVAL" && [ "$INTERVAL" -gt 0 ] && [ $# -le 2 ] ||
+  { echo "usage: ${0##*/} [seconds [interval]]" >&2; exit 2; }
+
+has() { grep -qw "$1" "$CMDLINE"; }
+has pd_ignore_unused && has clk_ignore_unused && { echo "both flags are set, refusing" >&2; exit 1; }
+has pd_ignore_unused || has clk_ignore_unused || { echo "neither flag is set, refusing" >&2; exit 1; }
+grep -q 'androidboot.slot_suffix=_b' "$CMDLINE" || { echo "not on slot B, refusing" >&2; exit 2; }
+[ -f "$OUT/nopd-armed" ] || die "not armed ($OUT/nopd-armed missing), refusing"
+variant=$(cat "$OUT/nopd-armed" 2>/dev/null)
+rm -f "$OUT/nopd-armed" && [ ! -e "$OUT/nopd-armed" ] || die "cannot disarm, refusing"
+case "$variant" in
+nopd)
+  has clk_ignore_unused && ! has pd_ignore_unused || die "armed for nopd, but this is another command line"
+  step=R4d;;
+noclk)
+  has pd_ignore_unused && ! has clk_ignore_unused || die "armed for noclk, but this is another command line"
+  step=R4e;;
+*) die "the arming file names no variant (nopd or noclk), refusing";;
+esac
+free=$(df -Pk "$OUT" | awk 'NR==2 {print $4}')
+case "$free" in ''|*[!0-9]*) echo "cannot read free space" >&2; exit 1;; esac
+[ "$free" -ge "$MIN_FREE_KB" ] || { echo "only $free kB free, refusing" >&2; exit 1; }
+
+id=$(cut -c1-8 "$BOOTID" 2>/dev/null)
+dir=$OUT/trace-$variant-${id:-unknown}
+mkdir -p "$dir" && chmod 700 "$dir" || { echo "cannot create $dir" >&2; exit 2; }
+[ -r "$GENPD" ] || mount -t debugfs none /sys/kernel/debug 2>/dev/null
+[ -r "$GENPD" ] || die "cannot read $GENPD, refusing"
+
+up() { cut -d' ' -f1 /proc/uptime; }
+usb() {
+  for f in "$UDC"/*/state "$UDC"/*/current_speed "$PLAT"/*.usb/power/runtime_status; do
+    if [ -f "$f" ]; then echo "$f $(cat "$f" 2>/dev/null)"; fi
+  done
+}
+# take <name> <command...>: store the output as <name>.<n>; say if it changed.
+take() {
+  name=$1; shift
+  "$@" > "$dir/$name.$n" 2>/dev/null || echo "UNREADABLE" > "$dir/$name.$n" ||
+    die "cannot write $dir/$name.$n, stopping"
+  [ -s "$dir/$name.$n" ] || [ "$name" = deferred ] || [ "$name" = usb ] ||
+    die "$dir/$name.$n is empty, stopping"
+  if [ "$n" -gt 0 ] && ! cmp -s "$dir/$name.$n" "$dir/$name.$((n - 1))"; then
+    changed="$changed $name"
+  fi
+}
+
+cat "$CMDLINE" > "$dir/cmdline.txt" &&
+echo "start $(date -Is) uptime=$(up) seconds=$DURATION interval=$INTERVAL" >> "$dir/index.txt" ||
+  { echo "cannot write to $dir" >&2; exit 1; }
+start=$(up); start=${start%.*}
+n=0
+while :; do
+  changed=
+  take genpd cat "$GENPD"
+  grep -q UNREADABLE "$dir/genpd.$n" && die "power-domain summary unreadable, stopping"
+  take clk cat "$CLK"
+  take reg cat "$REG"
+  take deferred cat "$DEFERRED"
+  take usb usb
+  take dmesg dmesg
+  echo "$n uptime=$(up) changed:${changed:- none}" >> "$dir/index.txt" ||
+    { echo "cannot write $dir/index.txt, stopping" >&2; exit 1; }
+  sync || die "sync failed, stopping"
+  now=$(up); [ $(( ${now%.*} - start )) -ge "$DURATION" ] && break
+  sleep "$INTERVAL" || die "wait failed, stopping"
+  n=$((n + 1))
+done
+echo "end $(date -Is) uptime=$(up) samples=$((n + 1))" >> "$dir/index.txt" ||
+  die "cannot write the end line"
+echo "$step" > "$OUT/trace-step" || die "cannot write $OUT/trace-step"
+sync || die "sync failed"
+
+# cable: "out" when every USB supply reads 0, "in" when one reads 1,
+# "unknown" when there is no USB supply or one cannot be read.
+cable=unknown
+for t in "$PSY"/*/type; do
+  [ -f "$t" ] || continue
+  case "$(cat "$t" 2>/dev/null)" in USB*) ;; *) continue;; esac
+  case "$(cat "${t%/type}/online" 2>/dev/null)" in
+  0) [ "$cable" = unknown ] && cable=out;;
+  1) cable=in; break;;
+  *) cable=unknown; break;;
+  esac
+done
+echo "cable $cable" >> "$dir/index.txt" || die "cannot write the cable line"
+sync
+[ "$cable" = out ] || { echo "cable $cable: no sleep step" >&2; exit 3; }
+exit 0

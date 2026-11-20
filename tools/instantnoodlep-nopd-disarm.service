@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+# Installed with instantnoodlep-nopd-trace.service by
+# docs/runbooks/NOPD-TRACE-RUNBOOK.md and removed by its rollback.
+# Runs on every boot of the daily kernel, which has both flags, and removes
+# an arming that was not used, so it cannot carry over to a later test boot.
+[Unit]
+Description=Remove an unused arming of the nopd/noclk trace
+ConditionKernelCommandLine=pd_ignore_unused
+ConditionKernelCommandLine=clk_ignore_unused
+ConditionPathExists=/var/lib/s2idle/nopd-armed
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/rm -f /var/lib/s2idle/nopd-armed
+
+[Install]
+WantedBy=multi-user.target
