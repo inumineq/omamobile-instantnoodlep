@@ -2,7 +2,8 @@
 # Installed by docs/runbooks/NOPD-TRACE-RUNBOOK.md and removed by its rollback.
 # The conditions keep it idle on the daily kernel, which has both flags: the
 # unit starts only when one of them is missing. The trace tool runs once per
-# arming file, which is valid for 30 minutes and names the variant, and exits
+# arming file, which names the variant and is removed on the next daily boot
+# by instantnoodlep-nopd-disarm.service, and exits
 # 0 only after a complete trace with the cable out; otherwise systemd does not
 # run the sleep step after it. The step name comes from the file the tool writes last.
 [Unit]

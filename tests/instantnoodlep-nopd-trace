@@ -107,12 +107,12 @@ setup "$B"; run 1 1
 grep -q '^cable out$' "$D/index.txt" || fail "cable out: not noted"
 ok "no sleep step unless a USB supply reads offline"
 
-setup "$B"; touch -d '2 hours ago' "$T/out/nopd-armed"; run 1 1
-[ "$rc" = 1 ] || fail "stale arming: rc $rc"
-[ -z "$(ls "$T/out")" ] || fail "stale arming: wrote files or stayed armed"
+# Early in boot the phone's clock reads 1970; the arming must not care.
+setup "$B"; touch -d '1970-01-05 13:10' "$T/out/nopd-armed"; run 1 1
+[ "$rc" = 0 ] || fail "arming with a 1970 time stamp: rc $rc: $out"
 setup "$B"; touch -d '2 hours' "$T/out/nopd-armed"; run 1 1
-[ "$rc" = 1 ] || fail "arming far in the future: rc $rc"
-ok "an arming more than 30 minutes away is refused and removed"
+[ "$rc" = 0 ] || fail "arming with a future time stamp: rc $rc: $out"
+ok "the arming does not depend on the clock"
 
 setup "$B"; rm "$T/genpd"; run 1 1
 [ "$rc" = 1 ] || fail "no power-domain summary: rc $rc"

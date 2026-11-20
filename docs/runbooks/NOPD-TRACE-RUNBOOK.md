@@ -35,15 +35,23 @@ guess. Both causes are open; these runs are meant to find them.
 
 ## What is installed
 
-Three files on the phone's root, all removed again by the rollback:
+Four files on the phone's root, all removed again by the rollback:
 
 - `/var/lib/s2idle/nopd-trace`, a copy of `tools/instantnoodlep-nopd-trace`.
 - `/etc/systemd/system/nopd-trace.service`, a copy of
   `tools/instantnoodlep-nopd-trace.service`.
+- `/etc/systemd/system/nopd-disarm.service`, a copy of
+  `tools/instantnoodlep-nopd-disarm.service`.
 - `/var/lib/s2idle/nopd-armed`, a file that holds the word `nopd` or
-  `noclk`. The tool runs only when it exists and is less than 30 minutes
-  old, and removes it when it starts. One arming gives one run, and it cannot
-  carry over to a later boot.
+  `noclk`. The tool runs only when it exists, and removes it when it starts,
+  so one arming gives one run. The disarm unit removes it on every boot of
+  the daily kernel, so an arming that was not used cannot carry over to a
+  later test boot.
+
+The arming has no time limit. A first version had one, and its run on
+`nopd` was void: early in boot this phone's clock read 5 January 1970, and
+the tool refused. [V, coordinator's report] The tool now uses no clock for
+any decision; the dates it writes into `index.txt` are only labels.
 
 Both variants are the daily kernel with another command line, so the kernel
 version cannot tell them apart. The command line does. The unit starts only
@@ -84,15 +92,17 @@ V=nopd      # or: V=noclk
    sha256sum tools/instantnoodlep-nopd-trace
    scp tools/instantnoodlep-nopd-trace root@PHONE:/var/lib/s2idle/nopd-trace
    scp tools/instantnoodlep-nopd-trace.service root@PHONE:/etc/systemd/system/nopd-trace.service
-   ssh root@PHONE 'set -e; cd /var/lib/s2idle; chmod 755 nopd-trace; sha256sum nopd-trace step; df -h . | tail -1; cat /sys/kernel/debug/clk/clk_summary > daily-clk.txt; cat /sys/kernel/debug/pm_genpd/pm_genpd_summary > daily-genpd.txt; cat /sys/kernel/debug/regulator/regulator_summary > daily-reg.txt; wc -l daily-clk.txt daily-genpd.txt daily-reg.txt; systemctl daemon-reload; systemctl enable nopd-trace.service; systemctl start nopd-trace.service; systemctl status nopd-trace.service | head -5 || true'
+   scp tools/instantnoodlep-nopd-disarm.service root@PHONE:/etc/systemd/system/nopd-disarm.service
+   ssh root@PHONE 'set -e; cd /var/lib/s2idle; chmod 755 nopd-trace; sha256sum nopd-trace step; df -h . | tail -1; cat /sys/kernel/debug/clk/clk_summary > daily-clk.txt; cat /sys/kernel/debug/pm_genpd/pm_genpd_summary > daily-genpd.txt; cat /sys/kernel/debug/regulator/regulator_summary > daily-reg.txt; wc -l daily-clk.txt daily-genpd.txt daily-reg.txt; systemctl daemon-reload; systemctl enable nopd-trace.service nopd-disarm.service; systemctl start nopd-trace.service; systemctl status nopd-trace.service | head -5 || true'
    ssh root@PHONE "set -e; cd /var/lib/s2idle; ls -d trace-$V-* 2>/dev/null | wc -l; echo $V > nopd-armed; cat nopd-armed"
    ```
 
    Run the lines one at a time. The first must print `1`; if it does not,
    stop before copying anything. The second must show a supply of type `USB`
    whose `online` is `1` now, with the cable in. If there is none, the tool
-   cannot see the cable and will skip the sleep step; go on, and report it. Boot the variant (step 2) within 30 minutes
-   of the last line, because the arming expires.
+   cannot see the cable and will skip the sleep step; go on, and report it.
+   Boot the variant (step 2) next. If the phone boots the daily kernel
+   before that, the arming is gone; write it again with the last line.
 
    Expect: the two tool hashes match the laptop's and the step hash from the
    session runbook (`6c5200f4...`); more than 1 GB free; the three `daily-`
@@ -149,11 +159,6 @@ V=nopd      # or: V=noclk
    deferred list, kernel log); report its name. The run still counts, because
    the power-domain summary is the one source the tool requires.
 
-   The phone's hardware clock is not kept across boots, so the clock early
-   in boot is the one systemd saved at the last clean shutdown. If the tool
-   refused with "armed ... s away from now", that clock was off; this is a
-   void run, not a fault of the kernel under test.
-
    If `index.txt` ends with `cable in` or `cable unknown`, there is no step
    log from this run, by design; report the trace and say so.
    If there is no trace folder or no `end` line: the run is void. Read `journalctl -b -1 -u nopd-trace.service`, report it
@@ -207,13 +212,13 @@ Samples are 10 s apart and show what coincides, not what causes what.
 On the daily kernel:
 
 ```sh
-systemctl disable nopd-trace.service
-cd /var/lib/s2idle && rm -f /etc/systemd/system/nopd-trace.service nopd-trace nopd-armed trace-step
+systemctl disable nopd-trace.service nopd-disarm.service
+cd /var/lib/s2idle && rm -f /etc/systemd/system/nopd-trace.service /etc/systemd/system/nopd-disarm.service nopd-trace nopd-armed trace-step
 systemctl daemon-reload
-systemctl is-enabled nopd-trace.service
+systemctl is-enabled nopd-trace.service nopd-disarm.service
 ```
 
-Expect: the last line says the unit is not found.
+Expect: the last command says both units are not found.
 
 The trace folders and the `daily-` files can stay; they are some tens of
 megabytes. No partition is written at any step, and the slot is never

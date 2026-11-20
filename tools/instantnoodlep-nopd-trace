@@ -17,9 +17,12 @@
 # no kernel setting.
 #
 # It runs once per arming: it refuses (exit 1) unless the file
-# /var/lib/s2idle/nopd-armed exists and was written less than 30 minutes ago,
-# and removes that file when it starts, so an arming cannot carry over to a
-# later, unrelated boot. The file holds the variant to trace, nopd or noclk.
+# /var/lib/s2idle/nopd-armed exists, and removes that file when it starts.
+# The file holds the variant to trace, nopd or noclk. The check uses no clock:
+# early in boot this phone's clock reads January 1970, and a time limit on the
+# arming made the first run refuse. Instead a second unit,
+# instantnoodlep-nopd-disarm.service, removes the arming on every boot of the
+# daily kernel, so an arming lasts until the next boot and no longer.
 # The tool refuses when the command line is not that variant's: nopd has
 # clk_ignore_unused and lacks pd_ignore_unused, noclk is the reverse. It also
 # refuses on any slot but B and with less than 100 MB free.
@@ -51,7 +54,6 @@ DEFERRED=${NOPD_TRACE_DEFERRED:-/sys/kernel/debug/devices_deferred}
 PLAT=${NOPD_TRACE_PLAT:-/sys/bus/platform/devices}
 PSY=${NOPD_TRACE_PSY:-/sys/class/power_supply}
 MIN_FREE_KB=${NOPD_TRACE_MIN_FREE_KB:-102400}
-ARM_WINDOW=1800   # seconds
 die() { echo "$*" >&2; exit 1; }
 BOOTID=${NOPD_TRACE_BOOTID:-/proc/sys/kernel/random/boot_id}
 
@@ -66,12 +68,8 @@ has pd_ignore_unused && has clk_ignore_unused && { echo "both flags are set, ref
 has pd_ignore_unused || has clk_ignore_unused || { echo "neither flag is set, refusing" >&2; exit 1; }
 grep -q 'androidboot.slot_suffix=_b' "$CMDLINE" || { echo "not on slot B, refusing" >&2; exit 2; }
 [ -f "$OUT/nopd-armed" ] || die "not armed ($OUT/nopd-armed missing), refusing"
-armed=$(stat -c %Y "$OUT/nopd-armed" 2>/dev/null); now=$(date +%s)
 variant=$(cat "$OUT/nopd-armed" 2>/dev/null)
 rm -f "$OUT/nopd-armed" && [ ! -e "$OUT/nopd-armed" ] || die "cannot disarm, refusing"
-case "$armed" in ''|*[!0-9]*) die "cannot read the arming time, refusing";; esac
-age=$((now - armed)); [ "$age" -lt 0 ] && age=$((-age))
-[ "$age" -lt "$ARM_WINDOW" ] || die "armed $age s away from now, refusing"
 case "$variant" in
 nopd)
   has clk_ignore_unused && ! has pd_ignore_unused || die "armed for nopd, but this is another command line"
@@ -112,7 +110,7 @@ take() {
 cat "$CMDLINE" > "$dir/cmdline.txt" &&
 echo "start $(date -Is) uptime=$(up) seconds=$DURATION interval=$INTERVAL" >> "$dir/index.txt" ||
   { echo "cannot write to $dir" >&2; exit 1; }
-start=$(date +%s)
+start=$(up); start=${start%.*}
 n=0
 while :; do
   changed=
@@ -126,7 +124,7 @@ while :; do
   echo "$n uptime=$(up) changed:${changed:- none}" >> "$dir/index.txt" ||
     { echo "cannot write $dir/index.txt, stopping" >&2; exit 1; }
   sync || die "sync failed, stopping"
-  [ $(( $(date +%s) - start )) -ge "$DURATION" ] && break
+  now=$(up); [ $(( ${now%.*} - start )) -ge "$DURATION" ] && break
   sleep "$INTERVAL" || die "wait failed, stopping"
   n=$((n + 1))
 done
