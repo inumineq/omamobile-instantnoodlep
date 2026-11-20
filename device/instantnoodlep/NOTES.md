@@ -4,6 +4,20 @@
 Newest first. Findings that matter beyond one subsystem go here; subsystem
 detail lives in the *-PLAN.md files.
 
+## 2026-11-20: audio phase 2 prepared offline
+
+- [V: `device/instantnoodlep/AUDIO-M5-PLAN.md` §11 and the cited kernel
+  files] LPASS TLMM's two DT clocks are q6afecc macro and codec vote clocks;
+  the provider is part of the q6afe APR service. The package now contains a
+  names-only-map-driven design to assemble ADSP firmware from read-only
+  `modem_a` and a post-filesystem ADSP start unit.
+- [I] The package extraction and deferred start have not run on the handset;
+  card registration, speaker identity and safe amp output remain phone-gated.
+- [V: private `~/android/build/k3-daily2-qce-gmu-audio2/SHA256SUMS`] The
+  candidate release is `7.3.0-rc6-instantnoodlep-k3-daily2-qce-gmu-audio2`,
+  `image_size=0x1750000`, and its Image.gz, DTB, config and stripped module
+  archive checksums verify. No boot image was packed and no phone test ran.
+
 ## 2026-11-18: two offline Type-C recovery candidates
 
 - [V] Both slim-all derivatives built with clang/LLD 23.1.6 on macbookpro

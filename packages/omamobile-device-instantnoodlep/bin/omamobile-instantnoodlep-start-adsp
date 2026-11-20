@@ -1,0 +1,12 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+for remoteproc in /sys/class/remoteproc/remoteproc*; do
+  [[ -r $remoteproc/name && -r $remoteproc/state ]] || continue
+  [[ $(<"$remoteproc/name") == adsp ]] || continue
+  state=$(<"$remoteproc/state")
+  [[ $state == running ]] || echo start > "$remoteproc/state"
+  exit 0
+done
+echo 'ADSP remoteproc was not found' >&2
+exit 1

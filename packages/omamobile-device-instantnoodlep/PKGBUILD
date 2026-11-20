@@ -8,7 +8,7 @@ pkgdesc="Omarchy Mobile support for the OnePlus 8 Pro (instantnoodlep)"
 arch=(aarch64)
 url="https://github.com/inumineq/omamobile-instantnoodlep"
 license=(MIT)
-depends=(bash systemd bluez-utils omamobile-keyring)
+depends=(bash systemd bluez-utils omamobile-keyring util-linux)
 optdepends=(
   'vulkan-freedreno: Vulkan support for Adreno 650'
   'chromium: per-device browser and web-app profile'
