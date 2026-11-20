@@ -1,0 +1,78 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+#
+# instantnoodlep-nopd-trace: run ON THE PHONE (as root) from a systemd unit,
+# on a RAM-booted kernel whose command line lacks pd_ignore_unused.
+#
+# Why: on that kernel the USB gadget vanished about two minutes after it
+# enumerated (session 2026-11-20, step S1), so nobody could log in and read
+# what had changed. This tool needs no login. It writes what the kernel
+# reports to the root file system, and the owner reads it after a reboot into
+# the daily kernel.
+#
+# Every interval it stores the power-domain summary, the clock summary, the
+# USB controller state and the kernel log, and it notes in index.txt which of
+# them changed since the sample before. It changes no kernel setting.
+#
+# It does nothing (exit 0) when pd_ignore_unused is on the command line, so
+# the unit can stay installed on the daily system. It refuses any slot but B.
+#
+# usage: instantnoodlep-nopd-trace [seconds [interval]]   (default 300 10)
+# Output: /var/lib/s2idle/trace-<boot id>/
+# Runbook: docs/runbooks/NOPD-TRACE-RUNBOOK.md
+set -u
+
+CMDLINE=${NOPD_TRACE_CMDLINE:-/proc/cmdline}
+OUT=${NOPD_TRACE_DIR:-/var/lib/s2idle}
+GENPD=${NOPD_TRACE_GENPD:-/sys/kernel/debug/pm_genpd/pm_genpd_summary}
+CLK=${NOPD_TRACE_CLK:-/sys/kernel/debug/clk/clk_summary}
+UDC=${NOPD_TRACE_UDC:-/sys/class/udc}
+BOOTID=${NOPD_TRACE_BOOTID:-/proc/sys/kernel/random/boot_id}
+
+num() { case "$1" in *[!0-9]*|''|??????*) return 1;; esac; }
+DURATION=${1:-300}
+INTERVAL=${2:-10}
+num "$DURATION" && num "$INTERVAL" && [ "$INTERVAL" -gt 0 ] && [ $# -le 2 ] ||
+  { echo "usage: ${0##*/} [seconds [interval]]" >&2; exit 2; }
+
+grep -qw pd_ignore_unused "$CMDLINE" && { echo "pd_ignore_unused is set, nothing to trace"; exit 0; }
+grep -q 'androidboot.slot_suffix=_b' "$CMDLINE" || { echo "not on slot B, refusing" >&2; exit 2; }
+
+id=$(cut -c1-8 "$BOOTID" 2>/dev/null)
+dir=$OUT/trace-${id:-unknown}
+mkdir -p "$dir" && chmod 700 "$dir" || { echo "cannot create $dir" >&2; exit 2; }
+[ -r "$GENPD" ] || mount -t debugfs none /sys/kernel/debug 2>/dev/null
+
+up() { cut -d' ' -f1 /proc/uptime; }
+usb() {
+  for f in "$UDC"/*/state "$UDC"/*/current_speed "$UDC"/*/device/power/runtime_status; do
+    if [ -f "$f" ]; then echo "$f $(cat "$f" 2>/dev/null)"; fi
+  done
+}
+# take <name> <command...>: store the output as <name>.<n>; say if it changed.
+take() {
+  name=$1; shift
+  "$@" > "$dir/$name.$n" 2>/dev/null || echo "UNREADABLE" > "$dir/$name.$n"
+  if [ "$n" -gt 0 ] && ! cmp -s "$dir/$name.$n" "$dir/$name.$((n - 1))"; then
+    changed="$changed $name"
+  fi
+}
+
+cat "$CMDLINE" > "$dir/cmdline.txt"
+echo "start $(date -Is) uptime=$(up) seconds=$DURATION interval=$INTERVAL" >> "$dir/index.txt"
+start=$(date +%s)
+n=0
+while :; do
+  changed=
+  take genpd cat "$GENPD"
+  take clk cat "$CLK"
+  take usb usb
+  dmesg > "$dir/dmesg.txt" 2>/dev/null
+  echo "$n uptime=$(up) changed:${changed:- none}" >> "$dir/index.txt"
+  sync
+  [ $(( $(date +%s) - start )) -ge "$DURATION" ] && break
+  n=$((n + 1))
+  sleep "$INTERVAL" || break
+done
+echo "end $(date -Is) uptime=$(up) samples=$((n + 1))" >> "$dir/index.txt"
+sync

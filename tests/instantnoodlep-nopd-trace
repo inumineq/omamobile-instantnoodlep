@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Host test for tools/instantnoodlep-nopd-trace against fake kernel files.
+# No phone. TOOL=<path> selects the tool under test (used for mutation checks).
+set -eu
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+TOOL=${TOOL:-$ROOT/tools/instantnoodlep-nopd-trace}
+T=$(mktemp -d)
+trap 'rm -rf "$T"' EXIT
+fail() { echo "not ok - $*" >&2; exit 1; }
+ok() { echo "ok - $*"; }
+
+setup() {
+  rm -rf "$T/out" "$T/udc"; mkdir -p "$T/out" "$T/udc/a600000.usb"
+  printf '%s\n' "$1" >"$T/cmdline"
+  printf 'cx on\nusb30_prim_gdsc on\n' >"$T/genpd"
+  printf 'gcc_usb30_prim_master_clk 1\n' >"$T/clk"
+  printf 'configured\n' >"$T/udc/a600000.usb/state"
+  printf 'abcdef0123456789\n' >"$T/bootid"
+}
+run() {
+  rc=0
+  out=$(NOPD_TRACE_CMDLINE=$T/cmdline NOPD_TRACE_DIR=$T/out NOPD_TRACE_GENPD=$T/genpd \
+        NOPD_TRACE_CLK=$T/clk NOPD_TRACE_UDC=$T/udc NOPD_TRACE_BOOTID=$T/bootid \
+        sh "$TOOL" "$@" 2>&1) || rc=$?
+}
+B='console=tty0 androidboot.slot_suffix=_b'
+D=$T/out/trace-abcdef01
+
+setup "$B pd_ignore_unused"; run 1 1
+[ "$rc" = 0 ] || fail "flag set: rc $rc"
+[ -z "$(ls "$T/out")" ] || fail "flag set: wrote files"
+ok "does nothing while pd_ignore_unused is set"
+
+setup "console=tty0 androidboot.slot_suffix=_a"; run 1 1
+[ "$rc" = 2 ] || fail "slot A: rc $rc"
+[ -z "$(ls "$T/out")" ] || fail "slot A: wrote files"
+ok "refuses slot A"
+
+setup "$B"
+for args in "x" "1 0" "1 x" "1 1 1" "1000000"; do
+  # shellcheck disable=SC2086
+  run $args
+  [ "$rc" = 2 ] || fail "arguments '$args': rc $rc"
+done
+[ -z "$(ls "$T/out")" ] || fail "bad arguments wrote files"
+ok "bad arguments are refused"
+
+# The USB domain and the gadget go away between two samples.
+setup "$B"
+( sleep 1.5; printf 'cx on\nusb30_prim_gdsc off-0\n' >"$T/genpd"
+  printf 'not attached\n' >"$T/udc/a600000.usb/state" ) &
+run 3 1; wait
+[ "$rc" = 0 ] || fail "trace: rc $rc: $out"
+grep -q '^0 uptime=.* changed: none$' "$D/index.txt" || fail "sample 0: $(cat "$D/index.txt")"
+grep -q '^[1-3] uptime=.* changed: genpd usb$' "$D/index.txt" || fail "no change line: $(cat "$D/index.txt")"
+[ "$(grep -c 'changed: genpd' "$D/index.txt")" = 1 ] || fail "change reported twice"
+grep -q 'usb30_prim_gdsc on' "$D/genpd.0" || fail "first sample lost"
+grep -q 'a600000.usb/state configured' "$D/usb.0" || fail "usb state not stored: $(cat "$D/usb.0")"
+grep -q '^end .* samples=[34]$' "$D/index.txt" || fail "no end line: $(cat "$D/index.txt")"
+grep -q 'slot_suffix=_b' "$D/cmdline.txt" || fail "no cmdline copy"
+ok "samples are stored and the change is reported once"
+
+setup "$B"; rm "$T/clk"; run 1 1
+[ "$rc" = 0 ] || fail "missing clk: rc $rc"
+[ "$(cat "$D/clk.0")" = UNREADABLE ] || fail "missing clk not marked"
+grep -q 'cx on' "$D/genpd.0" || fail "genpd lost when clk is missing"
+ok "an unreadable source is marked and the rest continues"
+echo "all passed"
