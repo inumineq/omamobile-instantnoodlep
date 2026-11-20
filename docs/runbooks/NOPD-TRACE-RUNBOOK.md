@@ -98,20 +98,31 @@ V=nopd      # or: V=noclk
    kernel with the cable in.
 
 2. **Boot the variant** with the boot block of `POWER-SESSION-2026-11-20.md`
-   (`fastboot boot`, RAM only), image `nopd` or `noclk` to match `V`. Leave
-   the cable in, so the trace sees the same USB situation as the reference
-   and as the failed runs. Note on the laptop whether and when the phone
-   enumerates (`dmesg -w`).
+   (`fastboot boot`, RAM only), image `nopd` or `noclk` to match `V`. Start
+   a timer when `fastboot boot` prints OKAY. Leave the cable in for now, so
+   the trace sees the same USB situation as the reference and as the failed
+   runs. Note on the laptop whether and when the phone enumerates
+   (`dmesg -w`).
 
-3. **Leave the phone alone for 7 minutes.** Do not touch the screen, the keys
-   or the cable.
+3. **At 3 minutes 30 seconds on the timer, pull the cable.** The first `nopd`
+   run lost USB about 2 minutes 15 seconds after it enumerated, so the loss
+   falls inside the time with the cable in. The sleep step starts a little
+   after 4 minutes and must run with the cable out, like every sleep step
+   before it. The trace's last samples will show `usb` changing; that is the
+   unplug, and the laptop's log gives its time.
+   If the cable is still in at 4 minutes: do not pull it then. Let the run
+   finish and report that the sleep step ran with the cable in; its result
+   is not comparable.
+
+   Then leave the phone alone until 8 minutes on the timer. Do not touch the
+   screen or the keys.
    Expect: it looks normal, then the screen goes dark for about a minute
    (the sleep step) and comes back.
    Stop: the phone feels hot, or shows nothing 9 minutes after boot. In both
    cases go to step 4 at once.
 
-4. **Restart into the daily kernel.** Pull the cable first: three restarts
-   with the cable in hung in the bootloader after the first `nopd` run.
+4. **Restart into the daily kernel** with the cable out: three restarts with
+   the cable in hung in the bootloader after the first `nopd` run.
    [V, coordinator] Hold the power key until the phone restarts. Plug the
    cable in after the lock screen shows. Read back over USB SSH (set `V` on
    the phone as on the laptop):
@@ -175,8 +186,8 @@ V=nopd      # or: V=noclk
   changes names what `pd_ignore_unused` keeps alive for USB. If `usb` changes
   and nothing else does, the loss is not something the kernel reports here,
   and the flag is a weaker lead.
-- `usb` never changes on `nopd`, and the laptop kept the phone: the loss did
-  not repeat. Run it once more before drawing a conclusion.
+- `usb` does not change on `nopd` before the unplug, and the laptop kept the
+  phone until then: the loss did not repeat. Run it once more before drawing a conclusion.
 - The step log: if the `cxsd`, `aosd` or `ddr` counts rise, the missing flag
   is part of what blocks SoC sleep. If they stay 0, it is not the only
   blocker.
