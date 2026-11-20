@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # State: where the port stands now
 
-Last updated: 2026-11-18 afternoon (morning session: RAM tests of slim features, packages 0.0.6/1.2/0.1.3 installed, module-tree loss found and fixed), claude on omabook.
+Last updated: 2026-11-20, Codex on omaserver. Daily2 USB Type-C step-1 kernel source and offline build prepared; RAM boot awaits owner-controlled packaging inputs and phone qualification.
 
 The one page an agent reads first. Keep it short and current: it is
 overwritten, not appended to. History goes to `device/instantnoodlep/NOTES.md`
@@ -24,6 +24,7 @@ of it from `origin/main` plus the pushed branches.
 | Daily2 candidate | [V] Built on macbookpro with clang/LLD 23.1.6, fixed USB peripheral mode, haptics and manual-load charger, `image_size=0x1750000`. [I] RAM qualification pending. Build evidence and checklist in DAILY-K3-PLAN §8. |
 | Slim K3 (daily minus foreign-SoC drivers, `-k3-slim-g78f38a2acc99`) | RAM boot passes on omabook clang 23.1.3: `image_size` 0x1720000 (ceiling `0x2b60000`), USB, `running`, panel, msm GL, Wi-Fi, hci0, gauge; modules on the rootfs. Base for new features; not flashed [V: 2026-11-18 RAM test]. the same tree built with MBP Docker clang 19 freezes on the splash (learning 2026-11-18); P2 froze because its `image_size` 0x2b70000 is over the ceiling |
 | Slim-all Type-C recovery | [V] Two clang/LLD 23.1.6 candidates built offline with `image_size=0x1780000`. [I] QMP DP-exit recovery and static UTMI for the USB2 hub await T6/T7 in [TYPEC-DP-PLAN §7](../../device/instantnoodlep/TYPEC-DP-PLAN.md#7-recovery-candidates-after-dp-disconnect). |
+| Daily2 Type-C step 1 | [V] Source branch `instantnoodlep-k3-daily2-qce-gmu-typec` @ `32be29867`; clang/LLD 23.1.3 offline build release `7.3.0-rc6-instantnoodlep-k3-daily2-qce-gmu-typec`, image size `0x1780000`, checksums under `~/android/build/k3-daily2-qce-gmu-typec/SHA256SUMS`. No boot image because owner-controlled initramfs/factory-overlay/packaging inputs are absent. [I] RAM boot, both-orientation gadget, replug, R4c resume and charging comparison all remain pending; see [USB-GADGET-PLAN](../../device/instantnoodlep/USB-GADGET-PLAN.md). |
 | Neutral `dtbo_b` (DTBO-PLAN) | Parked: ABL rejected v1 (table) and v2 (raw FDT); stock dtbo back [V: DTBO-PLAN §6; learning `l-48e0c482`] |
 | M3 display stack on the device (hardware GL) | Hardware GL works under combo K3 with the freedreno Mesa (rootfs, not upstream yet) [V: NOTES 2026-11-17 day; learning `l-405b6773`] |
 | M5 (Wi-Fi/BT, modem, GNSS, audio, sensors, power, camera, misc) | All plans written; the five original M5 plans cross-reviewed [V: `device/instantnoodlep/*-M5-PLAN.md`, `GNSS-M5-PLAN.md`, `CAMERA-PLAN.md`, `MISC-HW-PLAN.md`, `M5-REVIEW.md`]. Audio phase 2: TFA987x codec driver series compile-checked offline (clang 23.1.3, checkpatch/dt_binding_check clean), patches in `device/instantnoodlep/patches/audio-tfa987x/`, plan §10; first sound still phone-gated (PR #82 §9) [V: AUDIO-M5-PLAN §10] |
