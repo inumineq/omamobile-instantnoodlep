@@ -433,3 +433,124 @@ qualified. No phone command has run for this phase. Open questions: does
 recover from its initial missing-firmware auto-boot attempt using one later
 `start`; which physical speaker is wired to `hw:0,0`; and does q6afecc
 supplier appearance clear all four recorded LPASS consumer deferrals?
+
+## 12. Phase-1 ADSP DTB early hang with qce-gmu (2026-11-20)
+
+### 12.1 Evidence and ranked hypotheses
+
+The failed RAM boot used the qce-gmu kernel/initramfs and only substituted
+the phase-1 probe DTB; the kernel and initramfs matched the flashed
+`boot_b` bytes [V: coordinator's 2026-11-20 comparison; hashes recorded in
+the task handoff]. The probe DTB was built with
+`--keep-remoteproc 17300000`; its raw DTB hash is
+`05fa658eb4ced320f19d26acc0d60ea6a48eb1d2fc720f975375fdc1b47cc168` [V:
+`~/android/build/k3-daily2-adsp/sm8250-oneplus-instantnoodlep.dtb`]. This
+same DTB booted with the phase-1 kernel at `625fc540c`; the ADSP reached
+`running` after manual start [V: PR #137 result relayed by coordinator].
+The matching rebuild at `e3fb25d5e` produced that same raw DTB [V: build
+record relayed by coordinator]. The qce-gmu kernel is `bd566b604`, whose
+only source change from `c5e256242` is the GMU bind patch [V: kernel git
+history].
+
+Ranked explanations (all explanations are [I] until a RAM comparison):
+
+1. **DTB change alters the supplier/probe graph, interacting with the GMU
+   bind change.** The GMU patch registers a platform driver for
+   `qcom,adreno-gmu*` and explicitly changes supplier-link activation in
+   `drivers/gpu/drm/msm/adreno/a6xx_gmu.c:2502-2540`. The ADSP-only change
+   removes 352 DTS lines, including `audio-codec`, `i2c15`, RX/TX macro,
+   SoundWire, LPASS TLMM, DMIC pin states and the sound card (compare
+   the pre-prune DTS at `~/src/l-k3-daily2-qce/arch/arm64/boot/dts/qcom/sm8250-oneplus-instantnoodlep.dts:57-80,603-630,1036-1300`). LPASS pinctrl uses ADSP-provided clocks
+   (`sm8250.dtsi:2811-2813`); the ADSP's q6afe service advertises its
+   protection domains (`sm8250.dtsi:6059-6063`). A FW-devlink sync-state
+   interaction is plausible, but the removed nodes do not directly describe
+   GMU suppliers. The comparison candidate below tests the large DTS delta
+   while holding the qce-gmu kernel fixed.
+
+2. **GMU bind patch / kernel-side supplier ordering.** The patch changes
+   whether the GMU's clocks, power domains and IOMMU links become active
+   (`a6xx_gmu.c:2502-2512`); an ADSP/LPASS probe that depends on shared
+   supplier progress could expose a latent ordering problem [I]. The phase-1
+   kernel versus qce-gmu kernel control, both with the identical probe DTB,
+   is the direct kernel comparison. The GMU patch is a stronger candidate
+   than QCE alone because it is the only source-code change between
+   `c5e256242` and `bd566b604` [V].
+
+3. **QCE-plus-ADSP interaction.** The qce-gmu config adds QCE crypto as a
+   module (`kernel.config:10751-10755`), while the phase-1 config has no
+   `CONFIG_CRYPTO_DEV_QCE` entry [V]. A module probe could expose shared
+   crypto/firmware or initramfs ordering, but QCE is not expected to run
+   before userspace unless it is explicitly loaded in the initramfs [I].
+   The two first candidates do not separate QCE from the GMU code change;
+   if the kernel comparison fails, build one of those deltas out while
+   holding the full-audio DTB fixed.
+
+4. **ADSP reserved-memory or firmware timing.** The SoC DTS maps ADSP RAM at
+   `sm8250.dtsi:853-856` and references it from remoteproc
+   `sm8250.dtsi:6008-6034`; the board DTS deletes generic `adsp_mem` then
+   supplies the device-specific mapping (`sm8250-oneplus-instantnoodlep.dts:38,247`). The image-level DTB was packed with the keep-remoteproc
+   option, and the phase-1 run already showed that firmware absence at
+   built-in probe does not preclude a later manual start [V: PR #137]. Both
+   candidates keep the same ADSP memory mapping/firmware-name; a differing
+   outcome would therefore demote a pure reservation or firmware explanation.
+
+5. **ABL handoff or an earlier boot-stage failure.** `fastboot boot` returned
+   `OKAY`, USB disappeared and there is no journal or pstore [V: handoff].
+   The qce-gmu output image size is `0x16ac200`, below the recorded ABL
+   ceiling `0x2b60000` (`~/android/build/k3-daily2-qce-gmu/image_size.txt`,
+   `KERNEL-SIZE.md`) [V]. These facts make an image-size rejection less
+   likely, but `OKAY` alone does not prove the kernel reached its console
+   [I]. No phone or serial-console evidence is available to separate a
+   handoff failure from a pre-userspace kernel hang.
+
+### 12.2 One-variable RAM candidates
+
+No boot images are packed here. Coordinator packs each candidate with the
+same existing probe initramfs and `--keep-remoteproc 17300000` DTB field
+handling; the candidates below contain the exact kernel/DTB inputs and
+`SHA256SUMS`. Both live under `~/android/build/` on omaserver.
+
+| Candidate | Kernel | DTB | Purpose |
+|---|---|---|---|
+| `audio-m5-control-phase1-probe` | Phase-1 daily2-adsp `Image.gz`, release `7.3.0-rc6-instantnoodlep-k3-daily2-adsp` | Exact phase-1 probe DTB, `05fa658e…` | Re-run the previously successful kernel/DTB pairing as a control; differs from the failed pairing only in kernel. |
+| `audio-m5-qce-gmu-full-audio` | qce-gmu `Image.gz`, release `7.3.0-rc6-instantnoodlep-k3-daily2-qce-gmu` | qce-gmu base DTB from `bd566b604`, `4a58be32…`; ADSP remains enabled and the pre-phase-1 codec, i2c15, macro, SoundWire, LPASS TLMM and sound nodes remain present | Hold qce-gmu kernel fixed and restore all nodes removed by `625fc540c`; tests whether that large DTS deletion set is necessary for the hang. |
+
+The qce-gmu base DTB already exists in
+`~/android/build/k3-daily2-qce-gmu/`; its source DTS at `bd566b604` has
+`&adsp { status = "okay"; firmware-name = …; }` and the full audio-node
+set (`sm8250-oneplus-instantnoodlep.dts:1031-1300`). This makes the second
+candidate a direct, one-variable DTB comparison to the failed qce-gmu image.
+Candidate artifacts were staged in the names above from the verified
+builds; no kernel or boot image was repacked. Hash manifests:
+
+```text
+audio-m5-control-phase1-probe/
+Image.gz  8afe5c41cb62959314587673b9061a6b44382f52f27c46473c1fe7ae0e0243bb
+DTB       05fa658eb4ced320f19d26acc0d60ea6a48eb1d2fc720f975375fdc1b47cc168
+
+audio-m5-qce-gmu-full-audio/
+Image.gz  d4328b4e5c111cd8a3974d7909e9f1c128edfccf661494f6b67530ae26deccc8
+DTB       4a58be32100b1baeceb84949b8a58258adbcc473f9e5ba180b2d27408e7984a7
+```
+
+Each directory's `SHA256SUMS` also covers the matching modules archive,
+kernel release and image-size record. These candidates do not include vendor
+firmware. `adsp.mbn` remains sourced from the owner's own factory image at
+install time.
+
+### 12.3 Owner-gated test order
+
+| Step | Exact operation | Expect | Stop | Rollback |
+|---|---|---|---|---|
+| M5-ADSP-DTB-1 | Coordinator packs `audio-m5-control-phase1-probe` and runs the approved RAM-only `fastboot boot` command. | Reaches USB userspace as the 2026-11-19 phase-1 run did; record kernel release, ADSP state and early dmesg. | No USB/userspace in 2 minutes, crash/watchdog, or unexpected partition-write prompt. | Hold Power+VolUp to recover; boot the installed daily system. No flash. |
+| M5-ADSP-DTB-2 | After control passes, coordinator packs `audio-m5-qce-gmu-full-audio` and runs the same RAM-only boot procedure. | Reaches userspace; record GMU supplier/sync-state messages, LPASS deferrals, ADSP state and early dmesg. | Same criteria as step 1, or unexpected sound/output; do not start playback. | Hold Power+VolUp to recover; boot the installed daily system. No flash. |
+
+Interpretation: if step 1 passes and step 2 passes, while the failed
+qce-gmu/probe-DTB pairing remains the sole failing comparison, the removed
+DTS-node group rises to the top; bisect it in groups before audio probing.
+If step 1 passes and step 2 hangs, the GMU/qce kernel interaction or another
+kernel-only regression rises above the deleted-node hypothesis; next use
+the qce kernel without the GMU patch or a GMU kernel with QCE disabled, each
+holding this full-audio DTB fixed. If step 1 fails, stop: the prior successful
+control did not reproduce and the comparison is inconclusive. No device
+access was performed by this worker.
