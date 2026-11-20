@@ -165,7 +165,7 @@ CDSP is **not needed for audio** on SM8250: its glink edge carries only fastrpc 
 | `modem:/image/cdsp.mdt → …/cdsp.mbn` | not for audio (§3.8); row exists for later subsystems [V: firmware.map:23] | not this plan |
 | linux-firmware `qcom/sm8250/adsp.mbn` alternative | if F5 shows the OTA copy equals LF's, the LF file could be used instead; the map row decides at install time [V: FIRMWARE-PLAN §5 F5; I-A6] | M5 |
 
-No codec/amp firmware: wcd938x, wsa881x, tfa989x, dmic request none [V: no request_firmware in L/ wcd938x.c, wsa881x.c, tfa989x.c, dmic.c]. Audio needs **no new extraction**; the adsp row is already mapped. Rule unchanged: names only, never bytes (AGENTS.md rule 8).
+No codec/amp firmware: wcd938x, wsa881x, tfa989x, dmic request none [V: no request_firmware in L/ wcd938x.c, wsa881x.c, tfa989x.c, dmic.c]. The ADSP row is already mapped; §11 adds on-device assembly of that row from the owner phone’s read-only modem_a partition. Rule unchanged: names only in git/package, never firmware bytes (AGENTS.md rule 8).
 
 ## 5. Userspace (Arch Linux ARM)
 

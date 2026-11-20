@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # OnePlus 8 Pro device package
 
-Version 0.0.6 stages the instantnoodlep descriptor, a names-only firmware
+Version 0.0.9 stages the instantnoodlep descriptor, a names-only firmware
 map, session environment settings, the Bluetooth address unit, and the
 USB0 network policy and firstboot mask already owned by the installed 0.0.3
 package. It also masks `systemd-vconsole-setup.service`: it hung two boots on
@@ -29,7 +29,7 @@ manifest before upgrading on the phone.
 
 Build with `makepkg -Csf` on a native aarch64 Arch Linux ARM host. The
 descriptor and firmware map are data files; no device or firmware is needed
-to build the package. On x86, run `test/all` for Bash syntax checks,
+to build the package. Release 0.0.9 adds phone-local ADSP firmware assembly: the install hook reads the `modem_a` GPT partition read-only, uses the `modem:/image/adsp.mdt` row in the map, and installs the joined image under `/usr/lib/firmware`. A systemd oneshot retries ADSP start after `local-fs.target`, after rootfs firmware is available. This path has not yet been verified on the phone. On x86, run `test/all` for Bash syntax checks,
 ShellCheck, `makepkg --printsrcinfo`, package staging checks, and the fake
 Bluetooth management tests; this does not build the ARM package.
 

@@ -88,6 +88,13 @@ item 5; AGENTS.md rule 4].
   equivalent of the Pixel factory image that upstream requires "for
   exactly the build on your phone" [V: U/CONTRIBUTING.md:36]; R1-R3 pin
   it to the running build.
+- **ADSP install-time exception:** the instantnoodlep device package can
+  assemble the `modem:/image/adsp.mdt` firmware.map row directly on the
+  owner's phone from GPT `modem_a`, mounted read-only. The source partition
+  carries the phone's own factory-provisioned firmware, no bytes enter the
+  package or repository, and this avoids exporting signed ADSP bytes off the
+  phone. This per-device method is phone-unverified until AUDIO-M5-PLAN §11
+  passes; all other OTA extraction rows continue to use the laptop workflow.
 - **Upstream rule:** proprietary firmware is never committed, attached or
   redistributed; the scripts take it from the user's own image on the
   user's own machine [V: U/CONTRIBUTING.md:352-353; U/AGENTS.md:29;
