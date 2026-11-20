@@ -16,39 +16,33 @@ answer on the root file system instead, and it is read afterwards on the
 daily kernel.
 
 What the source says [V, kernel tree of the daily, `drivers/pmdomain/core.c`]:
-the flag only skips the sweep at `late_initcall_sync` (`:1367-1387`). Domains
-that were on at boot stay on until their provider's `sync_state` (`:968`),
-and that power-off runs with or without the flag (`:3684-3700`). The sweep
-runs a few seconds into boot, so the time of the loss does not point at it
+the flag only skips the sweep at `late_initcall_sync` (`:1367-1387`). A domain
+whose `stay_on` mark is set is not powered off (`:966-968`); the provider's
+`sync_state` clears the mark and tries the power-off, with or without the
+flag (`:3684-3698`). The S1 log has the sweep line at 4.05 s. [V, coordinator] The sweep
+ran about two minutes before the loss, so the time of the loss does not point at it
 directly. [I] The cause is open; this run is meant to find it.
 
 ## What is installed
 
-Two files on the phone's root, both removed again by the rollback:
+Three files on the phone's root, all removed again by the rollback:
 
 - `/var/lib/s2idle/nopd-trace`, a copy of `tools/instantnoodlep-nopd-trace`.
-- `/etc/systemd/system/nopd-trace.service`, below.
+- `/etc/systemd/system/nopd-trace.service`, a copy of
+  `tools/instantnoodlep-nopd-trace.service`.
+- `/var/lib/s2idle/nopd-armed`, an empty file. The tool runs only when it
+  exists and removes it when it starts, so one arming gives one run.
 
-```ini
-[Unit]
-Description=Trace power domains on a kernel without pd_ignore_unused
-ConditionKernelCommandLine=!pd_ignore_unused
-After=multi-user.target
+Three things keep the unit from running by accident. The unit's condition is
+false on the daily kernel. The tool refuses when the flag is set, when it is
+not armed, on any slot but B and with less than 100 MB free. Each refusal is a
+failed first command, and systemd then skips the sleep step after it.
 
-[Service]
-Type=oneshot
-ExecStartPre=-/usr/bin/modprobe -a rtc-pm8xxx qcom_stats
-ExecStart=/var/lib/s2idle/nopd-trace 240 10
-ExecStart=/var/lib/s2idle/step R4d none 60
-
-[Install]
-WantedBy=multi-user.target
-```
-
-The unit does nothing on the daily kernel: the condition is false there, and
-the tool itself exits when the flag is set. On `nopd` it traces for 240 s and
-then runs the one sleep step that S1 never reached (60 s, RTC wake), with the
-step tool from `S2IDLE-FIRST-RUNBOOK.md` that is already on the phone.
+On `nopd` the unit traces for 240 s and then runs the one sleep step that S1
+never reached (60 s, RTC wake), with the step tool from
+`S2IDLE-FIRST-RUNBOOK.md` that is already on the phone. That tool refuses to
+sleep when it cannot set the RTC alarm. `/bin/sh` on the phone is bash; the
+tool has been tested under bash only.
 
 ## Steps
 
@@ -57,13 +51,14 @@ step tool from `S2IDLE-FIRST-RUNBOOK.md` that is already on the phone.
    ```sh
    sha256sum tools/instantnoodlep-nopd-trace
    scp tools/instantnoodlep-nopd-trace root@PHONE:/var/lib/s2idle/nopd-trace
-   scp nopd-trace.service root@PHONE:/etc/systemd/system/nopd-trace.service
-   ssh root@PHONE 'chmod 755 /var/lib/s2idle/nopd-trace; sha256sum /var/lib/s2idle/nopd-trace /var/lib/s2idle/step; systemctl daemon-reload; systemctl enable nopd-trace.service; systemctl start nopd-trace.service; systemctl status nopd-trace.service | head -5; ls /var/lib/s2idle | grep -c trace-'
+   scp tools/instantnoodlep-nopd-trace.service root@PHONE:/etc/systemd/system/nopd-trace.service
+   ssh root@PHONE 'chmod 755 /var/lib/s2idle/nopd-trace; sha256sum /var/lib/s2idle/nopd-trace /var/lib/s2idle/step; df -h /var/lib/s2idle | tail -1; systemctl daemon-reload; systemctl enable nopd-trace.service; systemctl start nopd-trace.service; systemctl status nopd-trace.service | head -5; ls /var/lib/s2idle | grep -c trace-; touch /var/lib/s2idle/nopd-armed; ls /var/lib/s2idle/nopd-armed'
    ```
 
    Expect: the two tool hashes match the laptop's and the step hash from the
-   session runbook (`6c5200f4...`); the status shows the condition was not met
-   ("start condition unmet"); the count is `0`.
+   session runbook (`6c5200f4...`); more than 1 GB free; the status shows the
+   condition was not met ("start condition unmet"); the count is `0`; the
+   arming file is listed last.
    Stop: any other result. Run the rollback.
 
 2. **Boot `nopd`** with the boot block of `POWER-SESSION-2026-11-20.md`
@@ -87,13 +82,17 @@ step tool from `S2IDLE-FIRST-RUNBOOK.md` that is already on the phone.
    ```
 
    Expect: `index.txt` has a `start` line, about 25 samples and an `end`
-   line; the count is `0`; `R4d.log` ends with the `== after` block.
+   line; the count is `0`; `R4d.log` ends with the `== after` block;
+   `grep -l UNREADABLE "$d"/*` prints nothing.
+   If there is no trace folder, or no `end` line: the run is void. Read
+   `journalctl -b -1 -u nopd-trace.service`, report it and stop.
    For each sample `N` that `index.txt` marks as changed:
 
    ```sh
    diff "$d/genpd.$((N-1))" "$d/genpd.$N"; diff "$d/usb.$((N-1))" "$d/usb.$N"
    diff "$d/clk.$((N-1))" "$d/clk.$N" | head -60
-   grep -n -i 'genpd\|usb\|dwc3\|gdsc' "$d/dmesg.txt" | tail -40
+   diff "$d/reg.$((N-1))" "$d/reg.$N"; diff "$d/deferred.$((N-1))" "$d/deferred.$N"
+   diff "$d/dmesg.$((N-1))" "$d/dmesg.$N" | grep -v 'UFW\|audit'
    ```
 
    Report the changed lines and the uptime of the sample. The files stay on
@@ -118,9 +117,12 @@ On the daily kernel:
 
 ```sh
 systemctl disable nopd-trace.service
-rm /etc/systemd/system/nopd-trace.service /var/lib/s2idle/nopd-trace
+rm -f /etc/systemd/system/nopd-trace.service /var/lib/s2idle/nopd-trace /var/lib/s2idle/nopd-armed
 systemctl daemon-reload
+systemctl is-enabled nopd-trace.service
 ```
 
-The trace folders can stay; they are a few megabytes. No partition is
+Expect: the last line says the unit is not found.
+
+The trace folders can stay; they are some tens of megabytes. No partition is
 written at any step, and the slot is never changed.
