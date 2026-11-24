@@ -222,11 +222,17 @@ writes one file under `/etc` and no partition image.
    Expect: the first command shows `wifi.powersave = 2`; the profile value
    is `0` (default, so the configuration decides); the last line is
    `Power save: on`.
-   Stop: the last line says `off`. Remove the file (rollback) and report
-   the profile value; the precedence is then not what this plan assumes.
+   Stop: the last line says `off`. Run the whole rollback block below and
+   report the profile value; the precedence is then not what this plan
+   assumes.
 
-2. Restart the phone. Expect `iw dev <wlan> get power_save` to say `on`
-   again without any command.
+2. Restart the phone, wait until Wi-Fi is connected, then read:
+
+   ```sh
+   iw dev "$(iw dev | awk '$1=="Interface"{print $2; exit}')" get power_save
+   ```
+
+   Expect: `Power save: on`, with no other command run after the restart.
 
 3. Use the phone normally for 24 hours on Wi-Fi: SSH over Wi-Fi if it is
    open, a video call or stream, and at least one night with the screen
@@ -249,7 +255,21 @@ rm /etc/NetworkManager/conf.d/zz-omamobile-instantnoodlep-wifi-powersave.conf
 nmcli general reload conf && nmcli connection up "$(nmcli -g GENERAL.CONNECTION device show "$(iw dev | awk '$1=="Interface"{print $2; exit}')")"
 ```
 
-Expect: `iw dev <wlan> get power_save` says `off`.
+Then check:
+
+```sh
+iw dev "$(iw dev | awk '$1=="Interface"{print $2; exit}')" get power_save
+```
+
+Expect: `Power save: off`. The rollback needs Wi-Fi to be connected; if it
+is not, remove the file and restart the phone.
+
+The package check (`test/all`) only checks that the file is staged with the
+right name and content. It does not run NetworkManager, so step 1 is the
+first real check of the precedence. When 0.0.9 is built, the local repo
+manifest (`tools/omamobile-localrepo-packages.tsv`) and
+`docs/agents/state.md` get the new version in the same change as the
+artefacts.
 
 Known limits. Incoming traffic waits for the next beacon wake-up while
 power save is on, so latency for pushes and SSH keystrokes can rise; how
