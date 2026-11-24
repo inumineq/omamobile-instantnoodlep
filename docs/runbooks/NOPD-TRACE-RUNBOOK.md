@@ -1,6 +1,6 @@
 # Trace the `nopd` and `noclk` kernels without a login
 
-Status: prepared, not run. Phone work is the owner's, through the coordinator.
+Status: `noclk` traced once (2026-11-24); `nopd` and the follow-up test not run. Phone work is the owner's, through the coordinator.
 
 ## Why
 
@@ -206,6 +206,68 @@ V=nopd      # or: V=noclk
   blocker.
 
 Samples are 10 s apart and show what coincides, not what causes what.
+
+## Result of the first `noclk` trace, and the follow-up test
+
+Run on 2026-11-24 with the tool at `eb95e6d`. [V, coordinator's read-back]
+
+- 25 samples over 243 s. The controller reads `not attached` in every one.
+  On the daily kernel it reads `configured` at `super-speed-plus`.
+- "Disabling unused clocks" is at 1.28 s, the gadget start at 1.95 s. The log
+  has no USB or PHY error.
+- No clock of the USB controller or its two PHYs differs from the daily
+  reference. Nothing USB is in the deferred list.
+- Ten GCC clocks without an owner are on in the daily kernel and off here:
+  `gcc_pcie1_phy_refgen_clk`, `gcc_pcie2_phy_refgen_clk`,
+  `gcc_qupv3_wrap0_s5_clk`, `gcc_qupv3_wrap1_s4_clk`,
+  `gcc_qupv3_wrap1_core_clk`, `gcc_qupv3_wrap1_core_2x_clk`,
+  `gcc_prng_ahb_clk`, `gcc_npu_cfg_ahb_clk`, `gcc_boot_rom_ahb_clk` and
+  `gcc_aggre_ufs_card_axi_clk`. Three display clocks (`rot`, `rscc_ahb`,
+  `rscc_vsync`) and the UFS encryption clock also read off; the last one has
+  an owner and is gated by it.
+- The cable stayed in, so the sleep step was skipped, as designed.
+
+[V, source] The controller is fixed to peripheral mode
+(`sm8250-oneplus-instantnoodlep.dts`, node `usb_1_dwc3`), so `not attached`
+means it never saw a bus reset from the laptop. The clock driver has no gate
+for the primary USB reference clock (`drivers/clk/qcom/gcc-sm8250.c` has
+only `gcc_usb3_sec_clkref_en`), so that one cannot be what the sweep turns
+off.
+
+[I] One of the ten clocks is needed by the USB path. The two
+reference-generator clocks are the first guess, because `pcie1` and `pcie2`
+are off in this device tree and nothing else claims them.
+
+The follow-up is two test device trees on the daily kernel image, booted
+with the `noclk` command line. Each differs from the daily device tree in
+one property: the clock list of the USB node (`usb_1`), which its driver
+enables in full (`drivers/usb/dwc3/dwc3-qcom.c:633`). They are for this test
+only and are not for merging.
+
+| Image | Kernel branch | Clocks added to `usb_1` | Device tree sha256 (before packing) |
+|---|---|---|---|
+| `noclk-a` | `instantnoodlep-k3-power-noclk-a` @ `849a6ed7f` | the two reference-generator clocks | `367615e9...ab964` |
+| `noclk-b` | `instantnoodlep-k3-power-noclk-b` @ `507cee57b` | all ten clocks above | `7e114662...671f5` |
+
+Pack each like the `k2dtb` image (daily kernel, swapped device tree), with
+the `noclk` command line: the daily one without `clk_ignore_unused`.
+
+Run the steps above with `V=noclk`, once with `noclk-a`. Run `noclk-b` only
+if the laptop does not see the phone on `noclk-a`.
+
+Expect on a hit: the laptop sees the phone enumerate within 30 s of OKAY,
+and `usb.0` reads `configured`. SSH over USB may then work; the steps do not
+need it.
+
+- `noclk-a` hits: a reference-generator clock is what USB needs. Pull the
+  cable at 3 minutes 30 seconds as in step 3, so the sleep step runs.
+- `noclk-a` misses and `noclk-b` hits: it is one of the other eight; the
+  next test splits them.
+- Both miss: the cause is not a GCC clock that the summary shows. The three
+  display clocks are the remaining candidates on record.
+
+Stop conditions and the way back are those of steps 3 and 4. Both images
+are RAM boots; nothing is written.
 
 ## Rollback
 
