@@ -1,6 +1,6 @@
 # Trace the `nopd` and `noclk` kernels without a login
 
-Status: `noclk` traced once (2026-11-24); `nopd` and the follow-up test not run. Phone work is the owner's, through the coordinator.
+Status: `noclk` traced and its USB loss narrowed to two clocks (2026-11-25); `nopd` not run.
 
 ## Why
 
@@ -268,6 +268,34 @@ need it.
 
 Stop conditions and the way back are those of steps 3 and 4. Both images
 are RAM boots; nothing is written.
+
+## Result of the follow-up test
+
+Run on 2026-11-24 and 25. [V, coordinator's reports] Every image was the
+daily kernel and ramdisk with only the device tree swapped, and the command
+line had `pd_ignore_unused` only.
+
+| Image | Clocks held from `usb_1` | Laptop saw the phone |
+|---|---|---|
+| `noclk-a` | the two reference-generator clocks | no; `not attached` for the whole trace |
+| `noclk-b` | all ten | yes, 6 s after OKAY, `configured` at `super-speed-plus` |
+| `noclk-c` (`c4f223428`) | `gcc_qupv3_wrap0_s5_clk`, `gcc_qupv3_wrap1_s4_clk`, `gcc_qupv3_wrap1_core_clk`, `gcc_qupv3_wrap1_core_2x_clk` | yes, 6 s after OKAY |
+| `noclk-c1` (`576b81f8d`) | `gcc_qupv3_wrap1_core_clk`, `gcc_qupv3_wrap1_core_2x_clk` | yes, 6 s after OKAY |
+
+So without `clk_ignore_unused`, USB works when the two core clocks of serial
+wrapper 1 are held on. The reference-generator guess is ruled out. No log
+showed a clock stuck off.
+
+On `noclk-b` the cable was pulled and the sleep step `R4e` ran: suspend
+succeeded once, about 60 s. The `aosd`, `cxsd` and `ddr` counts were 0
+before and 0 after. Dropping `clk_ignore_unused` alone does not let the SoC
+reach its low-power states. `pd_ignore_unused` was still set in that run.
+
+[V, source] Serial wrapper 1 (`geniqup@ac0000` in `sm8250.dtsi`) lists only
+its two bus clocks, so nothing owns the core clocks. On this phone the
+wrapper carries the haptics driver chip, the touch screen and one UART;
+nothing of USB. [I] The link to USB is therefore indirect. It is open, and
+the two test trees say where the dependency is, not what the fix is.
 
 ## Rollback
 
