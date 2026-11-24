@@ -347,3 +347,174 @@ probe, suspend/resume behavior, and first sound — one speaker at a time,
 go. The phase-2 DTS enablement (i2c15 + nodes `okay`, tertiary-MI2S speaker
 link) is still not implemented; this work is driver + binding only.
 
+
+## 11. Phase 1 candidate: ADSP only — `k3-daily2-adsp` (2026-11-19, this branch)
+
+Phase 1 verifies the ADSP remoteproc chain alone on top of the flashed
+daily2 kernel: `qcom_q6v5_pas` loads the firmware.map adsp image and the
+APR/glink services (q6core, q6afe, q6asm, q6adm) register over the
+sm8250.dtsi glink edge. No sound card, codec, SoundWire controller or
+amplifier node is enabled — that is phase 2 (§3.2-§3.7, §10); the va-macro
+keeps its dtsi default exactly as in the flashed daily2 (§11.3), and the
+TFA987x amp driver stays out of this candidate. No phone was touched and nothing was flashed
+by this worker; the phone gate is §11.5.
+
+### 11.1 Kernel-side delta
+
+- Base: the flashed daily2 tree, branch `instantnoodlep-k3-slim-daily2` @
+  `c5e256242` (release `7.3.0-rc6-instantnoodlep-k3-daily2`, DAILY-K3-PLAN
+  §8) [V].
+- Branch `instantnoodlep-k3-daily2-adsp` @ `625fc540c` = base + one commit,
+  `arm64: dts: qcom: instantnoodlep: Keep only the ADSP for audio phase 1`
+  [V: `git diff origin/instantnoodlep-k3-slim-daily2..HEAD --stat` = the
+  board DTS only, 352 deletions]: it removes the phase-2 audio nodes that
+  slim-all carried from the audio branch (wcd938x codec node, swr1/swr2
+  slaves, rx/tx macro enables, tlmm wcd pinctrl, tfa9874 amp nodes, sound
+  card wiring) and keeps only
+  `&adsp { status = "okay"; firmware-name = "qcom/sm8250/OnePlus/instantnoodlep/adsp.mbn"; };`
+  [V: `arch/arm64/boot/dts/qcom/sm8250-oneplus-instantnoodlep.dts:1002-1005`
+  in `~/src/l-k3-daily2-adsp`]. The firmware-name string equals the
+  firmware.map adsp destination [V: `firmware.map:25`].
+- DTS facts behind the gate [V, same tree]: `remoteproc@17300000`
+  `qcom,sm8250-adsp-pas`, `memory-region = <&adsp_mem>`
+  [V: `sm8250.dtsi:6008-6033`]; glink edge with the `qcom,apr-v2` node and
+  services q6core `service@3`, q6afe `service@4` (+dais/clocks), q6asm
+  `service@7`, q6adm `service@8` (+routing) [V: `sm8250.dtsi:6036-6097`];
+  `sm8250_adsp_resource` = pas_id 1, **auto_boot = true**, sysmon_name
+  "adsp" [V: `drivers/remoteproc/qcom_q6v5_pas.c:1066-1081`], so the rproc
+  name is `adsp` [V: `qcom_q6v5_pas.c:858` `devm_rproc_alloc(...,
+  desc->sysmon_name, ...)`; `remoteproc_core.c:2529`] and it starts at
+  probe without userspace; the DT `firmware-name` override is read at
+  [V: `qcom_q6v5_pas.c:838-843`].
+- PD_MAPPER and the stock-dtbo root compatible: the daily2 base already
+  carries `fa0731ea7` ("soc: qcom: pd-mapper: Fall back to the SMEM SoC ID"),
+  so when the stock entry-16 overlay rewrites the live root compatible to
+  `qcom,kona*` [V: NOTES.md 2026-11-17 night] the SM8250 domain table is
+  still selected via SMEM [V: `drivers/soc/qcom/qcom_pd_mapper.c:673-733`,
+  `qcom_pdm_start` at :715]. The preamble's "neutral DTBO gate" is thus
+  satisfied on the kernel side for pd-mapper; the live root compatible is
+  still recorded at the gate (§11.5 G4).
+
+### 11.2 Config
+
+- The candidate config is the daily2 config (DAILY-K3-PLAN §8 recipe from
+  `~/android/configs/slim-all.config`) with **only**
+  `CONFIG_LOCALVERSION="-instantnoodlep-k3-daily2-adsp"` and
+  `CONFIG_LOCALVERSION_AUTO` unset [V: `diff ~/android/configs/slim-all.config
+  ~/android/build/k3-daily2-adsp/.config` — the remaining lines are exactly
+  the §8 daily2 changes plus toolchain-version lines]. No audio-specific
+  delta was needed: every phase-1 prerequisite is already in the daily2
+  base [V: `~/android/build/k3-daily2-adsp/.config`]:
+  `REMOTEPROC=y`, `QCOM_Q6V5_PAS=y` (auto_boot, §11.1), `QCOM_SYSMON=y`,
+  `RPMSG_QCOM_GLINK_SMEM=y` (glink), `QRTR=y`, `QCOM_QMI_HELPERS=y`,
+  `QCOM_PDR_HELPERS=m`, `QCOM_PD_MAPPER=y`, `AUXILIARY_BUS=y`,
+  `QCOM_APR=m`. Per §5 the APR/PDR helpers are modules (module names `apr`
+  and `pdr_interface` [V: `drivers/soc/qcom/Makefile:11,36`]); PD_MAPPER,
+  QRTR, QMI helpers, AUXILIARY_BUS, glink, remoteproc and q6v5-pas are
+  built in, i.e. available before the ADSP starts (gate O1 satisfied by
+  construction).
+
+### 11.3 Build evidence (omaserver, clang/LLD 23.1.3, `LLVM=1`) [V]
+
+```text
+clang version 23.1.3
+LLD 23.1.3 (compatible with GNU linkers)
+```
+
+- Build: `make -C ~/src/l-k3-daily2-adsp O=~/android/build/k3-daily2-adsp
+  ARCH=arm64 LLVM=1 -j12 Image.gz dtbs modules` → `MAKE_EXIT=0`
+  [V: `~/android/build/k3-daily2-adsp/build.log`]. First attempt on this
+  host stopped in `prepare0` at `include/generated/timeconst.h` with
+  `bc: command not found` [V: `build-attempt1-bc-missing.log`]; fixed by
+  putting the cached `bc` (`~/android/build/tool-cache/bc-root/bin`) on
+  PATH. `TMPDIR` was kept off `/tmp` (learning 2026-11-17 concurrent
+  builds).
+- `CHECK_DTBS=y` on the board DTB with dtschema 2026.9
+  (`~/android/build/venv-dt`): exit 0, zero warnings/errors for
+  `qcom/sm8250-oneplus-instantnoodlep.dtb` [V: `logs/dtbs-check.log`].
+- `fdtget` on the built DTB [V: `logs/fdtget-adsp.txt`]:
+  `/soc@0/remoteproc@17300000` `status` = `okay`, `firmware-name` =
+  `qcom/sm8250/OnePlus/instantnoodlep/adsp.mbn`; `/` `compatible` =
+  `oneplus,instantnoodlep qcom,sm8250`; `remoteproc@8300000` (cdsp)
+  `disabled`; `remoteproc@5c00000` (slpi) `okay` as in the daily2 base;
+  `/sound` has no `compatible`. Decompiled grep [V:
+  `logs/dtb-decompiled-grep.txt`, full decompile
+  `logs/dtb-decompiled.dts`]: `rxmacro@3200000`, `txmacro@3220000`,
+  `soundwire@3210000/3230000/3250000` all `disabled`; no `wcd`/`tfa`/`
+  audio-codec` node exists; `codec@3370000` (va-macro) keeps its dtsi
+  default (no `status` property) exactly as in the flashed daily2 —
+  without the §3.7 sound card it registers no card.
+- Release `7.3.0-rc6-instantnoodlep-k3-daily2-adsp`
+  [V: `kernel.release`]; arm64 Image header `image_size` =
+  `0x1750000` [V: `image_size.txt`], identical to daily2 and under the ABL
+  ceiling `0x2b60000` [V: KERNEL-SIZE.md]. Build note [V: `build.log`]: the
+  tree is a git worktree not sitting on an annotated tag, so with
+  `CONFIG_LOCALVERSION_AUTO` unset the release still gets a trailing `+`
+  unless the environment variable `LOCALVERSION` is set (even empty) —
+  the final build ran `LOCALVERSION= make ...` (second pass,
+  `MAKE_EXIT2=0`, modules relinked to the clean vermagic
+  `7.3.0-rc6-instantnoodlep-k3-daily2-adsp` [V: `modinfo -F vermagic`
+  on `drivers/soc/qcom/apr.ko`]).
+- Outputs in `~/android/build/k3-daily2-adsp/`, same layout as
+  `~/android/build/k3-daily2-qce/` (no boot image packed — the coordinator
+  packs it, §11.5):
+
+| File | SHA-256 |
+| --- | --- |
+| `Image.gz` | `8afe5c41cb62959314587673b9061a6b44382f52f27c46473c1fe7ae0e0243bb` |
+| `sm8250-oneplus-instantnoodlep.dtb` | `05fa658eb4ced320f19d26acc0d60ea6a48eb1d2fc720f975375fdc1b47cc168` |
+| `modules-7.3.0-rc6-instantnoodlep-k3-daily2-adsp.tar.zst` | `cbb85e868b746c228244326779bc07581612ebeaa301b8928620fbbfe376af12` |
+| `kernel.release` | `48bc232ad630689c0bd5e42ac2399a2c53c5937c7c3fa52789da6d479acde63f` |
+| `image_size.txt` | `a2a5bad47454646aaba23fc62a94e5145ecaf59449ff61235d1d7c0cbe42969b` |
+| `kernel.config` | `fb8bbccc881975d5a53496a68226df1709bad74bb13e25fda8fe199d37c97845` |
+
+  All six hashes re-verified with `sha256sum -c SHA256SUMS` after
+  packaging [V]. The modules archive is rooted at `lib/modules/<release>/`
+  (same as the qce archive), stripped (`INSTALL_MOD_STRIP=1`), module count
+  `1110` [V: `logs/module-count.txt`]; it contains `apr.ko` and
+  `pdr_interface.ko` [V: `modinst/.../drivers/soc/qcom/`]. `SHA256SUMS`
+  in the same directory covers the six files above.
+
+### 11.4 Firmware path on the phone (names only, rule 8)
+
+- [V] The device package ships **names only**: its `install` script stages
+  `firmware.map` to `/usr/share/omamobile/firmware.map` and states it "does
+  not ... install firmware blobs"
+  [V: `packages/omamobile-device-instantnoodlep/install:2-3,11`];
+  `device.conf` points `FIRMWARE_MAP=firmware.map` at it
+  [V: `packages/omamobile-device-instantnoodlep/device.conf:20`].
+- [V] The **destination path is installed on the phone at install time**
+  by upstream's extraction driven by that map — the installer runs the
+  device's firmware extraction on the owner's laptop from the owner's own
+  verified OTA and pushes the tree to the phone over SSH
+  [V: FIRMWARE-PLAN §4, `U/tools/phone-provision:28-30,435`,
+  `U/docs/RELEASES.md:386-387`]. So the row
+  `modem:/image/adsp.mdt|qcom/sm8250/OnePlus/instantnoodlep/adsp.mbn`
+  [V: `firmware.map:25`] is applied from the OTA (`.mdt`+segments joined
+  with pil-squasher), never from git; the repo carries names only.
+- [I] Whether `/lib/firmware/qcom/sm8250/OnePlus/instantnoodlep/adsp.mbn`
+  is present on the phone **right now** has not been checked from source:
+  the coordinator verifies it at gate G0 (`ls -l` on that path) or pushes
+  the file over SSH per §7 ("pushed over SSH — never flashed").
+
+### 11.5 Phone gate (coordinator + owner; RAM boot only, nothing written)
+
+Inputs: artifacts of §11.3 (hashes verified against `SHA256SUMS`), the
+established daily2 packer inputs on the coordinator's host, DAILY-K3-PLAN
+§8 Part R prep and rollback. This worker packed no boot image and touched
+no phone.
+
+| # | Step | Expect | Stop | Rollback |
+| --- | --- | --- | --- | --- |
+| G0 | `fastboot -s {{SERIAL}} devices`; `getvar current-slot` + slot flags vs the daily2 baseline; on the phone (SSH, installed daily2 still running): `ls -l /lib/firmware/qcom/sm8250/OnePlus/instantnoodlep/` | one device; flags unchanged; adsp.mbn present (or pushed over SSH per §7 before G1) | flags differ, or no adsp firmware and no way to push it | `fastboot reboot`; stock/active slot boots |
+| G1 | Coordinator packs `boot-daily2-adsp.img` with `tools/build-instantnoodlep-probe` from the §11.3 Image.gz/dtb and the daily2 inputs (`--boot 2 --root userdata --debug-shell`, stock entry-16 overlay, `--ufdt-apply`, same `--ssh-key`/`--omarchy-mobile`/`--initramfs-root`/`--mkbootimg` as the daily2 image), then `fastboot -s {{SERIAL}} boot ~/android/build/k3-daily2-adsp/boot-daily2-adsp.img`; SSH `root@172.16.42.1` within 2 min; `uname -r` | `Booting OKAY`; SSH up; `uname -r` = `7.3.0-rc6-instantnoodlep-k3-daily2-adsp`; panel/GPU/Wi-Fi as on daily2 | `FAILED (remote: …)` (paste it, stay in fastboot), no SSH after 2 min, boot hang, kernel oops | hold Power+VolUp 10-30 s or `fastboot reboot`; after a refused boot, cold-reboot to bootloader before the next `fastboot boot` [V: NOTES.md 2026-11-16 R1 consequence]; nothing was written (RAM boot) |
+| G2 | Stage modules for this release (`tar --zstd -xf` the archive with `--strip-components=2 -C /usr/lib/modules`, `depmod <release>`; do not touch the pinned installed daily tree, learning 2026-11-18 pin). Then `for r in /sys/class/remoteproc/remoteproc*; do echo "$r: $(cat $r/name) $(cat $r/state)"; done` | `adsp` `running` (auto_boot, §11.1) — the only remoteproc expected to be up is adsp (slpi is enabled in the daily2 base for sensors, so slpi may also show running; cdsp must be offline/absent) | any remoteproc `crashed`, or adsp missing/offline | stop; `reboot -f` |
+| G3 | `dmesg | grep -Ei 'q6v5|remoteproc|adsp|apr|pdr|pdm|glink|qrtr|qmi|smem'` | `remote processor adsp is now up` [V: `remoteproc_core.c:1315`]; `Adding APR/GPR dev: aprsvc:...` for the dtsi services [V: `apr.c:472`, naming at :441-447]; PDR indications `PDR: Indication received from ...` [V: `pdr_interface.c:321`]; **no** `request_firmware failed for qcom/sm8250/OnePlus/instantnoodlep/adsp.mbn` [V: `qcom_q6v5_pas.c:247`], no `start timed out` [V: `:346`], no `Subsystem has crashed` [V: `:539`], no wdog/fatal IRQ storm | firmware-load error, crash-dump/minidump lines, watchdog bite, oops, or repeated crash/restart lines (crash loop) | stop; capture `dmesg` to `captures/<date>/` (gitignored, redacted); `reboot -f` |
+| G4 | `ls /sys/bus/apr/devices/; ls /sys/bus/auxiliary/devices/; cat /sys/firmware/devicetree/base/compatible` | aprsvc entries for q6core/q6afe/q6asm/q6adm per `sm8250.dtsi:6053-6094`; auxiliary device `pd-mapper.<n>` [V: `qcom_common.c:561`] bound to the pd-mapper driver; live root compatible recorded (expected `qcom,kona-mtp qcom,kona qcom,mtp` under the stock overlay [V: NOTES 2026-11-17 night] — pd-mapper still gets sm8250_domains via the SMEM fallback, §11.1) | apr devices missing while adsp is running, or pd-mapper absent | record and stop; `reboot -f` |
+| G5 | `lsmod | grep -E '^(apr|pdr_interface) '` (fallback: `modprobe apr`) | `apr` and `pdr_interface` loaded — autoload is expected via the glink channel's `qcom,apr-v2` modalias [V: `apr.c:692-698`]; q6v5-pas/pd-mapper/qrtr/qmi/glink/remoteproc are built-in (=y, §11.2) and therefore **not** in lsmod by design | apr fails to load, or a phase-2 sound module binds (it must not) | stop; `reboot -f` |
+| G6 | `cat /proc/asound/cards; ls /sys/class/sound/` | **no** sound card registered — phase 1 must not create one (no sound/codec/macro nodes enabled, §11.1) | a card appears (phase-2 node leaked in) | stop; `reboot -f` |
+| G7 | `fastboot -s {{SERIAL}} getvar all` (filtered) after `fastboot reboot` | slot flags equal to G0; nothing written by any step | any flag changed | stop; record; per §7.2 R7 |
+
+**Return to daily2:** every step above is RAM-only; `fastboot reboot` boots
+the installed daily2 on `boot_b` unchanged. No flash, no slot change, no
+firmware write ever happens in this gate.
