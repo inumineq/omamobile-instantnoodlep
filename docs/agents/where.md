@@ -37,6 +37,7 @@ name, never copy them in.
 | `tools/build-instantnoodlep-probe` | Builds probe/boot images (K1/K2/K3) |
 | `tools/instantnoodlep-slot-b-mark` | Builds the B5 GPT sectors that mark slot B successful |
 | `tools/instantnoodlep-holder-matrix` | Unattended runtime A/B holder rows A0-A7 on the phone ([runbook](../runbooks/HOLDER-MATRIX-RUNBOOK.md)) |
+| `tools/instantnoodlep-power-baseline` | Runs the upstream #867 power recipe (Parts A/B/C) read-only on the phone, one postable Markdown report; owner runbook: `docs/runbooks/POWER-BASELINE-RUNBOOK.md` |
 | `scripts/` | Stage-0 capture, laptop tool fetch, initramfs root prep |
 | `tests/` | Host tests for the tools |
 | `captures/` | Private captures, gitignored, never committed |
