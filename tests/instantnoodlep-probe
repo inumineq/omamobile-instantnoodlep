@@ -584,6 +584,39 @@ def test_typec(work, private, public):
     print("ok - --typec keeps and verifies the Type-C graph")
 
 
+def test_keep_remoteproc(work, private, public):
+    kernel = work / "Image.dummy"
+    kernel.write_bytes(b"dummy kernel, not executed\n")
+    global OVERLAY
+    OVERLAY = make_overlay(work)
+    rootfs = make_rootfs(work / "input")
+    dtb = make_dtb(work, "plain", DTS)
+
+    out = Path("output/keep.img")
+    result = call_builder(*builder_args(kernel, dtb, public, rootfs, 2, out),
+                          "--keep-remoteproc", "4080000", cwd=work)
+    require(result.returncode == 0, f"--keep-remoteproc build failed: {result.stderr}")
+    paths = probe.artifact_paths(work / out)
+    remotes = probe.remoteproc_nodes(paths["dtb"])
+    kept = [n for n in remotes if n.endswith("@4080000")]
+    require(len(kept) == 1 and probe.fdt_get(paths["dtb"], kept[0], "status") == "okay",
+            "--keep-remoteproc did not keep the named node okay")
+    for node in remotes:
+        if node not in kept:
+            require(probe.fdt_get(paths["dtb"], node, "status") == "disabled",
+                    f"--keep-remoteproc left another remoteproc enabled: {node}")
+    probe.verify_probe_dtb(paths["dtb"], 2, OVERLAY_LABELS, keep=("4080000",))
+
+    result = call_builder(*builder_args(kernel, dtb, public, rootfs, 2,
+                                         "output/keep-refused.img"),
+                          "--keep-remoteproc", "1234", cwd=work)
+    require(result.returncode != 0 and "names no remoteproc node" in result.stderr,
+            f"unknown --keep-remoteproc was not refused: {result.stderr}")
+    require(not (work / "output/keep-refused.img").exists(),
+            "refused --keep-remoteproc left an image")
+    print("ok - --keep-remoteproc keeps one remote processor and disables the rest")
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix="instantnoodlep-probe-test-") as temp:
         work = Path(temp)
@@ -637,6 +670,9 @@ def main():
             typec_work = work / "typec"
             typec_work.mkdir()
             test_typec(typec_work, *key)
+            keep_work = work / "keep"
+            keep_work.mkdir()
+            test_keep_remoteproc(keep_work, *key)
         else:
             reasons = []
             if dt_tools:
