@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+# Hourly refresh of the saved RTC offset; Persistent catches up after
+# suspend/hibernate when the last run is more than an hour old.
+[Unit]
+Description=Hourly refresh of the saved RTC offset
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+Unit=omamobile-rtc-offset-save.service
+
+[Install]
+WantedBy=timers.target

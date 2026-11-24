@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+# Refresh the stored RTC offset (wall clock - PMIC RTC). Started by
+# omamobile-rtc-offset-save.timer (hourly) and omamobile-rtc-offset-save.path
+# (whenever timesyncd reports a sync); not enabled directly. The helper
+# refuses to store anything while the system clock is below the build floor.
+[Unit]
+Description=Save the RTC offset for the next boot
+After=systemd-timesyncd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-rtc-offset save

@@ -10,6 +10,7 @@ scripts=(
   install
   omamobile-device-instantnoodlep.install
   bin/omamobile-bt-public-addr
+  bin/omamobile-rtc-offset
   bin/omamobile-instantnoodlep-mobile-profile
   bin/omamobile-instantnoodlep-app-launcher
   bin/omamobile-instantnoodlep-scaling
@@ -18,6 +19,7 @@ scripts=(
   test/all
   test/bt-public-addr
   test/mobile-profile.sh
+  test/rtc-offset
   test/scaling.sh
 )
 bash -n "${scripts[@]}"
@@ -28,6 +30,7 @@ makepkg --printsrcinfo > "$srcinfo"
 grep -q "^pkgbase = omamobile-device-instantnoodlep$" "$srcinfo"
 ./test/bt-public-addr
 ./test/mobile-profile.sh
+./test/rtc-offset
 ./test/scaling.sh
 ./test/pm-sample.sh
 
@@ -47,6 +50,30 @@ grep -qx 'OMAMOBILE_SLEEP_AFTER_OFF=30' environment.d/40-omamobile-instantnoodle
 grep -qx 'MemorySleepMode=s2idle' systemd/sleep.conf.d/40-omamobile-instantnoodlep.conf
 test ! -e "$stage/usr/share/omamobile/auto-sleep-default"
 test -f "$stage/usr/lib/systemd/system/omamobile-bt-public-addr@.service"
+test -x "$stage/usr/bin/omamobile-rtc-offset"
+# The staged helper carries the package build date as its floor, not the
+# checked-in literal (2026-11-24 00:00:00 UTC = 1795497600).
+# shellcheck disable=SC2016 # The helper's literal FLOOR= line is meant to stay unexpanded.
+grep -Eq '^FLOOR=\$\{OMAMOBILE_RTC_OFFSET_FLOOR:-[0-9]+\}$' "$stage/usr/bin/omamobile-rtc-offset"
+# shellcheck disable=SC2016
+staged_floor=$(sed -n 's/^FLOOR=\${OMAMOBILE_RTC_OFFSET_FLOOR:-\([0-9]*\)}$/\1/p' "$stage/usr/bin/omamobile-rtc-offset")
+[[ $staged_floor =~ ^[0-9]+$ && $staged_floor -ge 1795497600 ]] ||
+  { echo "staged build floor is not a stamped epoch: '$staged_floor'" >&2; exit 1; }
+# shellcheck disable=SC2016
+grep -qx 'FLOOR=${OMAMOBILE_RTC_OFFSET_FLOOR:-1795497600}' bin/omamobile-rtc-offset
+test -f "$stage/usr/lib/systemd/system/omamobile-rtc-offset-apply.service"
+test -f "$stage/usr/lib/systemd/system/omamobile-rtc-offset-save.service"
+test -f "$stage/usr/lib/systemd/system/omamobile-rtc-offset-save.timer"
+test -f "$stage/usr/lib/systemd/system/omamobile-rtc-offset-save.path"
+test -f "$stage/usr/lib/systemd/system/omamobile-rtc-offset-shutdown.service"
+test -L "$stage/usr/lib/systemd/system/sysinit.target.wants/omamobile-rtc-offset-apply.service"
+test "$(readlink "$stage/usr/lib/systemd/system/sysinit.target.wants/omamobile-rtc-offset-apply.service")" = ../omamobile-rtc-offset-apply.service
+test -L "$stage/usr/lib/systemd/system/multi-user.target.wants/omamobile-rtc-offset-shutdown.service"
+test "$(readlink "$stage/usr/lib/systemd/system/multi-user.target.wants/omamobile-rtc-offset-shutdown.service")" = ../omamobile-rtc-offset-shutdown.service
+test -L "$stage/usr/lib/systemd/system/timers.target.wants/omamobile-rtc-offset-save.timer"
+test "$(readlink "$stage/usr/lib/systemd/system/timers.target.wants/omamobile-rtc-offset-save.timer")" = ../omamobile-rtc-offset-save.timer
+test -L "$stage/usr/lib/systemd/system/paths.target.wants/omamobile-rtc-offset-save.path"
+test "$(readlink "$stage/usr/lib/systemd/system/paths.target.wants/omamobile-rtc-offset-save.path")" = ../omamobile-rtc-offset-save.path
 test -f "$stage/usr/share/omamobile/instantnoodlep-mobile-profile/instantnoodlep.conf"
 test -f "$stage/usr/share/omamobile/instantnoodlep-mobile-profile/apps.conf"
 test -x "$stage/usr/bin/omamobile-instantnoodlep-mobile-profile"

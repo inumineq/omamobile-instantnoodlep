@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# Keep the stored RTC offset fresh: refresh once at boot, then save again via
+# ExecStop on every clean stop/reboot. Default dependencies order this unit
+# Conflicts/Before=shutdown.target, so ExecStop runs while the root fs is
+# still writable. An unclean power loss simply keeps the previous state file.
+[Unit]
+Description=Keep the saved RTC offset fresh (saves again at shutdown)
+After=omamobile-rtc-offset-apply.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/omamobile-rtc-offset save
+ExecStop=/usr/bin/omamobile-rtc-offset save
+TimeoutStopSec=15s
+
+[Install]
+WantedBy=multi-user.target

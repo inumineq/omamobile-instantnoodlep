@@ -28,6 +28,28 @@ install -Dm644 systemd/omamobile-instantnoodlep-charger.service "$destination/us
 install -d "$destination/usr/lib/systemd/system/multi-user.target.wants"
 ln -sfn ../omamobile-instantnoodlep-charger.service "$destination/usr/lib/systemd/system/multi-user.target.wants/omamobile-instantnoodlep-charger.service"
 
+# The RTC offset helper carries a compile-time floor: the package build date.
+# Stamp it over the checked-in literal so an old state file can never pull
+# the clock back before this build existed.
+build_epoch=$(date -u +%s)
+rtc_helper=$(mktemp)
+sed -e "s/^FLOOR=\${OMAMOBILE_RTC_OFFSET_FLOOR:-[0-9][0-9]*}/FLOOR=\${OMAMOBILE_RTC_OFFSET_FLOOR:-$build_epoch}/" \
+  bin/omamobile-rtc-offset > "$rtc_helper"
+install -Dm755 "$rtc_helper" "$destination/usr/bin/omamobile-rtc-offset"
+rm -f "$rtc_helper"
+install -Dm644 systemd/omamobile-rtc-offset-apply.service "$destination/usr/lib/systemd/system/omamobile-rtc-offset-apply.service"
+install -Dm644 systemd/omamobile-rtc-offset-save.service "$destination/usr/lib/systemd/system/omamobile-rtc-offset-save.service"
+install -Dm644 systemd/omamobile-rtc-offset-save.timer "$destination/usr/lib/systemd/system/omamobile-rtc-offset-save.timer"
+install -Dm644 systemd/omamobile-rtc-offset-save.path "$destination/usr/lib/systemd/system/omamobile-rtc-offset-save.path"
+install -Dm644 systemd/omamobile-rtc-offset-shutdown.service "$destination/usr/lib/systemd/system/omamobile-rtc-offset-shutdown.service"
+install -d "$destination/usr/lib/systemd/system/sysinit.target.wants"
+ln -sfn ../omamobile-rtc-offset-apply.service "$destination/usr/lib/systemd/system/sysinit.target.wants/omamobile-rtc-offset-apply.service"
+ln -sfn ../omamobile-rtc-offset-shutdown.service "$destination/usr/lib/systemd/system/multi-user.target.wants/omamobile-rtc-offset-shutdown.service"
+install -d "$destination/usr/lib/systemd/system/timers.target.wants"
+ln -sfn ../omamobile-rtc-offset-save.timer "$destination/usr/lib/systemd/system/timers.target.wants/omamobile-rtc-offset-save.timer"
+install -d "$destination/usr/lib/systemd/system/paths.target.wants"
+ln -sfn ../omamobile-rtc-offset-save.path "$destination/usr/lib/systemd/system/paths.target.wants/omamobile-rtc-offset-save.path"
+
 install -Dm644 chromium/instantnoodlep.conf "$destination/usr/share/omamobile/instantnoodlep-mobile-profile/instantnoodlep.conf"
 install -Dm644 chromium/apps.conf "$destination/usr/share/omamobile/instantnoodlep-mobile-profile/apps.conf"
 install -Dm755 bin/omamobile-instantnoodlep-mobile-profile "$destination/usr/bin/omamobile-instantnoodlep-mobile-profile"

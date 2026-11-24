@@ -16,6 +16,15 @@ locally administered address in `/var/lib/omamobile/bt-public-addr`, or
 accepts an owner's address written there by hand. That state must remain on
 the phone and must not be copied into source control or another device.
 
+Version 0.0.9 adds the userspace RTC offset service
+(`omamobile-rtc-offset` plus its systemd units): the PM8150 RTC cannot take
+a wall-clock offset on this boot path, so the helper stores
+`wall_clock - rtc_time` in `/var/lib/omamobile/rtc-offset` on clean
+shutdown, hourly and after every timesyncd sync, and re-applies it to the
+system clock early at boot when the clock is below the package build date.
+It never writes to the RTC hardware. See
+`device/instantnoodlep/RTC-OFFSET-PLAN.md`.
+
 The device has booted successfully on slot B and B5's boot-success mark is
 set, but flashing any new `boot_b` image clears that mark. This package does
 not mark slots; the owner must follow the gated B5 runbook after a boot
