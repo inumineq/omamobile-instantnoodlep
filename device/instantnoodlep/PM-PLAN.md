@@ -368,6 +368,172 @@ running, battery status is not `Discharging`, readings are missing or
 implausible, or temperature or current becomes anomalous. Keep the output
 private and report only redacted aggregates.
 
+### 4.5 GMU fw_devlink sync_state: analysis, fix and phone gate (2026-11-19)
+
+Related: §4.4 on `inumineq/qce-sleep` (PR #136) covers the QCE half of the
+same pending lines. This section covers the GMU half and its driver-side fix.
+
+- **[V: owner phone report, RAM kernel k3-daily2-qce = daily2 +
+  `CONFIG_CRYPTO_DEV_QCE=m`, 2026-11-19; PR #136 / PM-PLAN §4.4 there]**
+  After QCE bound (no more `sync_state() pending due to 1dfa000.crypto`,
+  `qcrypto` bound), the log still reports
+  `gcc-sm8250 100000.clock-controller: sync_state() pending due to 3d6a000.gmu`
+  and the same for `sm8250-gpucc 3d90000.clock-controller`. GPU works
+  (msm_dpu, `a650_gmu.bin` loaded, Hyprland on GPU).
+  `/sys/kernel/debug/qcom_stats` `ddr_stats`/`cxsd`/`aosd` stay `Count 0` with
+  screen off and cable out; battery-only draw median ~229 mA over 7 min.
+  Booting with `fw_devlink.sync_state=timeout` reached the lock screen but the
+  USB gadget never attached (no host attach for 15 min) — that parameter is
+  ruled out. The cmdline still carries `clk_ignore_unused pd_ignore_unused`.
+
+**Why `3d6a000.gmu` never counts as bound** [V, kernel
+`inumineq/linux-omarchy-mobile` `instantnoodlep-k3-daily2-qce-gmu` source,
+7.3.0-rc6 base]:
+
+1. `gmu@3d6a000` is a direct child of `soc@0` (`simple-bus`),
+   `arch/arm64/boot/dts/qcom/sm8250.dtsi:3012-3047`, so a platform device is
+   created for it at boot: `of_platform_default_populate_init()` →
+   `of_platform_populate()` recurses through simple-bus children and calls
+   `of_platform_bus_create()` per child with a `compatible`
+   (`drivers/of/platform.c:443-470` (`of_platform_populate`), `:325-382` (`of_platform_bus_create`)).
+2. Its `clocks` (`&gpucc`, `&gcc`), `power-domains` (`&gpucc` GDSCs) and
+   `iommus` (`&adreno_smmu`) phandles create **managed** fw_devlink consumer
+   links to those suppliers (`drivers/of/property.c:1394-1401,1541-1551`
+   `of_supplier_bindings`, `of_link_to_phandle()` `:1258-1275`; the
+   `DL_FLAG_MANAGED` flag is set in `device_link_add()`,
+   `drivers/base/core.c:826-827`).
+3. **No driver ever binds to the GMU device.** The only in-tree uses of the
+   `qcom,adreno-gmu` compatible are SMMU ACTLR/client quirk tables
+   (`drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c:38,408`), not probe ID
+   tables. The Adreno driver binds to the parent `gpu@3d00000` and merely
+   *uses* the GMU device: `of_parse_phandle(pdev->dev.of_node, "qcom,gmu", 0)`
+   (`a6xx_gpu.c:2711`), `of_find_device_by_node(node)` +
+   `gmu->dev = &pdev->dev` (`a6xx_gmu.c:2285,2297`). The `qcom,gmu` phandle is
+   not in `of_supplier_bindings`, so it creates no link either. The GMU
+   device still needs its `clocks` etc. at runtime
+   (`a6xx_gmu_clocks_probe()`: `devm_clk_bulk_get_all(gmu->dev, ...)`), so the
+   DT phandles cannot be stripped.
+4. `device_links_driver_bound()` — the only path that sets a consumer's
+   supplier links to `DL_STATE_ACTIVE` (`drivers/base/core.c:1428-1455`) —
+   runs only after a successful driver probe (`driver_bound(dev)` at
+   `drivers/base/dd.c:756`). The GMU device never probes, so its links stay
+   `DL_STATE_AVAILABLE` (supplier side, `core.c:1408-1416`), never ACTIVE.
+5. `__device_links_queue_sync_state()` queues a supplier's `sync_state()`
+   only when **all** its managed consumer links are ACTIVE
+   (`drivers/base/core.c:1208-1214`). The never-ACTIVE GMU link therefore
+   blocks `gcc-sm8250` and `sm8250-gpucc` forever.
+6. This kernel has `# CONFIG_FW_DEVLINK_SYNC_STATE_TIMEOUT is not set`
+   (`~/android/build/k3-daily2-qce/kernel.config:1892`), so
+   `fw_devlink_sync_state == FW_DEVLINK_SYNC_STATE_STRICT`
+   (`drivers/base/core.c:1753-1759`). At
+   `fw_devlink_probing_done()` (`drivers/base/dd.c:305-318,349-367`;
+   `fw_devlink_probing_done()` itself at `drivers/base/core.c:1875`) strict
+   mode just prints `sync_state() pending due to 3d6a000.gmu`
+   (`core.c:1858-1860`) and leaves the suppliers unsynced.
+7. Those suppliers do have sync_state callbacks: the qnoc interconnect
+   providers declare `.sync_state = icc_sync_state`
+   (`drivers/interconnect/qcom/sm8250.c:1983`; `icc_sync_state()` at
+   `drivers/interconnect/core.c:1218-1246` drops the initial votes only when
+   called), and the clock controllers get `genpd_sync_state` installed on
+   their driver at runtime by the genpd core via `dev_set_drv_sync_state()`
+   (`drivers/pmdomain/core.c:2696-2701`, `include/linux/device.h:1130-1141`).
+   Since the callbacks never run, the initial interconnect/PM votes are never
+   dropped — consistent with the `qcom_stats` counters stuck at `Count 0`.
+
+**How mainline handles it on other SM8250/SM8x50 boards** [V]: every in-tree
+SM8x50 dtsi (`sm8150.dtsi`, `sm8250.dtsi`, `sm8350.dtsi`, `sm8450.dtsi`,
+`sm8550.dtsi`, …) declares the same `gmu` node as a child of `soc@0` with a
+`qcom,adreno-gmu*`/`qcom,adreno-gmu-wrapper`/`qcom,adreno-rgmu` compatible,
+and no in-tree driver binds those compatibles (grep over `drivers/` finds
+only the SMMU quirk tables above). So mainline boards with `&gmu` enabled hit
+the same strict-mode pending lines; the only upstream escape hatch is
+`fw_devlink.sync_state=timeout` / `CONFIG_FW_DEVLINK_SYNC_STATE_TIMEOUT`,
+which force-calls `sync_state()` after the deferred-probe timeout
+(`drivers/base/core.c:1862-1876`, "Timed out. Forcing sync_state()") — ruled
+out on this phone because the USB gadget never attached with it. There is no
+driver-side mainline fix; the patch below is a local one.
+
+**The fix** [V]: `device/instantnoodlep/patches/pm/0001-drm-msm-adreno-bind-the-GMU-device-so-fw_devlink-sy.patch`
+(kernel commit `bd566b604`, branch `instantnoodlep-k3-daily2-qce-gmu` on top
+of `instantnoodlep-k3-daily2-qce` `c5e256242`) registers a minimal no-op
+`platform_driver` matching `qcom,adreno-gmu`, `qcom,adreno-gmu-wrapper` and
+`qcom,adreno-rgmu`. When it binds, `device_links_driver_bound(gmu)` marks the
+GMU's supplier links ACTIVE, so `gcc-sm8250`/`sm8250-gpucc`/qnoc get their
+`sync_state()` and drop initial votes. All real GMU handling stays in
+`a6xx_gmu.c`, driven by the Adreno GPU driver; the new probe is a no-op.
+Boards with `&gmu` disabled get no GMU device (`of_device_is_available()`
+gate in `of_platform_device_create_pdata()`, `drivers/of/platform.c:161`),
+so they are unaffected. [I] On-device effect pending the gate below.
+
+**Candidate and build recipe** [V: built on omaserver, clang/LLD 23.1.3]:
+
+- Source: `~/src/l-k3-daily2-qce`, branch `instantnoodlep-k3-daily2-qce-gmu`
+  @ `bd566b604` (single commit on `c5e256242`).
+- Config: copy of `~/android/build/k3-daily2-qce/kernel.config` (daily2 +
+  `CONFIG_COMPILE_TEST=y`, `CONFIG_CRYPTO_DEV_QCE=m`) with only
+  `CONFIG_LOCALVERSION="-instantnoodlep-k3-daily2-qce-gmu"` and
+  `# CONFIG_LOCALVERSION_AUTO is not set`:
+  `./scripts/config --set-str LOCALVERSION "-instantnoodlep-k3-daily2-qce-gmu" --disable LOCALVERSION_AUTO`,
+  then `make O=... ARCH=arm64 LLVM=1 olddefconfig`.
+- Build (PATH must include the cached `bc`: `~/android/build/tool-cache/bc-root/bin`;
+  keep `TMPDIR` off `/tmp`):
+
+  ```sh
+  export PATH=$HOME/android/build/tool-cache/bc-root/bin:$PATH TMPDIR=$HOME/android/build/tmp
+  make -C ~/src/l-k3-daily2-qce O=~/android/build/k3-daily2-qce-gmu \
+    ARCH=arm64 LLVM=1 -j12 Image.gz dtbs modules
+  ```
+
+- Release `7.3.0-rc6-instantnoodlep-k3-daily2-qce-gmu`; artifacts in
+  `~/android/build/k3-daily2-qce-gmu/` (`Image.gz`,
+  `sm8250-oneplus-instantnoodlep.dtb`, `arch/arm64/boot/Image` for
+  `image_size`, `modules-<release>.tar.zst`, `kernel.release`,
+  `kernel.config`, `SHA256SUMS`, `build.log`). `image_size` must stay under
+  the ABL ceiling `0x2b60000`.
+- **[V: build report, omaserver, clang/LLD 23.1.3, `LLVM=1`,
+  `MAKE_EXIT=0`]** Release `7.3.0-rc6-instantnoodlep-k3-daily2-qce-gmu`
+  (`LOCALVERSION=` passed to suppress the `+` suffix;
+  `qcrypto.ko` vermagic matches the release), raw Image
+  `image_size=0x16ac200` (below the `0x2b60000` ABL ceiling), DTB byte-identical
+  to the k3-daily2-qce DTB (same DTS), 802 modules, and `a6xx_gmu.o` carries
+  `adreno_gmu_device_driver` with the `qcom,adreno-gmu`/`-wrapper`/`-rgmu`
+  match table (`nm`/`strings` on the build output). `dtbs_check` evidence
+  carries over from k3-daily2-qce because the DTB hash is unchanged.
+
+  | Artifact (`~/android/build/k3-daily2-qce-gmu/`) | SHA-256 |
+  | --- | --- |
+  | `Image.gz` | `d4328b4e5c111cd8a3974d7909e9f1c128edfccf661494f6b67530ae26deccc8` |
+  | `sm8250-oneplus-instantnoodlep.dtb` | `4a58be32100b1baeceb84949b8a58258adbcc473f9e5ba180b2d27408e7984a7` |
+  | `modules-7.3.0-rc6-instantnoodlep-k3-daily2-qce-gmu.tar.zst` | `ca7146e3a95c6398f1e78cd423cb28d3ebeec3bf65e0fe55f868417e1e848cec` |
+  | `kernel.release` | `4ae3c64609494c8dfa74c0e4633d8da7cf375f4ff1439a60839f44dcc2962be2` |
+  | `image_size.txt` | `1f943197f8d9c26a712b40fabb585794cd1311ccc05750d902eaee6356775bec` |
+  | `kernel.config` | `90f3ae118a52f16aaa1301fd849609cfbedd3efa63c5602306d90cbe5e3634eb` |
+  | `SHA256SUMS` | `72de28f977c78ff3ac51106a556187b1b47a18be8ccd9d3b44e2552296b91526` |
+- No boot image is packed on this host (no private packer inputs, as in
+  §4.4/PR #136); pack on the coordinator host with the established daily2
+  runbook inputs (`tools/build-instantnoodlep-probe`, DAILY-K3-PLAN §8 Part
+  R prep and rollback), then `fastboot boot` the packed image (RAM only).
+
+**Phone gate (owner/coordinator only; no phone access by this worker)** —
+RAM-boot the packed `boot-daily2-qce-gmu.img`, stage the matching modules
+archive under `/usr/lib/modules/<release>/` without touching the pinned daily
+module tree, then verify:
+
+| Check | Exact command | Expect | Stop condition |
+| --- | --- | --- | --- |
+| G-gmu-1 kernel | `uname -r` | `7.3.0-rc6-instantnoodlep-k3-daily2-qce-gmu` | wrong release → stop, boot the daily image back |
+| G-gmu-2 GPU still up | `dmesg \| grep -E 'msm_dpu|adreno|a650_gmu'`, Hyprland renders | GPU probed, GMU firmware loaded, UI on GPU | GPU broken/hang → stop, rollback |
+| G-gmu-3 GMU bound | `readlink /sys/bus/platform/devices/3d6a000.gmu/driver` | `.../drivers/adreno-gmu` (or `platform:adreno-gmu`) | no driver → stop, rollback |
+| G-gmu-4 no GMU pending | `dmesg \| grep 'sync_state() pending'` (also after `echo 1 > /sys/power/state`-less idle; re-check after 10 min uptime) | **no** `3d6a000.gmu` line; QCE line also gone; record any other pending line | any `3d6a000.gmu` pending after boot → stop, rollback |
+| G-gmu-5 USB gadget | host side: watch for new USB device for 5 min after boot; on phone `ls /sys/class/udc` | gadget attaches (contrast: ruled-out `sync_state=timeout` boot never attached in 15 min) | no attach in 5 min → stop, rollback |
+| G-gmu-6 counters | screen off, cable out: read `/sys/kernel/debug/qcom_stats/{ddr_stats,cxsd,aosd}` twice 60 s apart | counters **advance** between reads (acceptance = advancing, not a promised count) | counters stay `Count 0` → stop, rollback |
+| G-gmu-7 floor | Part B floor loop from §4.4/upstream issue #867 (owner, cable out, screen off, 10 min) | median battery-only draw; compare with the ~229 mA / 7 min k3-daily2-qce report | anomalous heat/current, SSH loss → stop |
+
+Rollback for every stop: `fastboot boot` the installed daily / k3-daily2-qce
+image (or reboot to `boot_b`), do not flash anything. Do not combine this
+candidate with a DTS disable of `&gmu` or with `fw_devlink.sync_state=timeout`;
+one variable per RAM boot.
+
 ## 5. Roadmap and unresolved items
 
 1. Reproduce screen-off baseline and find dominant wake/power consumers.
