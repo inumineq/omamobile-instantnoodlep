@@ -1,0 +1,574 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# instantnoodlep-hw-check — one read-only peripheral inventory of the phone
+# over SSH, with a baseline diff. GitHub issue #188.
+#
+# Problem: every plan's first phone gate re-invents its own ls/cat list
+# (MISC-HW-PLAN R0, SENSORS-M5-PLAN R2/R7, AUDIO-M5-PLAN R2, CAMERA-PLAN R4),
+# so results cannot be compared between kernels and a silently unbound class
+# is noticed only by memory.
+#
+# One run collects a per-subsystem table, all read-only:
+#   evdev + FF caps   /sys/class/input/event* (name/phys/uniq/id, capabilities/ff decoded)
+#   leds incl. flash  /sys/class/leds/* (brightness/max/trigger, flash_* attrs)
+#   nfc               /sys/class/nfc/*
+#   iio               /sys/class/iio/iio:device*
+#   remoteproc        /sys/class/remoteproc/* (name/state/firmware)
+#   fastrpc           /dev/fastrpc*
+#   backlight         /sys/class/backlight/*
+#   drm               /sys/class/drm/card*-* connectors (status/enabled/modes)
+#   sound             /proc/asound/{cards,pcm,devices}, /sys/class/sound/card*/id
+#   power_supply      /sys/class/power_supply/* (fixed attr list; identity
+#                     attributes such as serial_number are never read)
+#   typec             /sys/class/typec/port* (data_role/power_role/...)
+#   usb_role          /sys/class/usb_role/*/role
+#   thermal           /sys/class/thermal/thermal_zone* (type/temp/policy/trips)
+#
+#   run 1 (baseline):  tools/instantnoodlep-hw-check --out hw-baseline-<date>.md
+#   run 2 (diff):      tools/instantnoodlep-hw-check --baseline hw-baseline-<date>.md \
+#                        --strict --out hw-run2-<date>.md
+#
+# Privacy (AGENTS.md rule 4): every line passes the redact() filter (MAC,
+# IPv4, 15+ digit IMEI-like numbers, serialno tokens) before it reaches the
+# report, and identity-bearing attributes (power_supply serial_number,
+# device-tree serial-number) are never read at all. Eyeball a report once
+# before sharing it anywhere public.
+#
+# Read-only: the remote side (--emit, piped to `ssh TARGET 'bash -s -- --emit'`)
+# only cats, globs and readlinks under sysfs/proc/dev. The local side writes
+# nothing except --out (mode 0600, existing file refused). Missing paths are
+# results ("_class missing_"), never errors.
+#
+# Later, sequential in this same tool (P-telephony-N11): radio classes —
+# mmcli -L summary, wwan/mhi nodes, rfkill, hci0 profiles, QRTR services,
+# GNSS node.
+#
+# Gated owner runbook (phone steps; agents never touch the phone, AGENTS.md
+# rule 1). Every step is read-only over the existing SSH session, so there is
+# no rollback: nothing is written on the phone.
+#
+# | Step | Command (run from the laptop) | Expect | Stop | Rollback |
+# | --- | --- | --- | --- | --- |
+# | H1 — baseline on the daily kernel | `tools/instantnoodlep-hw-check --out hw-baseline-$(date -u +%Y%m%dT%H%M%SZ).md` | exit 0; every class listed; no serial/MAC/IMEI in the report | SSH unreachable, or a class that should be bound shows `_class missing_` — record it, do not retry blindly | none (read-only) |
+# | H2 — diff after a kernel change | `tools/instantnoodlep-hw-check --baseline hw-baseline-<date>.md --strict --out hw-run2-<date>.md` | per-class +/- diff on stdout; `--strict` exit 0 | `--strict` exits 1 naming a missing class — record the class, compare with the plan's R-step | none (read-only); a misbehaving kernel itself is the slot-B rollback, outside this tool |
+#
+# Host test (x86, no phone): tests/instantnoodlep-hw-check builds a fake
+# sysfs/proc/dev fixture tree and drives this tool with --local.
+#
+# Env overrides: HW_CHECK_HOST (default root@172.16.42.1); on the emit side
+# HW_CHECK_SYSFS / HW_CHECK_PROC / HW_CHECK_DEV / HW_CHECK_KERNEL (the test
+# points them at the fixture tree).
+set -euo pipefail
+shopt -s nullglob
+
+SELF=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/$(basename -- "${BASH_SOURCE[0]}")
+
+usage() {
+  cat <<'EOF'
+Usage: instantnoodlep-hw-check [--host TARGET] [--local] [--baseline FILE]
+                               [--strict] [--out FILE]
+       instantnoodlep-hw-check --emit    (internal: raw inventory, runs on the phone)
+
+One read-only peripheral inventory of the OnePlus 8 Pro over SSH, printed as
+one Markdown report with a per-subsystem table (evdev+FF caps, leds incl.
+flash, nfc, iio, remoteproc+fastrpc, backlight, DRM connector modes, sound
+cards/DAIs, power_supply, typec ports/role, USB roles, thermal zones).
+Serials, MACs and IMEIs are redacted; identity attributes are never read
+(AGENTS.md rule 4).
+
+  --host TARGET   SSH target (default: $HW_CHECK_HOST or root@172.16.42.1)
+  --local         no SSH: run --emit locally against $HW_CHECK_SYSFS /
+                  $HW_CHECK_PROC / $HW_CHECK_DEV (fixture/test mode)
+  --baseline FILE diff this run against a previous report; per-class +/-
+                  rows are printed on stdout, the report itself is unchanged
+  --strict        exit 1 naming the class when a class present in the baseline
+                  (or, without --baseline, in the built-in class list) has no
+                  rows in this run
+  --out FILE      write the report to FILE (mode 0600; existing file refused);
+                  default: stdout
+  --emit          internal: print raw inventory lines (fed to the phone via
+                  `ssh TARGET 'bash -s -- --emit'`)
+  --help          this text
+
+Exit codes: 0 ok (a printed diff is not an error), 1 --strict missing class,
+2 usage error. Missing sysfs/proc/dev paths are results ("_class missing_"),
+never errors. Nothing is ever written on the phone.
+EOF
+}
+
+host=${HW_CHECK_HOST:-root@172.16.42.1}
+local_mode=${HW_CHECK_LOCAL:-0}
+[[ $local_mode =~ ^[01]$ ]] || local_mode=0
+baseline='' strict=0 out='' emit=0
+while (($#)); do
+  case $1 in
+    --host)
+      (($# >= 2)) || { usage >&2; exit 2; }
+      host=$2; shift 2 ;;
+    --local) local_mode=1; shift ;;
+    --baseline)
+      (($# >= 2)) || { usage >&2; exit 2; }
+      baseline=$2; shift 2 ;;
+    --strict) strict=1; shift ;;
+    --out)
+      (($# >= 2)) || { usage >&2; exit 2; }
+      out=$2; shift 2 ;;
+    --emit) emit=1; shift ;;
+    --help|-h) usage; exit 0 ;;
+    *) usage >&2; exit 2 ;;
+  esac
+done
+
+# Privacy filter for every line that reaches the report: MAC addresses, IPv4
+# addresses, IMEI-like long numbers and serial tokens (same patterns as
+# tools/instantnoodlep-power-baseline).
+redact() {
+  sed -E \
+    -e 's/[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}/<redacted-mac>/g' \
+    -e 's/(^|[^0-9.])[0-9]{1,3}(\.[0-9]{1,3}){3}([^0-9.]|$)/\1<redacted-ip>\3/g' \
+    -e 's/[0-9]{15,}/<redacted-imei>/g' \
+    -e 's/[A-Za-z0-9._-]*serialno[=:][^[:space:]]*/<redacted-serial>/gI'
+}
+
+rattr() { # print a readable file's content, nothing otherwise
+  local p=$1
+  if [[ -r $p ]]; then
+    cat -- "$p" 2>/dev/null || true
+  fi
+}
+
+clean() { # one line, no pipe (the field separator) and no tabs
+  local v=$1
+  v=${v//|/:}
+  v=${v//$'\n'/ }
+  v=${v//$'\t'/ }
+  printf '%s' "$v"
+}
+
+# FF capability bits: effect codes per include/uapi/linux/input.h
+# (FF_RUMBLE=0x50 .. FF_AUTOCENTER=0x61). sysfs capabilities/* print hex
+# words MSW-first, space separated, leading zero words skipped
+# (input_print_bitmap(), drivers/input/input.c), so the last printed word
+# is always bits 0-63.
+ff_decode() {
+  local s=$1 w idx n len i nib b code out=''
+  local -A N=( [80]=RUMBLE [81]=PERIODIC [82]=CONSTANT [83]=SPRING \
+    [84]=FRICTION [85]=DAMPER [86]=INERTIA [87]=RAMP [88]=SQUARE [89]=TRIANGLE \
+    [90]=SINE [91]=SAW_UP [92]=SAW_DOWN [93]=CUSTOM [96]=GAIN [97]=AUTOCENTER )
+  local words=()
+  read -ra words <<<"$(printf '%s' "$s" | tr ',' ' ')"
+  n=${#words[@]}
+  for ((idx = 0; idx < n; idx++)); do
+    w=${words[idx]}
+    [[ $w =~ ^[0-9a-fA-F]+$ ]] || continue
+    len=${#w}
+    for ((i = len - 1; i >= 0; i--)); do
+      nib=$((16#${w:i:1}))
+      ((nib)) || continue
+      for b in 0 1 2 3; do
+        ((nib & (1 << b))) || continue
+        code=$((64 * (n - 1 - idx) + (len - 1 - i) * 4 + b))
+        if [[ -n ${N[$code]:-} ]]; then
+          out+="${out:+,}${N[$code]}"
+        else
+          out+="${out:+,}bit$code"
+        fi
+      done
+    done
+  done
+  printf '%s' "${out:--}"
+}
+
+# ---------------------------------------------------------------- emit side
+# Runs on the phone (or against a fixture tree): prints raw inventory lines
+# "section|field|...". Reads only; never writes.
+
+emit_evdev() {
+  local S=$1 d node name phys uniq id b ff
+  for d in "$S"/class/input/event*; do
+    [[ -d $d ]] || continue
+    node=${d##*/}
+    name=$(clean "$(rattr "$d/device/name")")
+    phys=$(clean "$(rattr "$d/device/phys")")
+    uniq=$(clean "$(rattr "$d/device/uniq")")
+    id=''
+    for b in bustype vendor product version; do
+      id+="$(rattr "$d/device/id/$b"):"
+    done
+    id=${id%:}
+    ff=$(clean "$(rattr "$d/capabilities/ff")")
+    printf 'evdev|%s|%s|%s|%s|%s|%s\n' "$node" "$name" "$phys" "$uniq" "$id" "${ff:-0}"
+  done
+}
+
+emit_leds() {
+  local S=$1 d a v flash
+  for d in "$S"/class/leds/*; do
+    [[ -d $d ]] || continue
+    flash=''
+    for a in flash_brightness flash_timeout flash_fault; do
+      if [[ -r $d/$a ]]; then
+        v=$(clean "$(rattr "$d/$a")")
+        flash+="${flash:+;}$a=$v"
+      fi
+    done
+    [[ -n $flash ]] || flash='-'
+    printf 'leds|%s|%s|%s|%s|%s\n' "${d##*/}" \
+      "$(clean "$(rattr "$d/brightness")")" \
+      "$(clean "$(rattr "$d/max_brightness")")" \
+      "$(clean "$(rattr "$d/trigger")")" "$flash"
+  done
+}
+
+emit_nfc() {
+  local S=$1 d dev
+  for d in "$S"/class/nfc/*; do
+    [[ -d $d ]] || continue
+    dev=$(readlink -- "$d/device" 2>/dev/null || true)
+    printf 'nfc|%s|%s\n' "${d##*/}" "$(clean "${dev:--}")"
+  done
+}
+
+emit_iio() {
+  local S=$1 d
+  for d in "$S"/class/iio/*; do
+    [[ -d $d ]] || continue
+    case ${d##*/} in iio:device*) ;; *) continue ;; esac
+    printf 'iio|%s|%s|%s\n' "${d##*/}" \
+      "$(clean "$(rattr "$d/name")")" "$(clean "$(rattr "$d/label")")"
+  done
+}
+
+emit_remoteproc() {
+  local S=$1 D=$2 d f
+  for d in "$S"/class/remoteproc/remoteproc*; do
+    [[ -d $d ]] || continue
+    printf 'remoteproc|%s|%s|%s|%s\n' "${d##*/}" \
+      "$(clean "$(rattr "$d/name")")" "$(clean "$(rattr "$d/state")")" \
+      "$(clean "$(rattr "$d/firmware")")"
+  done
+  for f in "$D"/fastrpc*; do
+    [[ -e $f ]] || continue
+    printf 'fastrpc|/dev/%s\n' "${f##*/}"
+  done
+}
+
+emit_backlight() {
+  local S=$1 d
+  for d in "$S"/class/backlight/*; do
+    [[ -d $d ]] || continue
+    printf 'backlight|%s|%s|%s|%s|%s|%s\n' "${d##*/}" \
+      "$(clean "$(rattr "$d/brightness")")" \
+      "$(clean "$(rattr "$d/max_brightness")")" \
+      "$(clean "$(rattr "$d/actual_brightness")")" \
+      "$(clean "$(rattr "$d/type")")" \
+      "$(clean "$(rattr "$d/bl_power")")"
+  done
+}
+
+emit_drm() {
+  local S=$1 d modes
+  for d in "$S"/class/drm/card*-*; do
+    [[ -d $d ]] || continue
+    modes=''
+    if [[ -r $d/modes ]]; then
+      modes=$(tr '\n' ',' <"$d/modes")
+      modes=${modes%,}
+    fi
+    printf 'drm|%s|%s|%s|%s\n' "${d##*/}" \
+      "$(clean "$(rattr "$d/status")")" "$(clean "$(rattr "$d/enabled")")" \
+      "$(clean "${modes:--}")"
+  done
+}
+
+emit_sound() {
+  local S=$1 P=$2 f l d
+  for f in cards pcm devices; do
+    if [[ -r $P/asound/$f ]]; then
+      while IFS= read -r l; do
+        [[ -n $l ]] || continue
+        printf 'sound|%s|%s|\n' "$f" "$(clean "$l")"
+      done <"$P/asound/$f"
+    fi
+  done
+  for d in "$S"/class/sound/card*; do
+    [[ -d $d ]] || continue
+    printf 'sound|card|%s|%s\n' "${d##*/}" "$(clean "$(rattr "$d/id")")"
+  done
+}
+
+emit_power_supply() {
+  local S=$1 d a
+  # Fixed attribute list. Identity attributes (serial_number etc.) are
+  # deliberately never read (AGENTS.md rule 4).
+  local attrs=(type status health present online capacity capacity_level \
+    voltage_now current_now power_now temp charge_now charge_full \
+    charge_full_design cycle_count technology model_name manufacturer)
+  for d in "$S"/class/power_supply/*; do
+    [[ -d $d ]] || continue
+    for a in "${attrs[@]}"; do
+      [[ -r $d/$a ]] || continue
+      printf 'power_supply|%s|%s|%s\n' "${d##*/}" "$a" "$(clean "$(rattr "$d/$a")")"
+    done
+  done
+}
+
+emit_typec() {
+  local S=$1 d f
+  for d in "$S"/class/typec/*; do
+    [[ -d $d ]] || continue
+    for f in "$d"/*; do
+      [[ -f $f && -r $f ]] || continue
+      printf 'typec|%s|%s|%s\n' "${d##*/}" "${f##*/}" "$(clean "$(rattr "$f")")"
+    done
+  done
+}
+
+emit_usb_role() {
+  local S=$1 d
+  for d in "$S"/class/usb_role/*; do
+    [[ -d $d ]] || continue
+    printf 'usb_role|%s|%s\n' "${d##*/}" "$(clean "$(rattr "$d/role")")"
+  done
+}
+
+emit_thermal() {
+  local S=$1 d tp t v trips
+  for d in "$S"/class/thermal/thermal_zone*; do
+    [[ -d $d ]] || continue
+    trips=''
+    for tp in "$d"/trip_point_*_type; do
+      [[ -e $tp ]] || continue
+      t=$(clean "$(rattr "$tp")")
+      v=$(clean "$(rattr "${tp%_type}_temp")")
+      trips+="${trips:+,}$t:$v"
+    done
+    [[ -n $trips ]] || trips='-'
+    printf 'thermal|%s|%s|%s|%s|%s\n' "${d##*/}" \
+      "$(clean "$(rattr "$d/type")")" "$(clean "$(rattr "$d/temp")")" \
+      "$(clean "$(rattr "$d/policy")")" "$trips"
+  done
+}
+
+emit() {
+  local S=${HW_CHECK_SYSFS:-/sys} P=${HW_CHECK_PROC:-/proc} D=${HW_CHECK_DEV:-/dev}
+  local kernel=${HW_CHECK_KERNEL:-$(uname -r)} comp
+  printf 'meta|kernel|%s\n' "$(clean "$kernel")"
+  if [[ -r $P/device-tree/model ]]; then
+    printf 'meta|model|%s\n' "$(clean "$(tr -d '\0' <"$P/device-tree/model")")"
+  fi
+  if [[ -r $P/device-tree/compatible ]]; then
+    comp=$(tr '\0' ',' <"$P/device-tree/compatible")
+    printf 'meta|compatible|%s\n' "$(clean "${comp%,}")"
+  fi
+  emit_evdev "$S"
+  emit_leds "$S"
+  emit_nfc "$S"
+  emit_iio "$S"
+  emit_remoteproc "$S" "$D"
+  emit_backlight "$S"
+  emit_drm "$S"
+  emit_sound "$S" "$P"
+  emit_power_supply "$S"
+  emit_typec "$S"
+  emit_usb_role "$S"
+  emit_thermal "$S"
+}
+
+if ((emit)); then
+  emit
+  exit 0
+fi
+
+# ------------------------------------------------------------- collect side
+
+CLASSES=(evdev leds nfc iio remoteproc fastrpc backlight drm sound power_supply typec usb_role thermal)
+
+declare -A ROWS=() SIG=() META=()
+transport_desc=''
+
+section_cols() {
+  case $1 in
+    evdev)        printf '%s' 'node|name|phys|uniq|id|ff|ff-caps' ;;
+    leds)         printf '%s' 'led|brightness|max|trigger|flash' ;;
+    nfc)          printf '%s' 'node|device' ;;
+    iio)          printf '%s' 'device|name|label' ;;
+    remoteproc)   printf '%s' 'remoteproc|name|state|firmware' ;;
+    fastrpc)      printf '%s' 'node' ;;
+    backlight)    printf '%s' 'backlight|brightness|max|actual|type|bl_power' ;;
+    drm)          printf '%s' 'connector|status|enabled|modes' ;;
+    sound)        printf '%s' 'kind|a|b' ;;
+    power_supply) printf '%s' 'supply|attr|value' ;;
+    typec)        printf '%s' 'port|attr|value' ;;
+    usb_role)     printf '%s' 'switch|role' ;;
+    thermal)      printf '%s' 'zone|type|temp|policy|trips' ;;
+    *)            printf '%s' "$1" ;;
+  esac
+}
+
+collect() {
+  local raw line sec rest f
+  if ((local_mode)); then
+    raw=$(HW_CHECK_SYSFS=${HW_CHECK_SYSFS:-/sys} HW_CHECK_PROC=${HW_CHECK_PROC:-/proc} \
+          HW_CHECK_DEV=${HW_CHECK_DEV:-/dev} HW_CHECK_KERNEL=${HW_CHECK_KERNEL:-} \
+          bash "$SELF" --emit) || { echo "hw-check: local --emit failed" >&2; exit 1; }
+    transport_desc="local (sysfs=${HW_CHECK_SYSFS:-/sys} proc=${HW_CHECK_PROC:-/proc} dev=${HW_CHECK_DEV:-/dev})"
+  else
+    command -v ssh >/dev/null 2>&1 || { echo "hw-check: ssh not found (use --local for fixture runs)" >&2; exit 2; }
+    raw=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" 'bash -s -- --emit' <"$SELF") \
+      || { echo "hw-check: ssh inventory from $host failed" >&2; exit 1; }
+    transport_desc="ssh $host"
+  fi
+  while IFS= read -r line; do
+    [[ -n $line ]] || continue
+    line=$(printf '%s' "$line" | redact)
+    sec=${line%%|*}
+    if [[ $sec == meta ]]; then
+      rest=${line#meta|}
+      META[${rest%%|*}]=${rest#*|}
+      continue
+    fi
+    ROWS[$sec]+="$line"$'\n'
+    if [[ $sec == evdev ]]; then
+      IFS='|' read -ra f <<<"$line"
+      SIG[$sec]+="$(printf '%s|%s' "$line" "$(ff_decode "${f[6]:-0}")")"$'\n'
+    else
+      SIG[$sec]+="$line"$'\n'
+    fi
+  done <<<"$raw"
+}
+
+render_report() {
+  local sec cols c x row rest f
+  printf '# instantnoodlep-hw-check — OnePlus 8 Pro (instantnoodlep, SM8250)\n\n'
+  printf -- '- generated: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf -- '- transport: %s\n' "$transport_desc"
+  printf -- '- kernel: %s\n' "${META[kernel]:-unknown}"
+  [[ -n ${META[model]:-} ]] && printf -- '- model: %s\n' "${META[model]}"
+  [[ -n ${META[compatible]:-} ]] && printf -- '- compatible: %s\n' "${META[compatible]}"
+  printf -- '- classes: %d\n' "${#CLASSES[@]}"
+  for sec in "${CLASSES[@]}"; do
+    printf '\n## %s\n\n' "$sec"
+    if [[ -z ${ROWS[$sec]:-} ]]; then
+      printf '_class missing_\n'
+      continue
+    fi
+    cols=$(section_cols "$sec")
+    IFS='|' read -ra c <<<"$cols"
+    printf '|'
+    for x in "${c[@]}"; do printf ' %s |' "$x"; done
+    printf '\n|'
+    for x in "${c[@]}"; do printf -- '---|'; done
+    printf '\n'
+    while IFS= read -r row; do
+      [[ -n $row ]] || continue
+      if [[ $sec == evdev ]]; then
+        IFS='|' read -ra f <<<"$row"
+        printf '| %s | %s | %s | %s | %s | %s | %s |\n' \
+          "${f[1]}" "${f[2]}" "${f[3]}" "${f[4]}" "${f[5]}" "${f[6]}" "$(ff_decode "${f[6]:-0}")"
+      else
+        rest=${row#*|}
+        printf '| %s |\n' "${rest//|/' | '}"
+      fi
+    done <<<"${ROWS[$sec]}"
+  done
+}
+
+# Parse a previous report (our own Markdown format) into signature lines
+# "section|field|..."; only kernel/model/compatible meta are compared.
+parse_baseline() {
+  local file=$1 line sec='' header=0 cells
+  BASE_SIG=''
+  while IFS= read -r line; do
+    case $line in
+      '## '*) sec=${line#'## '}; sec=${sec%% *}; header=0; continue ;;
+      '- kernel: '*)     BASE_SIG+="meta|kernel|${line#'- kernel: '}"$'\n'; continue ;;
+      '- model: '*)      BASE_SIG+="meta|model|${line#'- model: '}"$'\n'; continue ;;
+      '- compatible: '*) BASE_SIG+="meta|compatible|${line#'- compatible: '}"$'\n'; continue ;;
+    esac
+    [[ $line == '|'* ]] || continue
+    [[ -n $sec ]] || continue
+    [[ $line =~ ^\|[-|]+\|$ ]] && continue
+    if ((header)); then
+      cells=${line#| }
+      cells=${cells% |}
+      cells=${cells//' | '/'|'}
+      BASE_SIG+="$sec|$cells"$'\n'
+    else
+      header=1
+    fi
+  done <"$file"
+}
+
+BASE_SIG=''
+print_diff() {
+  local tmp newsig sec k
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/hwcheck.XXXXXX")
+  printf '%s' "$BASE_SIG" | sort >"$tmp/base.sig"
+  newsig=''
+  for sec in "${CLASSES[@]}"; do
+    [[ -n ${SIG[$sec]:-} ]] && newsig+="${SIG[$sec]}"
+  done
+  for k in kernel model compatible; do
+    [[ -n ${META[$k]:-} ]] && newsig+="meta|$k|${META[$k]}"$'\n'
+  done
+  printf '%s' "$newsig" | sort >"$tmp/new.sig"
+  echo "# diff vs baseline $baseline"
+  if cmp -s "$tmp/base.sig" "$tmp/new.sig"; then
+    echo '(no inventory changes)'
+  else
+    diff --old-line-format='- %L' --new-line-format='+ %L' --unchanged-line-format='' \
+      "$tmp/base.sig" "$tmp/new.sig" || true
+  fi
+  rm -rf -- "$tmp"
+}
+
+check_strict() {
+  local expected=() c s missing=()
+  if [[ -n $baseline ]]; then
+    while IFS= read -r s; do
+      c=${s%%|*}
+      [[ -n $s && $c != meta ]] && expected+=("$c")
+    done <<<"$BASE_SIG"
+    if ((${#expected[@]})); then
+      mapfile -t expected < <(printf '%s\n' "${expected[@]}" | awk '!seen[$0]++')
+    fi
+  else
+    expected=("${CLASSES[@]}")
+  fi
+  for c in "${expected[@]}"; do
+    [[ -n ${SIG[$c]:-} ]] || missing+=("$c")
+  done
+  if ((${#missing[@]})); then
+    echo "hw-check: MISSING CLASS: ${missing[*]}" >&2
+    exit 1
+  fi
+}
+
+collect
+
+if [[ -n $out ]]; then
+  if [[ -e $out || -L $out ]]; then
+    echo "refusing to overwrite existing $out" >&2
+    exit 2
+  fi
+  umask 077
+  render_report >"$out"
+  echo "hw-check: report written to $out" >&2
+else
+  render_report
+fi
+
+if [[ -n $baseline ]]; then
+  if [[ ! -r $baseline ]]; then
+    echo "hw-check: cannot read baseline $baseline" >&2
+    exit 2
+  fi
+  parse_baseline "$baseline"
+  print_diff
+fi
+
+if ((strict)); then
+  check_strict
+fi
+exit 0
