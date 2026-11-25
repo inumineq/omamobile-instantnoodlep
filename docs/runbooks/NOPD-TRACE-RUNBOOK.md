@@ -1,6 +1,6 @@
 # Trace the `nopd` and `noclk` kernels without a login
 
-Status: `noclk` traced and its USB loss narrowed to two clocks (2026-11-25); `nopd` not run.
+Status: `noclk` traced; the two-clock result below did not reproduce and is withdrawn (2026-11-25); `nopd` not run.
 
 ## Why
 
@@ -296,6 +296,23 @@ its two bus clocks, so nothing owns the core clocks. On this phone the
 wrapper carries the haptics driver chip, the touch screen and one UART;
 nothing of USB. [I] The link to USB is therefore indirect. It is open, and
 the two test trees say where the dependency is, not what the fix is.
+
+## The two-clock result did not reproduce
+
+[V, coordinator's reports, 2026-11-25 afternoon] The `noclk-c1` image, which
+gave USB at about 00:30, gave none in two boots, one per plug direction. The
+trace of the first shows the same clock state and kernel log as the earlier
+hit. Count so far: clocks held, 3 hits and 2 misses; not held, 0 hits and 2
+misses. [V] A device tree with `protected-clocks` for the same two clocks did
+not reach the root file system in its one run.
+
+The conclusion "USB needs the two core clocks of serial wrapper 1" in the two
+sections above is therefore withdrawn. What differs between the sessions is
+not known. Two lessons for the next test: run a positive control (the full
+daily command line, RAM-booted) in the same session, and build test images on
+the kernel that is the daily at the time. These images were built on the
+previous daily, which has no Type-C support and carries USB data one way
+round only; mark the plug.
 
 ## Rollback
 
