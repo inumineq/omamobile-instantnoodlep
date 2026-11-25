@@ -19,6 +19,7 @@ scripts=(
   test/bt-public-addr
   test/mobile-profile.sh
   test/scaling.sh
+  test/udev
 )
 bash -n "${scripts[@]}"
 shellcheck "${scripts[@]}"
@@ -30,6 +31,8 @@ grep -q "^pkgbase = omamobile-device-instantnoodlep$" "$srcinfo"
 ./test/mobile-profile.sh
 ./test/scaling.sh
 ./test/pm-sample.sh
+./test/udev
+./test/udev --selftest
 
 stage=$(mktemp -d)
 trap 'rm -rf "$stage" "$srcinfo"' EXIT
@@ -64,7 +67,10 @@ if grep -R -n -E 'GDK_SCALE|QT_SCALE_FACTOR' "$stage/usr/lib/environment.d" "$st
   echo "toolkit scale variables must stay out of global environment files" >&2
   exit 1
 fi
-test -f "$stage/usr/lib/udev/rules.d/80-omamobile-bt-public-addr.rules"
+for rule in udev/*.rules; do
+  test -f "$stage/usr/lib/udev/rules.d/${rule##*/}"
+done
+test -f "$stage/usr/lib/sysusers.d/omamobile.conf"
 test -L "$stage/etc/systemd/system/systemd-firstboot.service"
 test "$(readlink "$stage/etc/systemd/system/systemd-firstboot.service")" = /dev/null
 test -L "$stage/etc/systemd/system/systemd-vconsole-setup.service"
