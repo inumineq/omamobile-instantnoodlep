@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Checks device.conf against the rules upstream bin/omamobile load_device
+# enforces (upstream bin/omamobile:102-125), so a descriptor the phone's
+# tooling would refuse never lands. Issue #8.
+#   - every non-blank, non-comment line is a bare KEY=value: nothing may
+#     trail the value (load_device dies with "not a KEY=value line")
+#   - the repo copy and the package copy are byte-identical
+#   - UFS_RW names userdata and no _a partition, super or vbmeta
+set -euo pipefail
+ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+A=$ROOT/device/instantnoodlep/device.conf
+B=$ROOT/packages/omamobile-device-instantnoodlep/device.conf
+fail() { echo "not ok - $*" >&2; exit 1; }
+
+cmp -s "$A" "$B" || fail "device.conf copies differ: $A vs $B"
+
+n=0
+while IFS= read -r line || [[ -n $line ]]; do
+  n=$((n + 1))
+  [[ -z $line || $line == \#* ]] && continue
+  [[ $line =~ ^[A-Z_][A-Z0-9_]*=(\"[^\"]*\"|[^[:space:]\"#]*)$ ]] \
+    || fail "$A:$n: not a bare KEY=value line (trailing text?): $line"
+done <"$A"
+
+ufs=$(sed -n 's/^UFS_RW="\(.*\)"$/\1/p' "$A")
+[[ " $ufs " == *" userdata "* ]] || fail "UFS_RW must list userdata: $ufs"
+for p in $ufs; do
+  [[ $p == *_a || $p == super || $p == vbmeta* ]] && fail "UFS_RW must not name $p"
+done
+echo "ok - device.conf: bare KEY=value lines, copies identical, UFS_RW slot-B only"
