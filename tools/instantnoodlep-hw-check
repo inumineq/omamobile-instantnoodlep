@@ -61,7 +61,12 @@
 set -euo pipefail
 shopt -s nullglob
 
-SELF=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/$(basename -- "${BASH_SOURCE[0]}")
+# On the phone the script arrives on stdin (`bash -s -- --emit`), where
+# BASH_SOURCE is empty; only the local side needs SELF, to pipe itself over.
+SELF=''
+if [[ -n ${BASH_SOURCE[0]:-} && -f ${BASH_SOURCE[0]} ]]; then
+  SELF=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/$(basename -- "${BASH_SOURCE[0]}")
+fi
 
 usage() {
   cat <<'EOF'
