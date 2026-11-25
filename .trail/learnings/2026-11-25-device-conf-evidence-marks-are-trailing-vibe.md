@@ -11,6 +11,7 @@ src: agent
 touches:
   - device/instantnoodlep/device.conf
   - packages/omamobile-device-instantnoodlep/device.conf
+  - tests/instantnoodlep-device-conf
 ---
 
 ## Watch out
@@ -23,9 +24,10 @@ touches:
   userdata, no _a/super/vbmeta, BOOT_IMAGES _b on UFS_RW, AVB_FOOTERS
   subset and 4096 multiples, AVB_ROLLBACK_INDEX/AVB_SECURITY_PATCH formats,
   UFS_RW_LUNS sd[b-z]) once the trailing marks are stripped; verified with a
-  local replication of the parser. Before this descriptor is proposed
-  upstream, either move the marks to whole lines or extend the upstream
-  parser.
+  local replication of the parser. Resolved in the same PR: the marks sit on
+  the comment line above each key, and tests/instantnoodlep-device-conf
+  fails on any trailing text, on diverging repo/package copies, and on a
+  UFS_RW entry that is _a, super or vbmeta.
 - Locked per the recorded answers: chain-partition vbmeta case (issue #10
   comment) -> `AVB_FOOTERS="boot:0x6000000 dtbo:0x1800000"`,
   `AVB_ROLLBACK_INDEX=0`, `AVB_SECURITY_PATCH=2024-06-05`; `UFS_RW_LUNS=sde`
