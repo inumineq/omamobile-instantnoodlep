@@ -43,6 +43,9 @@ initramfs never contains /etc/omamobile-ufs-rw, so there is no write allowlist.
 --typec keeps the real Type-C graph instead (dr_mode otg, usb-role-switch,
 role-switch-default-mode peripheral, PM8150B Type-C port with connector);
 it is for Type-C/DP feature kernels and is verified, not just kept.
+--keep-remoteproc ADDR (repeatable, e.g. 17300000 for the ADSP) leaves
+remoteproc@ADDR as the kernel DTB has it, which must be okay; every other
+remote processor is still disabled. It is for ADSP/SLPI/CDSP feature kernels.
 
 The 64 MiB image cap is [I], a conservative limit until stage 0 records the
 IN2023 boot partition size. It is not a measured device limit. The separate
@@ -462,7 +465,7 @@ def property_present(dtb, node, prop):
     return result.returncode == 0
 
 
-def verify_probe_dtb(dtb, boot, labels, typec=False):
+def verify_probe_dtb(dtb, boot, labels, typec=False, keep=()):
     require_identity(dtb)
     verify_overlay_sink(dtb, labels)
     if typec:
@@ -485,9 +488,14 @@ def verify_probe_dtb(dtb, boot, labels, typec=False):
         if property_present(dtb, USB_NODE, "usb-role-switch"):
             raise BuildError("probe USB role switch was not removed")
     remotes = remoteproc_nodes(dtb)
+    kept = {n for n in remotes if n.rsplit("@", 1)[1] in keep}
+    missing = set(keep) - {n.rsplit("@", 1)[1] for n in kept}
+    if missing:
+        raise BuildError(f"--keep-remoteproc names no remoteproc node: {sorted(missing)}")
     for node in remotes:
-        if fdt_get(dtb, node, "status") != "disabled":
-            raise BuildError(f"remote processor was not disabled: {node}")
+        want_rp = "okay" if node in kept else "disabled"
+        if fdt_get(dtb, node, "status") != want_rp:
+            raise BuildError(f"remote processor {node} is not {want_rp}")
     want = "disabled" if boot == 1 else "okay"
     if fdt_get(dtb, UFS_NODE, "status") != want:
         raise BuildError(f"probe UFS host status is not {want}")
@@ -586,7 +594,7 @@ def check_overlay_applies(ufdt_apply, dtb, overlay, work):
         raise BuildError("post-overlay DTB exceeds ABL's 2 MiB DTB window")
 
 
-def make_probe_dtb(source, output, boot, labels, typec=False):
+def make_probe_dtb(source, output, boot, labels, typec=False, keep=()):
     require_identity(source)
     shutil.copyfile(source, output)
     if not typec:
@@ -594,13 +602,14 @@ def make_probe_dtb(source, output, boot, labels, typec=False):
         if property_present(output, USB_NODE, "usb-role-switch"):
             run(["fdtput", "-d", output, USB_NODE, "usb-role-switch"])
     for node in remoteproc_nodes(output):
-        run(["fdtput", "-t", "s", output, node, "status", "disabled"])
+        if node.rsplit("@", 1)[1] not in keep:
+            run(["fdtput", "-t", "s", output, node, "status", "disabled"])
     run(["fdtput", "-t", "s", output, UFS_NODE, "status",
          "disabled" if boot == 1 else "okay"])
     for name, value in PON_MODES.items():
         run(["fdtput", "-t", "u", output, PON_NODE, name, str(value)])
     add_overlay_sink(output, labels)
-    verify_probe_dtb(output, boot, labels, typec)
+    verify_probe_dtb(output, boot, labels, typec, keep)
 
 
 def padded(size):
@@ -829,7 +838,8 @@ def build(args):
             prefix=".instantnoodlep-probe-", dir=paths["boot"].parent) as temp:
         work = Path(temp)
         staged = {name: work / path.name for name, path in paths.items()}
-        make_probe_dtb(args.dtb, staged["dtb"], args.boot, labels, args.typec)
+        make_probe_dtb(args.dtb, staged["dtb"], args.boot, labels, args.typec,
+                       tuple(args.keep_remoteproc))
         if args.ufdt_apply is not None:
             check_overlay_applies(args.ufdt_apply, staged["dtb"],
                                   args.stock_overlay, work)
@@ -846,7 +856,8 @@ def build(args):
         info, unpacked = read_back_boot(
             staged["boot"], args.mkbootimg, args.kernel,
             staged["ramdisk"], staged["dtb"], work, args.root, cmdline)
-        verify_probe_dtb(unpacked / "dtb", args.boot, labels, args.typec)
+        verify_probe_dtb(unpacked / "dtb", args.boot, labels, args.typec,
+                         tuple(args.keep_remoteproc))
         if args.luks2:
             assert_luksroot(unpacked / "ramdisk")
             if args.touch_unlock:
@@ -869,6 +880,7 @@ def build(args):
             "luks2": args.luks2,
             "touch_unlock": args.touch_unlock,
             "debug_shell": args.debug_shell,
+            "keep_remoteproc": sorted(args.keep_remoteproc),
             "header": info,
             "boot_image_limit": {
                 "bytes": BOOT_IMAGE_MAX,
@@ -929,6 +941,10 @@ def main(argv=None):
                         help="keep the real USB Type-C graph (dr_mode otg, "
                              "usb-role-switch, PM8150B port) instead of forcing "
                              "peripheral mode; the default role must stay peripheral")
+    parser.add_argument("--keep-remoteproc", action="append", default=[],
+                        metavar="ADDR",
+                        help="keep remoteproc@ADDR as the kernel DTB has it "
+                             "(must be okay); repeatable")
     parser.add_argument("--out", type=Path, required=True,
                         help="new boot.img path; sibling artifacts derive from its name")
     args = parser.parse_args(argv)
