@@ -294,6 +294,18 @@ check() {
   run_tool "$fx2" --baseline "$T/nonexistent.md" >/dev/null 2>&1 || rc=$?
   [[ $rc == 2 ]] || fail "unreadable --baseline should exit 2, got $rc"
   ok 'usage: --help 0, unknown flag 2, existing --out 2, unreadable --baseline 2'
+
+  # --- emit over stdin, exactly as ssh feeds the phone ----------------------
+  # Regression: SELF was derived from BASH_SOURCE[0], which is unset under
+  # `bash -s`, so set -u killed the remote side before it printed anything.
+  rc=0
+  HW_CHECK_SYSFS="$fx/sys" HW_CHECK_PROC="$fx/proc" HW_CHECK_DEV="$fx/dev" \
+  HW_CHECK_KERNEL='6.12.0-fixture' \
+    bash -s -- --emit <"$TOOL" >"$T/stdin.out" 2>"$T/stdin.err" || rc=$?
+  [[ $rc == 0 ]] || fail "emit via bash -s exited $rc: $(head -3 "$T/stdin.err")"
+  [[ -s $T/stdin.out ]] || fail 'emit via bash -s printed nothing'
+  ! grep -q 'unbound variable' "$T/stdin.err" || fail "emit via bash -s: $(head -1 "$T/stdin.err")"
+  ok 'emit runs from stdin (bash -s -- --emit), the way ssh delivers it'
 }
 
 check
