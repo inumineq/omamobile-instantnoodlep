@@ -23,6 +23,7 @@ install -Dm644 environment.d/40-omamobile-instantnoodlep-sleep.conf "$destinatio
 install -Dm644 systemd/sleep.conf.d/40-omamobile-instantnoodlep.conf "$destination/usr/lib/systemd/sleep.conf.d/40-omamobile-instantnoodlep.conf"
 install -Dm755 bin/omamobile-bt-public-addr "$destination/usr/bin/omamobile-bt-public-addr"
 install -Dm644 udev/80-omamobile-bt-public-addr.rules "$destination/usr/lib/udev/rules.d/80-omamobile-bt-public-addr.rules"
+install -Dm644 sysusers.d/omamobile.conf "$destination/usr/lib/sysusers.d/omamobile.conf"
 install -Dm644 systemd/omamobile-bt-public-addr@.service "$destination/usr/lib/systemd/system/omamobile-bt-public-addr@.service"
 install -Dm644 systemd/omamobile-instantnoodlep-charger.service "$destination/usr/lib/systemd/system/omamobile-instantnoodlep-charger.service"
 install -d "$destination/usr/lib/systemd/system/multi-user.target.wants"
