@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# Restore the wall clock from the saved RTC offset when the PMIC RTC booted
+# at ~1970. Runs in the sysinit phase: after local-fs (the state file lives
+# on the root fs) and before time-set/time-sync and systemd-timesyncd, so
+# everything ordered after those targets sees a sane clock. Never writes to
+# the RTC hardware. See device/instantnoodlep/RTC-OFFSET-PLAN.md.
+[Unit]
+Description=Apply the saved RTC offset to the system clock
+DefaultDependencies=no
+After=local-fs.target
+Before=time-set.target time-sync.target systemd-timesyncd.service sysinit.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-rtc-offset apply
+
+[Install]
+WantedBy=sysinit.target

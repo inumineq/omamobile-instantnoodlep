@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+# systemd-timesyncd rewrites /var/lib/systemd/timesync/clock (mtime = the
+# synced time) after every successful sync; refresh the stored offset right
+# then, while the wall clock is known good.
+[Unit]
+Description=Refresh the saved RTC offset after timesyncd syncs
+
+[Path]
+PathChanged=/var/lib/systemd/timesync/clock
+Unit=omamobile-rtc-offset-save.service
+
+[Install]
+WantedBy=paths.target

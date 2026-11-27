@@ -1,0 +1,216 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Host test for the packaged RTC offset helper.
+# No phone, no RTC access and no system clock writes: the clock set is
+# recorded via OMAMOBILE_RTC_SET_LOG, the RTC via a fake since_epoch file and
+# a fake hwclock, the wall clock via OMAMOBILE_RTC_NOW.
+SRC=$(cd "$(dirname "$0")/.." && pwd)/bin/omamobile-rtc-offset
+T=$(mktemp -d)
+trap 'rm -rf "$T"' EXIT
+fail() { echo "not ok - $*" >&2; exit 1; }
+ok() { echo "ok - $*"; }
+
+FLOOR=1700000000   # 2023-11-14, below every fixture
+NOW=1795562189     # 2026-11-24 ~23:16 UTC
+RTC=100000         # PMIC RTC counting from ~1970 (1970-01-02)
+OFFSET=$((NOW - RTC))
+MAX_OFF=3155760000 # 100 years, the helper's bound
+
+export OMAMOBILE_RTC_OFFSET_STATE="$T/state/rtc-offset"
+export OMAMOBILE_RTC_SYSFS="$T/rtc/since_epoch"
+export OMAMOBILE_RTC_TIMESYNC_CLOCK="$T/timesync/clock"
+export OMAMOBILE_RTC_OFFSET_FLOOR=$FLOOR
+export OMAMOBILE_RTC_NOW=$NOW
+export OMAMOBILE_RTC_SET_LOG="$T/sets"
+export OMAMOBILE_RTC_SYNCED_FLAG="$T/timesync/synchronized"
+mkdir -p "$T/rtc" "$T/state" "$T/bin" "$T/timesync"
+: > "$OMAMOBILE_RTC_SYNCED_FLAG"   # NTP-synced unless a test says otherwise
+
+# Fake hwclock: fails unless $T/hwclock-answer exists, then prints it.
+cat > "$T/bin/hwclock" <<'FAKE'
+#!/bin/bash
+if [[ -e "$FAKE_STATE/hwclock-answer" ]]; then
+  cat "$FAKE_STATE/hwclock-answer"
+else
+  exit 1
+fi
+FAKE
+chmod +x "$T/bin/hwclock"
+export FAKE_STATE="$T"
+export PATH="$T/bin:$PATH"
+
+echo "$RTC" > "$OMAMOBILE_RTC_SYSFS"
+
+run() { "$SRC" "$@" > "$T/out" 2>&1; }
+# run_at <now> <subcommand...>: run with a faked wall clock, restore after.
+run_at() {
+  local n=$1; shift
+  OMAMOBILE_RTC_NOW=$n
+  "$SRC" "$@" > "$T/out" 2>&1
+  local rc=$?
+  OMAMOBILE_RTC_NOW=$NOW
+  return $rc
+}
+run_fail() { if "$SRC" "$@" > "$T/out" 2>&1; then return 1; fi; return 0; }
+sets() { if [[ -f $OMAMOBILE_RTC_SET_LOG ]]; then cat "$OMAMOBILE_RTC_SET_LOG"; fi; }
+set_count() { sets | grep -c . || true; }
+mode_of() { stat -c %a "$1" 2> /dev/null || stat -f %Lp "$1"; }
+reset_state() { rm -rf "$T/state"; mkdir -p "$T/state"; rm -f "$OMAMOBILE_RTC_SET_LOG" "$T/out"; }
+
+# 1. save stores wall - rtc, mode 600, in a 700 directory.
+reset_state
+run save || fail "save exited non-zero: $(cat "$T/out")"
+[ "$(cat "$OMAMOBILE_RTC_OFFSET_STATE")" = "$OFFSET" ] ||
+  fail "state holds $(cat "$OMAMOBILE_RTC_OFFSET_STATE" 2>/dev/null), want $OFFSET"
+[ "$(mode_of "$OMAMOBILE_RTC_OFFSET_STATE")" = 600 ] || fail "state file mode is $(mode_of "$OMAMOBILE_RTC_OFFSET_STATE"), want 600"
+[ "$(mode_of "$T/state")" = 700 ] || fail "state dir mode is $(mode_of "$T/state"), want 700"
+grep -q "stored offset $OFFSET" "$T/out" || fail "no save log line: $(cat "$T/out")"
+ok "save stores wall - rtc ($OFFSET) with mode 600 in a 700 directory"
+
+# 2. save is idempotent and leaves no temp files behind.
+run save || fail "second save exited non-zero"
+[ "$(cat "$OMAMOBILE_RTC_OFFSET_STATE")" = "$OFFSET" ] || fail "second save changed the state"
+leftovers=$(find "$T/state" -name '.rtc-offset.*' | grep -c . || true)
+[ "$leftovers" = 0 ] || fail "temp files left behind: $leftovers"
+ok "save is repeatable and leaves no temp files"
+
+# 3. save refuses to store while the wall clock is below the floor.
+reset_state
+run_at $((FLOOR - 1000)) save || fail "bogus-clock save exited non-zero"
+[ ! -e "$OMAMOBILE_RTC_OFFSET_STATE" ] || fail "a bogus offset was stored anyway"
+grep -q "below the build floor" "$T/out" || fail "no floor diagnostic: $(cat "$T/out")"
+ok "save does nothing while the wall clock is below the floor"
+
+# 4. save with a corrupt rtc value stores nothing.
+reset_state
+echo "not-a-number" > "$OMAMOBILE_RTC_SYSFS"
+run save || fail "corrupt-rtc save exited non-zero"
+[ ! -e "$OMAMOBILE_RTC_OFFSET_STATE" ] || fail "state written from a corrupt rtc"
+echo "$RTC" > "$OMAMOBILE_RTC_SYSFS"
+ok "save ignores a corrupt rtc value"
+
+# 5. save with no RTC at all (sysfs missing, hwclock fails) stores nothing.
+reset_state
+rm -f "$OMAMOBILE_RTC_SYSFS"
+run save || fail "no-rtc save exited non-zero"
+[ ! -e "$OMAMOBILE_RTC_OFFSET_STATE" ] || fail "state written with no RTC"
+grep -q "no readable RTC" "$T/out" || fail "no no-RTC diagnostic: $(cat "$T/out")"
+ok "save does nothing when no RTC is readable"
+
+# 6. the hwclock fallback is used when sysfs is missing.
+reset_state
+hw_ans="Tue 24 Nov 2026 11:16:29 PM UTC"
+echo "$hw_ans" > "$T/hwclock-answer"
+hw_epoch=$(date -u -d "$hw_ans" +%s)
+run save || fail "hwclock-fallback save exited non-zero"
+[ "$(cat "$OMAMOBILE_RTC_OFFSET_STATE")" = "$((NOW - hw_epoch))" ] ||
+  fail "hwclock fallback stored $(cat "$OMAMOBILE_RTC_OFFSET_STATE"), want $((NOW - hw_epoch))"
+rm -f "$T/hwclock-answer"
+echo "$RTC" > "$OMAMOBILE_RTC_SYSFS"
+ok "save falls back to hwclock --get when sysfs is missing"
+
+# 7. save rejects an absurd offset (rtc far ahead of the wall clock).
+reset_state
+echo $((NOW + MAX_OFF + 1000)) > "$OMAMOBILE_RTC_SYSFS"
+run save || fail "absurd-offset save exited non-zero"
+[ ! -e "$OMAMOBILE_RTC_OFFSET_STATE" ] || fail "an absurd offset was stored"
+grep -q "outside" "$T/out" || fail "no bounds diagnostic: $(cat "$T/out")"
+echo "$RTC" > "$OMAMOBILE_RTC_SYSFS"
+ok "save rejects an offset outside +/-100 years"
+
+# 8. apply does nothing when the clock is already sane, even with state.
+reset_state
+printf '%s\n' "$OFFSET" > "$OMAMOBILE_RTC_OFFSET_STATE"
+run apply || fail "sane-clock apply exited non-zero"
+[ "$(set_count)" = 0 ] || fail "sane clock was changed: $(sets)"
+grep -q "already at or above the floor" "$T/out" || fail "no sane-clock diagnostic: $(cat "$T/out")"
+ok "apply leaves a sane clock alone"
+
+# 9. apply with a bogus clock and no state file does nothing but log.
+reset_state
+run_at $((FLOOR - 100)) apply || fail "no-state apply exited non-zero"
+[ "$(set_count)" = 0 ] || fail "clock set without state: $(sets)"
+grep -q "no state file" "$T/out" || fail "no missing-state diagnostic: $(cat "$T/out")"
+ok "apply does nothing when the state file is missing"
+
+# 10. apply with a corrupt state file does nothing but log.
+reset_state
+printf 'garbage\n' > "$OMAMOBILE_RTC_OFFSET_STATE"
+run_at $((FLOOR - 100)) apply || fail "corrupt-state apply exited non-zero"
+[ "$(set_count)" = 0 ] || fail "clock set from corrupt state: $(sets)"
+grep -q "does not hold an integer" "$T/out" || fail "no corrupt-state diagnostic: $(cat "$T/out")"
+ok "apply does nothing when the state file is corrupt"
+
+# 11. round trip: save while synced, then apply on a bogus clock sets
+#     rtc + offset = the saved wall clock.
+reset_state
+run save || fail "round-trip save exited non-zero"
+run_at $((FLOOR - 100)) apply || fail "round-trip apply exited non-zero"
+[ "$(set_count)" = 1 ] || fail "expected exactly one clock set, got $(set_count): $(sets)"
+[ "$(sets)" = "$NOW" ] || fail "clock set to $(sets), want $NOW (rtc $RTC + offset $OFFSET)"
+ok "apply restores rtc + saved offset = $NOW on a bogus clock"
+
+# 12. apply is idempotent: once the clock is at the target it does nothing.
+run apply || fail "idempotent apply exited non-zero"
+[ "$(set_count)" = 1 ] || fail "apply moved an already-correct clock: $(sets)"
+ok "apply does not touch an already-correct clock"
+
+# 13. apply refuses a target below the build floor.
+reset_state
+printf '%s\n' $((FLOOR - RTC - 500)) > "$OMAMOBILE_RTC_OFFSET_STATE"
+run_at $((FLOOR - 100)) apply || fail "below-floor apply exited non-zero"
+[ "$(set_count)" = 0 ] || fail "clock set below the floor: $(sets)"
+grep -q "below the floor" "$T/out" || fail "no below-floor diagnostic: $(cat "$T/out")"
+ok "apply never sets the clock below the build floor"
+
+# 14. apply never moves the clock backwards past the timesyncd clock file.
+reset_state
+printf '%s\n' "$OFFSET" > "$OMAMOBILE_RTC_OFFSET_STATE"
+touch -d "@$((NOW + 1000))" "$OMAMOBILE_RTC_TIMESYNC_CLOCK"
+run_at $((FLOOR - 100)) apply || fail "timesync-guard apply exited non-zero"
+[ "$(set_count)" = 0 ] || fail "clock moved backwards past timesyncd: $(sets)"
+grep -q "not moving backwards" "$T/out" || fail "no timesync-guard diagnostic: $(cat "$T/out")"
+touch -d "@$((NOW - 1000))" "$OMAMOBILE_RTC_TIMESYNC_CLOCK"
+run_at $((FLOOR - 100)) apply || fail "timesync-ok apply exited non-zero"
+[ "$(sets)" = "$NOW" ] || fail "clock not set with an older timesyncd clock: $(sets)"
+ok "apply respects the timesyncd clock file as a backwards bound"
+
+# 15. apply accepts a negative offset (rtc ahead of the wall clock) when the
+#     target is still sane.
+reset_state
+RTC_AHEAD=1800000000
+printf '%s\n' $((NOW - RTC_AHEAD)) > "$OMAMOBILE_RTC_OFFSET_STATE"
+echo "$RTC_AHEAD" > "$OMAMOBILE_RTC_SYSFS"
+run_at $((FLOOR - 100)) apply || fail "negative-offset apply exited non-zero"
+[ "$(sets)" = "$NOW" ] || fail "negative offset: clock set to $(sets), want $NOW"
+echo "$RTC" > "$OMAMOBILE_RTC_SYSFS"
+ok "apply accepts a negative offset when rtc + offset is sane"
+
+# 16. apply with no readable RTC does nothing but log.
+reset_state
+printf '%s\n' "$OFFSET" > "$OMAMOBILE_RTC_OFFSET_STATE"
+rm -f "$OMAMOBILE_RTC_SYSFS"
+run_at $((FLOOR - 100)) apply || fail "no-rtc apply exited non-zero"
+[ "$(set_count)" = 0 ] || fail "clock set with no RTC: $(sets)"
+grep -q "no readable RTC" "$T/out" || fail "no no-RTC diagnostic: $(cat "$T/out")"
+echo "$RTC" > "$OMAMOBILE_RTC_SYSFS"
+ok "apply does nothing when no RTC is readable"
+
+# 17. save refuses to store before timesyncd has synced this boot: an
+# unsynced clock (e.g. timesyncd's recorded timestamp after a corrupt state)
+# would otherwise persist a wrong offset with no network to correct it.
+reset_state
+printf '%s\n' "$OFFSET" > "$OMAMOBILE_RTC_OFFSET_STATE"
+rm -f "$OMAMOBILE_RTC_SYNCED_FLAG"
+run_at $((NOW + 11)) save || fail "unsynced save exited non-zero: $(cat "$T/out")"
+[ "$(cat "$OMAMOBILE_RTC_OFFSET_STATE")" = "$OFFSET" ] || fail "unsynced save overwrote the state: $(cat "$OMAMOBILE_RTC_OFFSET_STATE")"
+grep -q "not synchronized" "$T/out" || fail "no unsynced diagnostic: $(cat "$T/out")"
+: > "$OMAMOBILE_RTC_SYNCED_FLAG"
+ok "save keeps the previous offset until timesyncd has synced"
+
+# 18. bad usage is refused.
+run_fail || fail "no argument exited zero"
+run_fail bogus || fail "unknown subcommand exited zero"
+ok "bad arguments are refused"
+
+echo "all omamobile-rtc-offset tests passed"

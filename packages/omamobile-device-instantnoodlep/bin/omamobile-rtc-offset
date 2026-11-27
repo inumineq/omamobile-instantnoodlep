@@ -1,0 +1,165 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Userspace RTC offset helper for instantnoodlep (OnePlus 8 Pro, SM8250).
+#
+# The PM8150 RTC (rtc-pm8xxx, "qcom,pm8941-rtc") cannot take a wall-clock
+# offset on this boot path: pm8150.dtsi gives the node no nvmem "offset"
+# cell and no "qcom,uefi-rtc-info" property, the phone boots through Android
+# ABL (no UEFI variables), and writing an SDAM cell would be a permanent
+# hardware write. The RTC therefore counts from ~1970 on every boot
+# [V: drivers/rtc/rtc-pm8xxx.c:345-356,564-583,623-628 and
+# arch/arm64/boot/dts/qcom/pm8150.dtsi:119-124 in the local kernel trees;
+# device/instantnoodlep/NOTES.md 2026-11-17 night].
+#
+# This helper never writes to the RTC. It stores offset = wall_clock -
+# rtc_time in a state file ("save") and, early at boot when the system clock
+# is clearly bogus, sets the system clock to rtc_time + saved offset
+# ("apply"). See device/instantnoodlep/RTC-OFFSET-PLAN.md.
+#
+# Subcommands:
+#   save   store wall_clock - rtc_time in the state file
+#   apply  if the system clock is below the build floor, set it to
+#          rtc_time + saved offset; never backwards, never below the floor
+#
+# Environment overrides (host tests; defaults are the on-device paths):
+#   OMAMOBILE_RTC_OFFSET_STATE    state file (default /var/lib/omamobile/rtc-offset)
+#   OMAMOBILE_RTC_SYSFS           RTC since_epoch file (default /sys/class/rtc/rtc0/since_epoch)
+#   OMAMOBILE_RTC_TIMESYNC_CLOCK  timesyncd clock file (default /var/lib/systemd/timesync/clock)
+#   OMAMOBILE_RTC_SYNCED_FLAG     timesyncd "synced this boot" flag
+#                                 (default /run/systemd/timesync/synchronized)
+#   OMAMOBILE_RTC_NOW             current wall clock in seconds (default: date -u +%s)
+#   OMAMOBILE_RTC_OFFSET_FLOOR    build floor in seconds (default: stamped by ./install)
+#   OMAMOBILE_RTC_SET_LOG         test hook: append the set target here instead
+#                                 of calling date -s (host tests must never set
+#                                 the host clock)
+set -euo pipefail
+
+STATE=${OMAMOBILE_RTC_OFFSET_STATE:-/var/lib/omamobile/rtc-offset}
+RTC_SYSFS=${OMAMOBILE_RTC_SYSFS:-/sys/class/rtc/rtc0/since_epoch}
+TIMESYNC_CLOCK=${OMAMOBILE_RTC_TIMESYNC_CLOCK:-/var/lib/systemd/timesync/clock}
+# systemd-timesyncd creates this on its first successful sync each boot.
+SYNCED_FLAG=${OMAMOBILE_RTC_SYNCED_FLAG:-/run/systemd/timesync/synchronized}
+# Build floor in UTC seconds: the package build date. ./install stamps the
+# real build date over the literal; the checked-in value is the first build
+# that shipped this helper (2026-11-24 00:00:00 UTC).
+FLOOR=${OMAMOBILE_RTC_OFFSET_FLOOR:-1795497600}
+# Sanity bound on a stored offset: 100 years. A PMIC RTC counting from 1970
+# gives an offset of ~57 years in 2026, so this only rejects garbage reads.
+MAX_OFFSET=3155760000
+
+log() { echo "omamobile-rtc-offset: $*"; }
+die() { echo "omamobile-rtc-offset: $*" >&2; exit 2; }
+is_uint() { [[ $1 =~ ^[0-9]+$ ]]; }
+
+now_epoch() {
+  if [[ -n ${OMAMOBILE_RTC_NOW:-} ]]; then
+    is_uint "$OMAMOBILE_RTC_NOW" || die "OMAMOBILE_RTC_NOW is not a whole number"
+    printf '%s\n' "$OMAMOBILE_RTC_NOW"
+  else
+    date -u +%s
+  fi
+}
+
+# Seconds since the epoch on the PMIC RTC: sysfs first, hwclock(8) as fallback.
+read_rtc() {
+  if [[ -r $RTC_SYSFS ]]; then
+    tr -d '[:space:]' < "$RTC_SYSFS"
+  elif command -v hwclock >/dev/null 2>&1; then
+    hwclock --get 2>/dev/null | date -u -f - +%s 2>/dev/null || true
+  fi
+}
+
+set_clock() {
+  if [[ -n ${OMAMOBILE_RTC_SET_LOG:-} ]]; then
+    printf '%s\n' "$1" >> "$OMAMOBILE_RTC_SET_LOG"
+    log "would set the system clock to $1"
+  else
+    date -u -s "@$1"
+    log "set the system clock to $1"
+  fi
+}
+
+cmd_save() {
+  local now rtc offset tmp
+  is_uint "$FLOOR" || die "build floor is not a whole number (unstamped package?)"
+  now=$(now_epoch)
+  if (( now < FLOOR )); then
+    log "save: system clock $now is below the build floor $FLOOR; not storing a bogus offset"
+    return 0
+  fi
+  # Only a network-synced clock is worth storing. Before the first sync the
+  # clock is either our own restored value (re-saving it gains nothing) or
+  # timesyncd's last recorded timestamp, which can be minutes stale.
+  if [[ ! -e $SYNCED_FLAG ]]; then
+    log "save: system clock not synchronized yet ($SYNCED_FLAG missing); keeping the previous offset"
+    return 0
+  fi
+  rtc=$(read_rtc)
+  if ! is_uint "$rtc"; then
+    log "save: no readable RTC time; nothing to store"
+    return 0
+  fi
+  offset=$(( now - rtc ))
+  if (( offset > MAX_OFFSET || offset < -MAX_OFFSET )); then
+    log "save: offset $offset is outside +/-$MAX_OFFSET s; not storing"
+    return 0
+  fi
+  install -d -m 700 "${STATE%/*}"
+  tmp=$(mktemp "${STATE%/*}/.rtc-offset.XXXXXX")
+  printf '%s\n' "$offset" > "$tmp"
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$STATE"
+  log "save: stored offset $offset (wall $now - rtc $rtc) in $STATE"
+}
+
+cmd_apply() {
+  local now rtc stored offset target ts
+  now=$(now_epoch)
+  if (( now >= FLOOR )); then
+    log "apply: system clock $now is already at or above the floor $FLOOR; nothing to do"
+    return 0
+  fi
+  rtc=$(read_rtc)
+  if ! is_uint "$rtc"; then
+    log "apply: no readable RTC time; leaving the clock alone"
+    return 0
+  fi
+  if [[ ! -s $STATE ]]; then
+    log "apply: no state file at $STATE; leaving the clock alone"
+    return 0
+  fi
+  stored=$(tr -d '[:space:]' < "$STATE")
+  if [[ ! $stored =~ ^-?[0-9]+$ ]]; then
+    log "apply: $STATE does not hold an integer offset; leaving the clock alone"
+    return 0
+  fi
+  offset=$stored
+  target=$(( rtc + offset ))
+  if (( target < FLOOR )); then
+    log "apply: rtc $rtc + offset $offset = $target is below the floor $FLOOR; refusing"
+    return 0
+  fi
+  # Never move the clock backwards past what systemd-timesyncd last recorded
+  # (the clock file's mtime is the last synced time).
+  ts=0
+  if [[ -e $TIMESYNC_CLOCK ]]; then
+    ts=$(stat -c %Y "$TIMESYNC_CLOCK" 2>/dev/null || stat -f %m "$TIMESYNC_CLOCK" 2>/dev/null || echo 0)
+    is_uint "$ts" || ts=0
+  fi
+  if (( target < ts )); then
+    log "apply: target $target is behind the timesyncd clock $ts; not moving backwards"
+    return 0
+  fi
+  if (( target <= now )); then
+    log "apply: target $target is not ahead of the current clock $now; nothing to do"
+    return 0
+  fi
+  set_clock "$target"
+  log "apply: target $target (rtc $rtc + offset $offset)"
+}
+
+case ${1:-} in
+  save) cmd_save ;;
+  apply) cmd_apply ;;
+  *) echo "Usage: omamobile-rtc-offset {save|apply}" >&2; exit 2 ;;
+esac
