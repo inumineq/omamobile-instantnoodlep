@@ -1,9 +1,10 @@
 <!-- SPDX-License-Identifier: MIT -->
 # RTC offset userspace service: instantnoodlep (OnePlus 8 Pro, SM8250)
 
-Status: implemented host-side and packaged (device package 0.0.10); no phone
-was accessed by this work. All on-device steps below are gated for the
-coordinator/owner per AGENTS.md rule 1.
+Status: packaged (device package 0.0.10). On-device run 2026-11-27 on the
+daily typec kernel, helper and units installed by hand: T1, T2, T3, T5 and
+T6 passed; T4 (RAM boot) is still open. T5 found that a boot-time save before
+the first NTP sync stored a stale offset; save now waits for timesyncd.
 
 ## 1. Problem
 
