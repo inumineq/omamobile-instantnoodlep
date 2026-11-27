@@ -22,7 +22,9 @@ export OMAMOBILE_RTC_TIMESYNC_CLOCK="$T/timesync/clock"
 export OMAMOBILE_RTC_OFFSET_FLOOR=$FLOOR
 export OMAMOBILE_RTC_NOW=$NOW
 export OMAMOBILE_RTC_SET_LOG="$T/sets"
+export OMAMOBILE_RTC_SYNCED_FLAG="$T/timesync/synchronized"
 mkdir -p "$T/rtc" "$T/state" "$T/bin" "$T/timesync"
+: > "$OMAMOBILE_RTC_SYNCED_FLAG"   # NTP-synced unless a test says otherwise
 
 # Fake hwclock: fails unless $T/hwclock-answer exists, then prints it.
 cat > "$T/bin/hwclock" <<'FAKE'
@@ -194,7 +196,19 @@ grep -q "no readable RTC" "$T/out" || fail "no no-RTC diagnostic: $(cat "$T/out"
 echo "$RTC" > "$OMAMOBILE_RTC_SYSFS"
 ok "apply does nothing when no RTC is readable"
 
-# 17. bad usage is refused.
+# 17. save refuses to store before timesyncd has synced this boot: an
+# unsynced clock (e.g. timesyncd's recorded timestamp after a corrupt state)
+# would otherwise persist a wrong offset with no network to correct it.
+reset_state
+printf '%s\n' "$OFFSET" > "$OMAMOBILE_RTC_OFFSET_STATE"
+rm -f "$OMAMOBILE_RTC_SYNCED_FLAG"
+run_at $((NOW + 11)) save || fail "unsynced save exited non-zero: $(cat "$T/out")"
+[ "$(cat "$OMAMOBILE_RTC_OFFSET_STATE")" = "$OFFSET" ] || fail "unsynced save overwrote the state: $(cat "$OMAMOBILE_RTC_OFFSET_STATE")"
+grep -q "not synchronized" "$T/out" || fail "no unsynced diagnostic: $(cat "$T/out")"
+: > "$OMAMOBILE_RTC_SYNCED_FLAG"
+ok "save keeps the previous offset until timesyncd has synced"
+
+# 18. bad usage is refused.
 run_fail || fail "no argument exited zero"
 run_fail bogus || fail "unknown subcommand exited zero"
 ok "bad arguments are refused"

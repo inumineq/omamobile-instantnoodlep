@@ -25,6 +25,8 @@
 #   OMAMOBILE_RTC_OFFSET_STATE    state file (default /var/lib/omamobile/rtc-offset)
 #   OMAMOBILE_RTC_SYSFS           RTC since_epoch file (default /sys/class/rtc/rtc0/since_epoch)
 #   OMAMOBILE_RTC_TIMESYNC_CLOCK  timesyncd clock file (default /var/lib/systemd/timesync/clock)
+#   OMAMOBILE_RTC_SYNCED_FLAG     timesyncd "synced this boot" flag
+#                                 (default /run/systemd/timesync/synchronized)
 #   OMAMOBILE_RTC_NOW             current wall clock in seconds (default: date -u +%s)
 #   OMAMOBILE_RTC_OFFSET_FLOOR    build floor in seconds (default: stamped by ./install)
 #   OMAMOBILE_RTC_SET_LOG         test hook: append the set target here instead
@@ -35,6 +37,8 @@ set -euo pipefail
 STATE=${OMAMOBILE_RTC_OFFSET_STATE:-/var/lib/omamobile/rtc-offset}
 RTC_SYSFS=${OMAMOBILE_RTC_SYSFS:-/sys/class/rtc/rtc0/since_epoch}
 TIMESYNC_CLOCK=${OMAMOBILE_RTC_TIMESYNC_CLOCK:-/var/lib/systemd/timesync/clock}
+# systemd-timesyncd creates this on its first successful sync each boot.
+SYNCED_FLAG=${OMAMOBILE_RTC_SYNCED_FLAG:-/run/systemd/timesync/synchronized}
 # Build floor in UTC seconds: the package build date. ./install stamps the
 # real build date over the literal; the checked-in value is the first build
 # that shipped this helper (2026-11-24 00:00:00 UTC).
@@ -81,6 +85,13 @@ cmd_save() {
   now=$(now_epoch)
   if (( now < FLOOR )); then
     log "save: system clock $now is below the build floor $FLOOR; not storing a bogus offset"
+    return 0
+  fi
+  # Only a network-synced clock is worth storing. Before the first sync the
+  # clock is either our own restored value (re-saving it gains nothing) or
+  # timesyncd's last recorded timestamp, which can be minutes stale.
+  if [[ ! -e $SYNCED_FLAG ]]; then
+    log "save: system clock not synchronized yet ($SYNCED_FLAG missing); keeping the previous offset"
     return 0
   fi
   rtc=$(read_rtc)
