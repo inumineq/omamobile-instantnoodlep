@@ -1,0 +1,84 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Run one step of the first s2idle ladder on the phone and log it.
+#
+# usage: instantnoodlep-s2idle-step <step-name> <pm_test level|none> <rtc seconds|0>
+#
+# Start it detached (USB SSH drops at the devices level and deeper):
+#   systemd-run --unit=s2idle-R1 --collect /var/lib/s2idle/step R1 freezer 0
+# Runbook: docs/runbooks/S2IDLE-FIRST-RUNBOOK.md
+#
+# Environment: S2IDLE_KEEP_CHARGING=1 does not switch charging off for the step.
+set -u
+
+[ $# -eq 3 ] || { echo "usage: $0 <step> <pm_test level|none> <rtc seconds|0>" >&2; exit 2; }
+step=$1
+level=$2
+rtc=$3
+case $level in none|freezer|devices|platform) ;; *)
+  # processors and core perform a real sleep under s2idle, so they are not test levels here.
+  echo "refusing pm_test level '$level'" >&2; exit 2 ;;
+esac
+case $rtc in ''|*[!0-9]*) echo "rtc seconds must be a number" >&2; exit 2 ;; esac
+if [ "$level" = none ] && [ "$rtc" -eq 0 ]; then
+  echo "refusing a real suspend without an RTC dead-man" >&2; exit 2
+fi
+# A forced reboot is the recovery path, and it must land on slot B.
+grep -q 'androidboot.slot_suffix=_b' /proc/cmdline || { echo "not on slot B, refusing" >&2; exit 2; }
+
+dir=/var/lib/s2idle
+mkdir -p "$dir" && chmod 700 "$dir"
+exec >>"$dir/$step.log" 2>&1
+
+snap() {
+  grep -H . /sys/power/suspend_stats/* /sys/power/pm_wakeup_irq 2>/dev/null
+  for f in /sys/kernel/debug/qcom_stats/*; do
+    [ -f "$f" ] && { echo "== ${f##*/}"; cat "$f"; }
+  done
+  for f in /sys/kernel/debug/pm_genpd/*cluster*/idle_states; do
+    [ -f "$f" ] && { echo "== $f"; cat "$f"; }
+  done
+  grep -H . /sys/class/power_supply/*/charge_now /sys/class/power_supply/*/voltage_now \
+    /sys/class/power_supply/*/capacity 2>/dev/null
+}
+
+charging_off=
+restore() {
+  echo none > /sys/power/pm_test
+  for f in $charging_off; do echo 1 > "$f"; done
+  echo Y > /sys/module/printk/parameters/console_suspend
+  sync
+}
+trap restore EXIT
+
+echo "== $step level=$level rtc=$rtc $(date -Is) uptime=$(cut -d' ' -f1 /proc/uptime)"
+snap
+echo 1 > /sys/power/pm_debug_messages
+echo 1 > /sys/power/pm_print_times
+echo N > /sys/module/printk/parameters/console_suspend
+
+# The charger driver refuses suspend with -EBUSY while it charges.
+# S2IDLE_KEEP_CHARGING=1 leaves charging alone, for steps that test that refusal.
+for f in /sys/class/power_supply/*/charging_enabled; do
+  [ "${S2IDLE_KEEP_CHARGING:-0}" = 1 ] && break
+  [ -w "$f" ] || continue
+  [ "$(cat "$f")" = 1 ] || continue
+  echo 0 > "$f" && charging_off="$charging_off $f"
+done
+[ -n "$charging_off" ] && sleep 6
+
+echo "$level" > /sys/power/pm_test
+if [ "$rtc" -gt 0 ]; then
+  rtcwake -d rtc0 -m no -s "$rtc" || { echo "rtcwake failed, not suspending"; exit 1; }
+fi
+sync
+sleep 1
+rc=0
+if ! echo freeze > /sys/power/state; then rc=1; fi
+echo "state write rc=$rc"
+
+echo "== after $(date -Is) uptime=$(cut -d' ' -f1 /proc/uptime)"
+snap
+irq=$(cat /sys/power/pm_wakeup_irq 2>/dev/null)
+[ -n "$irq" ] && grep "^ *$irq:" /proc/interrupts
+dmesg | grep -E 'PM: |suspend debug|Timekeeping suspended|failed|error|ath11k|qcom-pcie|dwc3|ufshcd|s6sy761|pm8150b' | tail -80
