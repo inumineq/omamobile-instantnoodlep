@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # RTC offset userspace service: instantnoodlep (OnePlus 8 Pro, SM8250)
 
-Status: implemented host-side and packaged (device package 0.0.9); no phone
+Status: implemented host-side and packaged (device package 0.0.10); no phone
 was accessed by this work. All on-device steps below are gated for the
 coordinator/owner per AGENTS.md rule 1.
 
@@ -31,7 +31,7 @@ coordinator/owner per AGENTS.md rule 1.
 
 ## 2. Design
 
-Packaged in `packages/omamobile-device-instantnoodlep` (0.0.9):
+Packaged in `packages/omamobile-device-instantnoodlep` (0.0.10):
 
 | File | Role |
 | --- | --- |
@@ -85,7 +85,7 @@ package (or `makepkg -Csf` on the phone); all reboots are owner-gated.
 
 | Gate | Action | Expect | Stop | Rollback |
 | --- | --- | --- | --- | --- |
-| T1 | Build/install 0.0.9 on the phone (`pacman -U`), `systemctl daemon-reload`, check `systemctl list-unit-files 'omamobile-rtc-offset*'` and `systemctl show -p WantedBy --value` for apply, shutdown, timer and path | all five units listed (vendor `.wants` symlinks under `/usr/lib` show as `disabled` there; that is expected), WantedBy is sysinit/multi-user/timers/paths.target respectively | any unit missing or failed after `daemon-reload` | `pacman -R omamobile-device-instantnoodlep` (or reinstall 0.0.8) |
+| T1 | Build/install 0.0.10 on the phone (`pacman -U`), `systemctl daemon-reload`, check `systemctl list-unit-files 'omamobile-rtc-offset*'` and `systemctl show -p WantedBy --value` for apply, shutdown, timer and path | all five units listed (vendor `.wants` symlinks under `/usr/lib` show as `disabled` there; that is expected), WantedBy is sysinit/multi-user/timers/paths.target respectively | any unit missing or failed after `daemon-reload` | `pacman -R omamobile-device-instantnoodlep` (or reinstall 0.0.9) |
 | T2 | Before any reboot, with NTP synced: `systemctl start omamobile-rtc-offset-save.service`; then `cat /var/lib/omamobile/rtc-offset` | state file holds `date +%s` minus `cat /sys/class/rtc/rtc0/since_epoch`, mode 600 | value is not an integer or is absurd | delete `/var/lib/omamobile/rtc-offset` |
 | T3 | Clean reboot (`reboot`), then **before NTP**: `timedatectl`, `journalctl -b -u 'omamobile-rtc-offset*'`, `date -u` | apply logged "set the system clock to …"; `timedatectl` shows the restored time (not 1970), NTP sync "yes" only later | clock still 1970 after multi-user, apply unit failed, or clock moved backwards vs the timesyncd clock file | `systemctl disable --now omamobile-rtc-offset-apply.service omamobile-rtc-offset-shutdown.service omamobile-rtc-offset-save.timer omamobile-rtc-offset-save.path; rm -f /var/lib/omamobile/rtc-offset` |
 | T4 | RAM-boot case: `fastboot boot boot-slim-*.img` (RAM only, no flash write), same checks as T3 before NTP | same as T3 | same as T3 | same as T3 (RAM boot changed nothing on flash) |

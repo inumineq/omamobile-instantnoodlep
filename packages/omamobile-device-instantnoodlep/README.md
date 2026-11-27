@@ -16,7 +16,7 @@ locally administered address in `/var/lib/omamobile/bt-public-addr`, or
 accepts an owner's address written there by hand. That state must remain on
 the phone and must not be copied into source control or another device.
 
-Version 0.0.9 adds the userspace RTC offset service
+Version 0.0.10 adds the userspace RTC offset service
 (`omamobile-rtc-offset` plus its systemd units): the PM8150 RTC cannot take
 a wall-clock offset on this boot path, so the helper stores
 `wall_clock - rtc_time` in `/var/lib/omamobile/rtc-offset` on clean
