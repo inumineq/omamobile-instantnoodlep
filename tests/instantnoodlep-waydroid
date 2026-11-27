@@ -1,0 +1,218 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Host (x86) test for the Waydroid plan and its kernel fragment.
+
+Static checks always run:
+  - device/instantnoodlep/kernel-slim-waydroid.config exists, carries the
+    MIT SPDX header and the binder/binderfs/memfd/PSI lines;
+  - kernel-slim.config still has no ANDROID/BINDER/ASHMEM lines (the
+    fragment must not be folded into the daily-kernel-line file);
+  - WAYDROID-PLAN.md exists and pins the fragment, the ABL ceiling, the
+    image name+sha256 and the #767 mitigation; docs/STATUS.md indexes the
+    plan exactly once.
+
+Offline compile-check (runs when a kernel tree is found; set
+WAYDROID_KERNEL_TREE to require one):
+  - arm64 defconfig, merge_config.sh -m with kernel.config +
+    kernel-slim.config + kernel-slim-waydroid.config, olddefconfig;
+  - every line of the fragment must resolve in the merged .config as
+    written;
+  - with clang present, `make ARCH=arm64 LLVM=1 drivers/android/` must
+    compile the built-in binder code (rc=0, binder.o produced).
+
+No phone, no network, no writes outside a temp dir.
+"""
+
+import glob
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+ROOT = Path(__file__).resolve().parents[1]
+DEV = ROOT / "device" / "instantnoodlep"
+FRAGMENT = DEV / "kernel-slim-waydroid.config"
+SLIM = DEV / "kernel-slim.config"
+BASE = DEV / "kernel.config"
+PLAN = DEV / "WAYDROID-PLAN.md"
+STATUS = ROOT / "docs" / "STATUS.md"
+
+REQUIRED_FRAGMENT_LINES = [
+    'CONFIG_LOCALVERSION="-instantnoodlep-k3-slim-waydroid"',
+    "CONFIG_ANDROID_BINDER_IPC=y",
+    "CONFIG_ANDROID_BINDERFS=y",
+    '# CONFIG_ANDROID_BINDER_IPC_RUST is not set',
+    'CONFIG_ANDROID_BINDER_DEVICES="binder,hwbinder,vndbinder"',
+    "CONFIG_MEMFD_CREATE=y",
+    "CONFIG_PSI=y",
+    "CONFIG_SYNC_FILE=y",
+    "CONFIG_IKCONFIG=y",
+    "CONFIG_IKCONFIG_PROC=y",
+    "CONFIG_NETFILTER_XTABLES_LEGACY=y",
+    "CONFIG_IP_NF_IPTABLES_LEGACY=m",
+    "CONFIG_NET_SCHED=y",
+    "CONFIG_NET_CLS_ACT=y",
+    "CONFIG_NET_CLS_BPF=m",
+    "CONFIG_NET_ACT_BPF=m",
+    "CONFIG_BRIDGE=m",
+    "CONFIG_VETH=m",
+    "CONFIG_TUN=m",
+    "CONFIG_OVERLAY_FS=m",
+    "CONFIG_FUSE_FS=m",
+]
+
+PINNED_SYSTEM_IMAGE = "lineage-20.0-20260927-VANILLA-waydroid_arm64-system.zip"
+PINNED_SYSTEM_SHA256 = "5fb8179ed4455f45919c5a2bfbfdd1591619295994ad321217f03bb1dcfc53a7"
+
+
+def fail(message):
+    print(f"not ok - {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def ok(message):
+    print(f"ok - {message}")
+
+
+def read_config(path):
+    cfg = {}
+    for line in path.read_text().splitlines():
+        m = re.match(r"^(CONFIG_\w+)=(.*)$", line)
+        if m:
+            cfg[m.group(1)] = m.group(2)
+        m = re.match(r"^# (CONFIG_\w+) is not set$", line)
+        if m:
+            cfg[m.group(1)] = "n"
+    return cfg
+
+
+def test_static():
+    if not FRAGMENT.is_file():
+        fail(f"missing fragment {FRAGMENT}")
+    text = FRAGMENT.read_text()
+    lines = text.splitlines()
+    if lines[0] != "# SPDX-License-Identifier: MIT":
+        fail("fragment lacks the MIT SPDX header on line 1")
+    for wanted in REQUIRED_FRAGMENT_LINES:
+        if wanted not in lines:
+            fail(f"fragment lacks {wanted!r}")
+    if re.search(r"^CONFIG_ASHMEM=", text, re.M):
+        fail("fragment sets CONFIG_ASHMEM, which does not exist in mainline 7.3-rc6")
+    ok(f"fragment header + {len(REQUIRED_FRAGMENT_LINES)} required lines present")
+
+    slim = SLIM.read_text()
+    if re.search(r"^(CONFIG_(ANDROID|BINDER|ASHMEM)\w*|# CONFIG_(ANDROID|BINDER|ASHMEM)\w*)",
+                 slim, re.M):
+        fail("kernel-slim.config gained ANDROID/BINDER/ASHMEM lines; "
+             "the waydroid delta must stay in its own fragment")
+    ok("kernel-slim.config untouched by the waydroid delta (no ANDROID/BINDER/ASHMEM lines)")
+
+    if not PLAN.is_file():
+        fail(f"missing plan {PLAN}")
+    plan = PLAN.read_text()
+    if plan.splitlines()[0] != "<!-- SPDX-License-Identifier: MIT -->":
+        fail("plan lacks the MIT SPDX header on line 1")
+    for wanted in ("kernel-slim-waydroid.config", "0x2b60000", PINNED_SYSTEM_IMAGE,
+                   PINNED_SYSTEM_SHA256, "MULTI_WINDOWS", "tests/instantnoodlep-waydroid"):
+        if wanted not in plan:
+            fail(f"plan does not mention {wanted!r}")
+    ok("plan pins fragment, ceiling, image name+sha256, #767 mitigation, test")
+
+    status_lines = [l for l in STATUS.read_text().splitlines() if "WAYDROID-PLAN" in l]
+    if len(status_lines) != 1:
+        fail(f"docs/STATUS.md should index WAYDROID-PLAN exactly once, found {len(status_lines)}")
+    ok("docs/STATUS.md indexes WAYDROID-PLAN once")
+
+
+def find_kernel_tree():
+    env = os.environ.get("WAYDROID_KERNEL_TREE")
+    candidates = []
+    if env:
+        candidates.append(Path(env))
+    else:
+        candidates.append(Path("/tmp/linux-omarchy-mobile"))
+        candidates.extend(sorted(glob.glob(os.path.expanduser("~/src/l-k3*"))))
+    for cand in candidates:
+        if (cand / "Makefile").is_file() and (cand / "scripts/kconfig/merge_config.sh").is_file():
+            return cand
+    if env:
+        fail(f"WAYDROID_KERNEL_TREE={env} has no Makefile/scripts/kconfig/merge_config.sh")
+    return None
+
+
+def run(cmd, cwd=None, env=None):
+    result = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True)
+    if result.returncode != 0:
+        tail = (result.stdout + result.stderr).strip().splitlines()[-15:]
+        fail(f"command failed rc={result.returncode}: {' '.join(map(str, cmd))}\n" + "\n".join(tail))
+    return result
+
+
+def test_kconfig(tree):
+    work = Path(tempfile.mkdtemp(prefix="waydroid-kcheck-"))
+    try:
+        out = work / "o"
+        out.mkdir()
+        run(["make", "-C", str(tree), f"O={out}", "ARCH=arm64", "defconfig"])
+        env = dict(os.environ, KCONFIG_CONFIG=str(out / ".config"))
+        run([str(tree / "scripts/kconfig/merge_config.sh"), "-m", "-Q",
+             str(out / ".config"), str(BASE), str(SLIM), str(FRAGMENT)],
+            cwd=out, env=env)
+        run(["make", "-C", str(tree), f"O={out}", "ARCH=arm64", "olddefconfig"])
+        cfg = read_config(out / ".config")
+
+        fragment_lines = [l.strip() for l in FRAGMENT.read_text().splitlines()
+                          if l.strip() and not l.strip().startswith("#")]
+        unresolved = []
+        for line in fragment_lines:
+            m = re.match(r"^(CONFIG_\w+)=(.*)$", line)
+            if m:
+                sym, want = m.group(1), m.group(2)
+                if cfg.get(sym) != want:
+                    unresolved.append(f"{line} -> {cfg.get(sym, 'MISSING')}")
+            else:
+                m = re.match(r"^# (CONFIG_\w+) is not set$", line)
+                if m and cfg.get(m.group(1), "n") != "n":
+                    unresolved.append(f"{line} -> {cfg.get(m.group(1))}")
+        if unresolved:
+            fail("fragment lines not resolved after merge+olddefconfig:\n  "
+                 + "\n  ".join(unresolved))
+        ok(f"all {len(fragment_lines)} fragment lines resolve as written "
+           f"(defconfig + kernel.config + kernel-slim.config + fragment, olddefconfig)")
+
+        binder = {s: cfg.get(s, "<absent>") for s in
+                  ("CONFIG_ANDROID_BINDER_IPC", "CONFIG_ANDROID_BINDERFS",
+                   "CONFIG_ANDROID_BINDER_DEVICES", "CONFIG_MEMFD_CREATE", "CONFIG_PSI")}
+        print("    resolved: " + ", ".join(f"{k}={v}" for k, v in binder.items()))
+        if binder["CONFIG_ANDROID_BINDER_IPC"] != "y" or binder["CONFIG_ANDROID_BINDERFS"] != "y":
+            fail("binder/binderfs did not resolve to =y")
+
+        if shutil.which("clang"):
+            run(["make", "-C", str(tree), f"O={out}", "ARCH=arm64", "LLVM=1",
+                 f"-j{os.cpu_count() or 2}", "drivers/android/"])
+            if not (out / "drivers/android/binder.o").is_file():
+                fail("drivers/android/ built without binder.o")
+            ok("clang builds drivers/android/ (binder.o, binderfs.o) rc=0 with the merged config")
+        else:
+            print("    clang not found; compile step skipped (kconfig resolution still checked)")
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def main():
+    test_static()
+    tree = find_kernel_tree()
+    if tree is None:
+        print("no kernel tree found (set WAYDROID_KERNEL_TREE); kconfig compile-check skipped")
+        print("PASS (static checks only)")
+        return
+    print(f"kernel tree: {tree}")
+    test_kconfig(tree)
+    print("PASS")
+
+
+if __name__ == "__main__":
+    main()

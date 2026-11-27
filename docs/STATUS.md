@@ -65,6 +65,7 @@ and is waiting for the next daily kernel.
 | Settings | partial | Upstream's Display and About pages plus our Security page (lock-screen PIN, password) | [patches/omamobile-settings](../patches/omamobile-settings/) |
 | Signed package repo | built | Tooling done; owner key not created yet | [LOCAL-REPO-PLAN](../device/instantnoodlep/LOCAL-REPO-PLAN.md) |
 | Full-disk encryption | WIP | Plan and touch unlock design | [ENCRYPTION-PLAN](../device/instantnoodlep/ENCRYPTION-PLAN.md) |
+| Android apps (Waydroid) | no | Plan + binder fragment written, compile-checked offline; no phone gate has run | [WAYDROID-PLAN](../device/instantnoodlep/WAYDROID-PLAN.md) |
 
 ## Next
 
