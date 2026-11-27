@@ -1,6 +1,8 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Upstream UI proposals, not posted upstream
 
+[V] **Upstream ledger**: [LEDGER.md](LEDGER.md) tracks every carried patch and its home/status per #867 Phase 4.
+
 [V] Research source: read-only clone of
 <https://github.com/derekross/omarchy-mobile> at
 `c4623572be1c141d602cf99a83ae0bf9e3eea09c`; its AGENTS.md and CONTRIBUTING.md

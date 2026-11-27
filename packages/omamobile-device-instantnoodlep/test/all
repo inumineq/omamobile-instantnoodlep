@@ -92,6 +92,14 @@ if grep -R -n -E 'GDK_SCALE|QT_SCALE_FACTOR' "$stage/usr/lib/environment.d" "$st
   exit 1
 fi
 test -f "$stage/usr/lib/udev/rules.d/80-omamobile-bt-public-addr.rules"
+# Omarchy's omarchy-wifi-powersave.conf turns power save off. Ours must sort
+# after it in the same directory and turn it on for Wi-Fi devices only.
+nm_conf=$stage/etc/NetworkManager/conf.d/zz-omamobile-instantnoodlep-wifi-powersave.conf
+test -f "$nm_conf"
+[[ $(basename "$nm_conf") > omarchy-wifi-powersave.conf ]]
+grep -qx 'wifi.powersave=3' "$nm_conf"
+grep -qx 'match-device=type:wifi' "$nm_conf"
+test "$(grep -c '^\[connection' "$nm_conf")" = 1
 test -L "$stage/etc/systemd/system/systemd-firstboot.service"
 test "$(readlink "$stage/etc/systemd/system/systemd-firstboot.service")" = /dev/null
 test -L "$stage/etc/systemd/system/systemd-vconsole-setup.service"

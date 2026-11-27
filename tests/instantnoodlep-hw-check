@@ -1,0 +1,312 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Host (x86) test for tools/instantnoodlep-hw-check. Builds a fake
+# sysfs/proc/dev fixture tree, drives the tool with --local against it and
+# asserts the inventory tables, privacy redaction, the --baseline diff, the
+# --strict exit code and read-only behaviour. check() runs all assertions.
+# No phone, no network. TOOL=<path> selects the tool under test.
+set -euo pipefail
+
+ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+TOOL=${TOOL:-$ROOT/tools/instantnoodlep-hw-check}
+T=$(mktemp -d)
+trap 'rm -rf "$T"' EXIT
+fail() { echo "not ok - $*" >&2; exit 1; }
+ok() { echo "ok - $*"; }
+
+# Planted private tokens, assembled from quoted fragments so no literal
+# MAC/serial/IMEI sits in git (same trick as tests/instantnoodlep-power-baseline).
+MAC='aa:bb:cc:dd:ee:'"ff"
+SER='serialno=XY'"Z123"
+IMEI='35201098'"7654321" # 15 digits
+
+# mkfixture <dir>: one fake phone. Values marked "probe" exist only to prove
+# the redaction filter; the tool must never let them reach a report.
+mkfixture() {
+  local fx=$1
+  mkdir -p \
+    "$fx/sys/class/input/event0/device/id" \
+    "$fx/sys/class/input/event1/device/id" \
+    "$fx/sys/class/input/event1/capabilities" \
+    "$fx/sys/class/leds/led:flash_0" \
+    "$fx/sys/class/leds/led:green" \
+    "$fx/sys/class/nfc/nfc0" \
+    "$fx/sys/class/iio/iio:device0" \
+    "$fx/sys/class/remoteproc/remoteproc0" \
+    "$fx/sys/class/remoteproc/remoteproc1" \
+    "$fx/dev" \
+    "$fx/sys/class/backlight/panel0" \
+    "$fx/sys/class/drm/card0" \
+    "$fx/sys/class/drm/card0-eDP-1" \
+    "$fx/sys/class/drm/card0-HDMI-A-1" \
+    "$fx/sys/class/drm/renderD128" \
+    "$fx/proc/asound" \
+    "$fx/sys/class/sound/card0" \
+    "$fx/sys/class/power_supply/battery" \
+    "$fx/sys/class/power_supply/usb" \
+    "$fx/sys/class/typec/port0/partner" \
+    "$fx/sys/class/usb_role/usb0-role" \
+    "$fx/sys/class/thermal/thermal_zone0" \
+    "$fx/sys/class/thermal/thermal_zone1" \
+    "$fx/sys/class/thermal/cooling_device0" \
+    "$fx/proc/device-tree"
+  # evdev: event0 plain gpio-keys (no ff file -> "0"), event1 touch with ff
+  # caps and a planted MAC in phys/uniq (probe).
+  printf 'gpio-keys\n' >"$fx/sys/class/input/event0/device/name"
+  printf 'gpio-keys\n' >"$fx/sys/class/input/event0/device/phys"
+  printf '0019\n' >"$fx/sys/class/input/event0/device/id/bustype"
+  printf '0001\n' >"$fx/sys/class/input/event0/device/id/vendor"
+  printf '0001\n' >"$fx/sys/class/input/event0/device/id/product"
+  printf '0100\n' >"$fx/sys/class/input/event0/device/id/version"
+  printf 'FTS\n' >"$fx/sys/class/input/event1/device/name"
+  printf 'i2c-%s\n' "$MAC" >"$fx/sys/class/input/event1/device/phys"
+  printf '%s\n' "$MAC" >"$fx/sys/class/input/event1/device/uniq"
+  printf '0018\n' >"$fx/sys/class/input/event1/device/id/bustype"
+  printf '04f3\n' >"$fx/sys/class/input/event1/device/id/vendor"
+  printf '2b1e\n' >"$fx/sys/class/input/event1/device/id/product"
+  printf '0100\n' >"$fx/sys/class/input/event1/device/id/version"
+  # ff caps, sysfs format (input_print_bitmap: hex words MSW-first, space
+  # separated): bits 0x50 (RUMBLE) and 0x60 (GAIN) -> "100010000 0"
+  printf '100010000 0\n' >"$fx/sys/class/input/event1/capabilities/ff"
+  # leds incl. flash
+  printf '0\n' >"$fx/sys/class/leds/led:flash_0/brightness"
+  printf '255\n' >"$fx/sys/class/leds/led:flash_0/max_brightness"
+  printf 'torch\n' >"$fx/sys/class/leds/led:flash_0/trigger"
+  printf '100\n' >"$fx/sys/class/leds/led:flash_0/flash_brightness"
+  printf '200\n' >"$fx/sys/class/leds/led:flash_0/flash_timeout"
+  printf '0\n' >"$fx/sys/class/leds/led:flash_0/flash_fault"
+  printf '128\n' >"$fx/sys/class/leds/led:green/brightness"
+  printf '255\n' >"$fx/sys/class/leds/led:green/max_brightness"
+  printf 'none\n' >"$fx/sys/class/leds/led:green/trigger"
+  # nfc
+  ln -s ../../devices/platform/soc/89c000.i2c/i2c-1/1-0048 "$fx/sys/class/nfc/nfc0/device"
+  # iio
+  printf 'slpi-sensors\n' >"$fx/sys/class/iio/iio:device0/name"
+  printf 'SLPI\n' >"$fx/sys/class/iio/iio:device0/label"
+  # remoteproc + fastrpc
+  printf 'slpi\n' >"$fx/sys/class/remoteproc/remoteproc0/name"
+  printf 'running\n' >"$fx/sys/class/remoteproc/remoteproc0/state"
+  printf 'qcom/sm8250/slpi.mdt\n' >"$fx/sys/class/remoteproc/remoteproc0/firmware"
+  printf 'adsp\n' >"$fx/sys/class/remoteproc/remoteproc1/name"
+  printf 'offline\n' >"$fx/sys/class/remoteproc/remoteproc1/state"
+  printf 'qcom/sm8250/adsp.mdt\n' >"$fx/sys/class/remoteproc/remoteproc1/firmware"
+  : >"$fx/dev/fastrpc-sdsp"
+  : >"$fx/dev/fastrpc-cdsp"
+  # backlight
+  printf '4096\n' >"$fx/sys/class/backlight/panel0/brightness"
+  printf '8192\n' >"$fx/sys/class/backlight/panel0/max_brightness"
+  printf '4096\n' >"$fx/sys/class/backlight/panel0/actual_brightness"
+  printf 'raw\n' >"$fx/sys/class/backlight/panel0/type"
+  printf '0\n' >"$fx/sys/class/backlight/panel0/bl_power"
+  # drm: card0/renderD128 must not appear; two connectors
+  printf '13:64\n' >"$fx/sys/class/drm/card0/dev"
+  printf '128:0\n' >"$fx/sys/class/drm/renderD128/dev"
+  printf 'connected\n' >"$fx/sys/class/drm/card0-eDP-1/status"
+  printf 'enabled\n' >"$fx/sys/class/drm/card0-eDP-1/enabled"
+  printf '2400x1600\n1920x1080\n' >"$fx/sys/class/drm/card0-eDP-1/modes"
+  printf 'disconnected\n' >"$fx/sys/class/drm/card0-HDMI-A-1/status"
+  printf 'disabled\n' >"$fx/sys/class/drm/card0-HDMI-A-1/enabled"
+  # sound: cards/pcm/devices lines (one carries the serial/IMEI probes) + card id
+  printf ' 0 [sm8250         ]: card0 - SM8250 sound card\n' >"$fx/proc/asound/cards"
+  printf ' 1 [hdmi           ]: HDMI - probe %s %s\n' "$SER" "$IMEI" >>"$fx/proc/asound/cards"
+  printf '00-00: Speaker Playback (*) : : : 48000\n' >"$fx/proc/asound/pcm"
+  printf ' 0: [ 0] DAI : sm8250-snd-card\n' >"$fx/proc/asound/devices"
+  printf 'sm8250\n' >"$fx/sys/class/sound/card0/id"
+  # power_supply: serial_number exists but must never be read (rule 4)
+  printf 'Battery\n' >"$fx/sys/class/power_supply/battery/type"
+  printf 'Discharging\n' >"$fx/sys/class/power_supply/battery/status"
+  printf 'Good\n' >"$fx/sys/class/power_supply/battery/health"
+  printf '1\n' >"$fx/sys/class/power_supply/battery/present"
+  printf '0\n' >"$fx/sys/class/power_supply/battery/online"
+  printf '87\n' >"$fx/sys/class/power_supply/battery/capacity"
+  printf '4123456\n' >"$fx/sys/class/power_supply/battery/voltage_now"
+  printf '%s\n' "$IMEI" >"$fx/sys/class/power_supply/battery/serial_number"
+  printf '120\n' >"$fx/sys/class/power_supply/battery/cycle_count"
+  printf 'Li-ion\n' >"$fx/sys/class/power_supply/battery/technology"
+  printf 'bq27411\n' >"$fx/sys/class/power_supply/battery/model_name"
+  printf 'USB\n' >"$fx/sys/class/power_supply/usb/type"
+  printf '1\n' >"$fx/sys/class/power_supply/usb/online"
+  # typec port (partner/ is a directory and must be skipped)
+  printf 'DFP\n' >"$fx/sys/class/typec/port0/data_role"
+  printf 'source\n' >"$fx/sys/class/typec/port0/power_role"
+  printf '0300\n' >"$fx/sys/class/typec/port0/usb_power_delivery_revision"
+  # usb role
+  printf 'device\n' >"$fx/sys/class/usb_role/usb0-role/role"
+  # thermal zones + a cooling device that must not leak into the section
+  printf 'soc\n' >"$fx/sys/class/thermal/thermal_zone0/type"
+  printf '42000\n' >"$fx/sys/class/thermal/thermal_zone0/temp"
+  printf 'step_wise\n' >"$fx/sys/class/thermal/thermal_zone0/policy"
+  printf 'passive\n' >"$fx/sys/class/thermal/thermal_zone0/trip_point_0_type"
+  printf '80000\n' >"$fx/sys/class/thermal/thermal_zone0/trip_point_0_temp"
+  printf 'critical\n' >"$fx/sys/class/thermal/thermal_zone0/trip_point_1_type"
+  printf '115000\n' >"$fx/sys/class/thermal/thermal_zone0/trip_point_1_temp"
+  printf 'msm-therm\n' >"$fx/sys/class/thermal/thermal_zone1/type"
+  printf '41000\n' >"$fx/sys/class/thermal/thermal_zone1/temp"
+  printf 'step_wise\n' >"$fx/sys/class/thermal/thermal_zone1/policy"
+  printf 'cpufreq\n' >"$fx/sys/class/thermal/cooling_device0/type"
+  # device-tree meta
+  printf 'OnePlus 8 Pro\0' >"$fx/proc/device-tree/model"
+  printf 'oneplus,instantnoodlep\0qcom,sm8250\0' >"$fx/proc/device-tree/compatible"
+}
+
+# run_tool <fixture> [args...]: run the tool in local/fixture mode.
+run_tool() {
+  local fx=$1
+  shift
+  HW_CHECK_LOCAL=1 \
+  HW_CHECK_SYSFS="$fx/sys" HW_CHECK_PROC="$fx/proc" HW_CHECK_DEV="$fx/dev" \
+  HW_CHECK_KERNEL='6.12.0-fixture' \
+    bash "$TOOL" "$@"
+}
+
+check() {
+  local fx=$T/fx1 fx2=$T/fx2 rc diffout rep work
+  local before_list before_sha after_list after_sha files secret c
+  mkfixture "$fx"
+  cp -a "$fx" "$fx2"
+
+  # --- 1. full inventory run against the fixture ---------------------------
+  run_tool "$fx" --out "$T/base.md" >"$T/run1.out" 2>"$T/run1.err"
+  rep=$T/base.md
+  for c in evdev leds nfc iio remoteproc fastrpc backlight drm sound power_supply typec usb_role thermal; do
+    grep -q "^## $c\$" "$rep" || fail "section ## $c missing from report"
+  done
+  grep -qF '| event1 | FTS | i2c-<redacted-mac> | <redacted-mac> | 0018:04f3:2b1e:0100 | 100010000 0 | RUMBLE,GAIN |' "$rep" \
+    || fail "evdev event1 row wrong: $(grep -F '| event1 ' "$rep")"
+  grep -qF '| event0 | gpio-keys | gpio-keys |  | 0019:0001:0001:0100 | 0 | - |' "$rep" \
+    || fail "evdev event0 row wrong: $(grep -F '| event0 ' "$rep")"
+  grep -qF '| led:flash_0 | 0 | 255 | torch | flash_brightness=100;flash_timeout=200;flash_fault=0 |' "$rep" \
+    || fail "flash led row wrong: $(grep -F 'led:flash_0' "$rep")"
+  grep -qF '| led:green | 128 | 255 | none | - |' "$rep" || fail 'plain led row wrong'
+  grep -qF '| nfc0 | ../../devices/platform/soc/89c000.i2c/i2c-1/1-0048 |' "$rep" || fail 'nfc row wrong'
+  grep -qF '| iio:device0 | slpi-sensors | SLPI |' "$rep" || fail 'iio row wrong'
+  grep -qF '| remoteproc0 | slpi | running | qcom/sm8250/slpi.mdt |' "$rep" || fail 'remoteproc row wrong'
+  grep -qF '| remoteproc1 | adsp | offline | qcom/sm8250/adsp.mdt |' "$rep" || fail 'remoteproc1 row wrong'
+  grep -qF '| /dev/fastrpc-sdsp |' "$rep" || fail 'fastrpc row wrong'
+  grep -qF '| /dev/fastrpc-cdsp |' "$rep" || fail 'fastrpc row wrong'
+  grep -qF '| panel0 | 4096 | 8192 | 4096 | raw | 0 |' "$rep" || fail 'backlight row wrong'
+  grep -qF '| card0-eDP-1 | connected | enabled | 2400x1600,1920x1080 |' "$rep" || fail "drm eDP row wrong: $(grep -F 'eDP' "$rep")"
+  grep -qF '| card0-HDMI-A-1 | disconnected | disabled | - |' "$rep" || fail 'drm HDMI row wrong'
+  grep -qF '| cards |  0 [sm8250         ]: card0 - SM8250 sound card |' "$rep" || fail 'sound cards row wrong'
+  grep -qF '| pcm | 00-00: Speaker Playback (*) : : : 48000 |' "$rep" || fail 'sound pcm row wrong'
+  grep -qF '| card | card0 | sm8250 |' "$rep" || fail 'sound card id row wrong'
+  grep -qF '| battery | capacity | 87 |' "$rep" || fail 'power_supply row wrong'
+  grep -qF '| battery | model_name | bq27411 |' "$rep" || fail 'power_supply model_name row wrong'
+  grep -qF '| usb | online | 1 |' "$rep" || fail 'usb online row wrong'
+  grep -qF '| port0 | data_role | DFP |' "$rep" || fail "typec row wrong: $(grep -F '| port0' "$rep")"
+  grep -qF '| port0 | power_role | source |' "$rep" || fail 'typec power_role row wrong'
+  grep -qF '| usb0-role | device |' "$rep" || fail 'usb_role row wrong'
+  grep -qF '| thermal_zone0 | soc | 42000 | step_wise | passive:80000,critical:115000 |' "$rep" \
+    || fail "thermal row wrong: $(grep -F 'thermal_zone0' "$rep")"
+  grep -qF '| thermal_zone1 | msm-therm | 41000 | step_wise | - |' "$rep" || fail 'thermal zone1 row wrong'
+  if grep -qE '^\| (renderD128|cooling_device0|card0) \|' "$rep"; then
+    fail 'non-connector/non-zone entries leaked into a table as rows'
+  fi
+  grep -qF -- '- kernel: 6.12.0-fixture' "$rep" || fail 'kernel meta missing'
+  grep -qF -- '- model: OnePlus 8 Pro' "$rep" || fail 'model meta wrong'
+  grep -qF -- '- compatible: oneplus,instantnoodlep,qcom,sm8250' "$rep" || fail 'compatible meta wrong'
+  ok 'full run: all 13 class tables with expected rows, ff caps decoded (RUMBLE,GAIN)'
+
+  # --- 2. privacy: planted probes never reach the report -------------------
+  for secret in "$MAC" 'XYZ123' 'serialno' '352010987654321'; do
+    if grep -qF -- "$secret" "$rep"; then
+      fail "report leaks $secret"
+    fi
+  done
+  grep -qF '<redacted-mac>' "$rep" || fail 'MAC redaction marker missing'
+  grep -qF '<redacted-serial>' "$rep" || fail 'serial redaction marker missing'
+  grep -qF '<redacted-imei>' "$rep" || fail 'IMEI redaction marker missing'
+  ok 'MAC/serial/IMEI probes redacted; power_supply serial_number never read'
+
+  # --- 3. --baseline diff ----------------------------------------------------
+  # mutate the fixture: add event2, drop the flash led and the whole nfc
+  # class, change a thermal temp
+  mkdir -p "$fx/sys/class/input/event2/device/id"
+  printf 'gpio-keys-2\n' >"$fx/sys/class/input/event2/device/name"
+  printf '0019\n' >"$fx/sys/class/input/event2/device/id/bustype"
+  printf '0001\n' >"$fx/sys/class/input/event2/device/id/vendor"
+  printf '0002\n' >"$fx/sys/class/input/event2/device/id/product"
+  printf '0100\n' >"$fx/sys/class/input/event2/device/id/version"
+  rm -rf "$fx/sys/class/leds/led:flash_0" "$fx/sys/class/nfc"
+  printf '43000\n' >"$fx/sys/class/thermal/thermal_zone0/temp"
+  rc=0
+  diffout=$(run_tool "$fx" --baseline "$T/base.md" --out "$T/run2.md" 2>/dev/null) || rc=$?
+  [[ $rc == 0 ]] || fail "--baseline run exited $rc"
+  grep -qF -- '+ evdev|event2|gpio-keys-2|||0019:0001:0002:0100|0|-' <<<"$diffout" \
+    || fail "diff missing added event2: $diffout"
+  grep -qF -- '- leds|led:flash_0|0|255|torch|flash_brightness=100;flash_timeout=200;flash_fault=0' <<<"$diffout" \
+    || fail 'diff missing removed flash led'
+  grep -qF -- '- thermal|thermal_zone0|soc|42000|step_wise|passive:80000,critical:115000' <<<"$diffout" \
+    || fail 'diff missing old thermal row'
+  grep -qF -- '+ thermal|thermal_zone0|soc|43000|step_wise|passive:80000,critical:115000' <<<"$diffout" \
+    || fail 'diff missing new thermal row'
+  grep -qF -- '- nfc|nfc0|' <<<"$diffout" || fail 'diff missing removed nfc row'
+  [[ -e $T/run2.md ]] || fail 'run2 report not written'
+  grep -q '^## nfc$' "$T/run2.md" || fail 'run2 report missing nfc section header'
+  sed -n '/^## nfc$/,/^## /p' "$T/run2.md" | grep -qF '_class missing_' \
+    || fail 'run2 report does not mark nfc as _class missing_'
+  ok '--baseline diff prints per-class +/- rows (added event, removed led/nfc, changed temp), exit 0'
+
+  # --- 4. --strict -----------------------------------------------------------
+  rc=0
+  run_tool "$fx" --baseline "$T/base.md" --strict --out "$T/run3.md" >/dev/null 2>"$T/run3.err" || rc=$?
+  [[ $rc == 1 ]] || fail "--strict with nfc missing vs baseline should exit 1, got $rc"
+  grep -qF 'MISSING CLASS: nfc' "$T/run3.err" || fail "strict did not name nfc: $(cat "$T/run3.err")"
+  rc=0
+  run_tool "$fx" --baseline "$T/base.md" --out "$T/run3b.md" >/dev/null 2>&1 || rc=$?
+  [[ $rc == 0 ]] || fail "same run without --strict should exit 0, got $rc"
+  rc=0
+  run_tool "$fx2" --strict --out "$T/run4.md" >/dev/null 2>&1 || rc=$?
+  [[ $rc == 0 ]] || fail "--strict on the complete fixture (no baseline) should exit 0, got $rc"
+  rc=0
+  run_tool "$fx" --strict --out "$T/run5.md" >/dev/null 2>"$T/run5.err" || rc=$?
+  [[ $rc == 1 ]] || fail "--strict without baseline on the nfc-less fixture should exit 1, got $rc"
+  grep -qF 'MISSING CLASS: nfc' "$T/run5.err" || fail 'strict (no baseline) did not name nfc'
+  rc=0
+  run_tool "$fx" --out "$T/run6.md" >/dev/null 2>&1 || rc=$?
+  [[ $rc == 0 ]] || fail "non-strict run with a missing class should exit 0, got $rc"
+  ok '--strict exits 1 naming the missing class (with and without --baseline); non-strict exits 0'
+
+  # --- 5. read-only: fixture untouched, only --out written, mode 0600 --------
+  before_list=$(find "$fx2" | sort)
+  before_sha=$(find "$fx2" -type f -exec sha256sum {} + | sort)
+  work=$T/work
+  mkdir "$work"
+  ( cd "$work" && run_tool "$fx2" --out "$work/r.md" >/dev/null 2>&1 )
+  after_list=$(find "$fx2" | sort)
+  after_sha=$(find "$fx2" -type f -exec sha256sum {} + | sort)
+  [[ "$before_list" == "$after_list" ]] || fail 'fixture listing changed during the run'
+  [[ "$before_sha" == "$after_sha" ]] || fail 'fixture content changed during the run'
+  files=$(find "$work" -type f | sort)
+  [[ "$files" == "$work/r.md" ]] || fail "stray files written in cwd: $files"
+  [[ $(stat -c %a "$work/r.md") == 600 ]] || fail 'report is not mode 0600'
+  ok 'read-only: fixture untouched, only --out written, report mode 0600'
+
+  # --- 6. usage errors --------------------------------------------------------
+  run_tool "$fx2" --help >/dev/null || fail '--help should exit 0'
+  rc=0
+  run_tool "$fx2" --bogus >/dev/null 2>&1 || rc=$?
+  [[ $rc == 2 ]] || fail "unknown flag should exit 2, got $rc"
+  rc=0
+  run_tool "$fx2" --out "$T/base.md" >/dev/null 2>&1 || rc=$?
+  [[ $rc == 2 ]] || fail "existing --out should be refused with exit 2, got $rc"
+  rc=0
+  run_tool "$fx2" --baseline "$T/nonexistent.md" >/dev/null 2>&1 || rc=$?
+  [[ $rc == 2 ]] || fail "unreadable --baseline should exit 2, got $rc"
+  ok 'usage: --help 0, unknown flag 2, existing --out 2, unreadable --baseline 2'
+
+  # --- emit over stdin, exactly as ssh feeds the phone ----------------------
+  # Regression: SELF was derived from BASH_SOURCE[0], which is unset under
+  # `bash -s`, so set -u killed the remote side before it printed anything.
+  rc=0
+  HW_CHECK_SYSFS="$fx/sys" HW_CHECK_PROC="$fx/proc" HW_CHECK_DEV="$fx/dev" \
+  HW_CHECK_KERNEL='6.12.0-fixture' \
+    bash -s -- --emit <"$TOOL" >"$T/stdin.out" 2>"$T/stdin.err" || rc=$?
+  [[ $rc == 0 ]] || fail "emit via bash -s exited $rc: $(head -3 "$T/stdin.err")"
+  [[ -s $T/stdin.out ]] || fail 'emit via bash -s printed nothing'
+  ! grep -q 'unbound variable' "$T/stdin.err" || fail "emit via bash -s: $(head -1 "$T/stdin.err")"
+  ok 'emit runs from stdin (bash -s -- --emit), the way ssh delivers it'
+}
+
+check
+echo "ok - instantnoodlep-hw-check: all checks pass (x86 fixture tree, check()) [host: $(uname -m)]"
